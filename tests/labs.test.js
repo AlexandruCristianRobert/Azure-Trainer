@@ -85,4 +85,19 @@ describe('Service Bus Lab', () => {
     sb = runLine(sb, `az servicebus topic subscription rule delete -g rg-orders --namespace-name sb-contoso-orders --topic-name order-events --subscription-name eu-orders -n '$Default'`).sandbox
     expect(lab.tasks[4].check(sb)).toBe(true)
   })
+
+  it('Task checks compare entity names case-insensitively, like the engine (Controller Ruling S)', () => {
+    let sb = lab.seed(createSandbox())
+    sb = runLine(sb, 'az group create --name RG-Orders --location westeurope').sandbox
+    expect(lab.tasks[0].check(sb)).toBe(true)
+    sb = runLine(sb, 'az servicebus namespace create --resource-group rg-orders --name SB-Contoso-Orders --sku Standard').sandbox
+    expect(lab.tasks[1].check(sb)).toBe(true)
+    sb = apply(sb, lab.tasks[2].solution)
+    expect(lab.tasks[2].check(sb)).toBe(true)
+    sb = apply(sb, lab.tasks[3].solution)
+    expect(lab.tasks[3].check(sb)).toBe(true)
+    sb = apply(sb, lab.tasks[4].solution)
+    expect(lab.tasks[4].check(sb)).toBe(true)
+    expect(lab.tasks.every((t) => t.check(sb))).toBe(true)
+  })
 })

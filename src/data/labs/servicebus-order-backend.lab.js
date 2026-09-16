@@ -1,8 +1,12 @@
 const RG = 'rg-orders'
 const NS = 'sb-contoso-orders'
 
+// Entity names are stored with the casing the learner typed; the engine looks
+// them up case-insensitively, so Task checks must match that behaviour.
+const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
+
 function namespace(sb) {
-  return sb.namespaces.find((n) => n.name === NS && n.resourceGroup === RG)
+  return sb.namespaces.find((n) => eq(n.name, NS) && eq(n.resourceGroup, RG))
 }
 
 export const servicebusOrderBackendLab = {
@@ -19,7 +23,7 @@ export const servicebusOrderBackendLab = {
     {
       id: 'resource-group',
       text: 'Create a resource group named `rg-orders` in West Europe.',
-      check: (sb) => sb.resourceGroups.some((g) => g.name === RG && g.location === 'westeurope'),
+      check: (sb) => sb.resourceGroups.some((g) => eq(g.name, RG) && g.location === 'westeurope'),
       hints: [
         'Resource groups live under `az group`. Every resource you create later needs one.',
         'Two arguments: `--name` (or `-n`) and `--location` (or `-l`). The region code for West Europe is `westeurope`.',
@@ -43,7 +47,7 @@ export const servicebusOrderBackendLab = {
       id: 'queue',
       text: 'Create a queue named `orders` with max delivery count 5 and dead-lettering on message expiration enabled.',
       check: (sb) => {
-        const q = namespace(sb)?.queues.find((x) => x.name === 'orders')
+        const q = namespace(sb)?.queues.find((x) => eq(x.name, 'orders'))
         return !!q && q.maxDeliveryCount === 5 && q.deadLetteringOnMessageExpiration === true
       },
       hints: [
@@ -58,7 +62,7 @@ export const servicebusOrderBackendLab = {
     {
       id: 'topic',
       text: 'Create a topic named `order-events`.',
-      check: (sb) => !!namespace(sb)?.topics.find((t) => t.name === 'order-events'),
+      check: (sb) => !!namespace(sb)?.topics.find((t) => eq(t.name, 'order-events')),
       hints: [
         'Entity commands always need `--namespace-name` and `--resource-group`; the topic itself needs only `--name`.',
         '`az servicebus topic create --resource-group rg-orders --namespace-name sb-contoso-orders --name order-events`',
@@ -70,8 +74,8 @@ export const servicebusOrderBackendLab = {
       id: 'subscription',
       text: "Create a subscription `eu-orders` on `order-events` whose only rule is the SQL filter `region = 'EU'`.",
       check: (sb) => {
-        const t = namespace(sb)?.topics.find((x) => x.name === 'order-events')
-        const s = t?.subscriptions.find((x) => x.name === 'eu-orders')
+        const t = namespace(sb)?.topics.find((x) => eq(x.name, 'order-events'))
+        const s = t?.subscriptions.find((x) => eq(x.name, 'eu-orders'))
         if (!s || s.rules.length !== 1) return false
         const [r] = s.rules
         return r.filterType === 'SqlFilter' && typeof r.sqlExpression === 'string' && r.sqlExpression.replace(/\s+/g, '') === "region='EU'"
