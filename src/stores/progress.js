@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { loadJSON, saveJSON, removeJSON } from '../lib/storage.js'
+import { isSandboxShape } from '../lib/sandbox/model.js'
 import { LABS, labById } from '../data/labs/index.js'
 
 export const RESULTS_KEY = 'at_results'
@@ -23,7 +24,7 @@ export const useProgressStore = defineStore('progress', {
     runSummary(labId) {
       const run = loadJSON(runKey(labId), null)
       const lab = labById(labId)
-      if (!run || run.labId !== labId || !Array.isArray(run.sandbox?.resourceGroups) || !lab) return null
+      if (!run || run.labId !== labId || !isSandboxShape(run.sandbox) || !lab) return null
       const tasksDone = lab.tasks.filter((t) => t.check(run.sandbox)).length
       return { tasksDone, total: lab.tasks.length, completedAt: run.completedAt ?? null }
     },

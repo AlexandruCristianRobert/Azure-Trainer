@@ -26,6 +26,18 @@ describe('labRun store', () => {
     expect(JSON.parse(localStorage.getItem(`at_run_${LAB}`)).labId).toBe(LAB)
   })
 
+  it('a corrupt saved run (sandbox: null) is discarded for a fresh seeded run, which is re-persisted', () => {
+    localStorage.setItem(`at_run_${LAB}`, JSON.stringify({ labId: LAB, sandbox: null }))
+    const run = useLabRunStore()
+    run.load(LAB)
+    expect(run.doneCount).toBe(0)
+    expect(() => run.taskStates).not.toThrow()
+    expect(run.taskStates).toHaveLength(5)
+    const persisted = JSON.parse(localStorage.getItem(`at_run_${LAB}`))
+    expect(persisted.sandbox.resourceGroups).toEqual([])
+    expect(persisted.sandbox.namespaces).toEqual([])
+  })
+
   it('execute echoes the command, appends output, ticks Tasks, notifies, focuses Blade', async () => {
     const run = useLabRunStore()
     const portal = usePortalStore()

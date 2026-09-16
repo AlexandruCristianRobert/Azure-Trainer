@@ -45,4 +45,12 @@ describe('progress store', () => {
     expect(() => p.skillAreaProgress('connect')).not.toThrow()
     expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 0 })
   })
+
+  it('a run with a sandbox missing namespaces is also treated as malformed', () => {
+    const p = useProgressStore()
+    localStorage.setItem('at_run_servicebus-order-backend', JSON.stringify({ labId: 'servicebus-order-backend', sandbox: { resourceGroups: [] } }))
+    expect(p.runSummary('servicebus-order-backend')).toBeNull()
+    expect(() => p.labStatus('servicebus-order-backend')).not.toThrow()
+    expect(p.labStatus('servicebus-order-backend')).toBe('not-started')
+  })
 })

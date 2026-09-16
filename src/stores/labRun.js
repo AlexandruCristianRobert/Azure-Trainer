@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { loadJSON, saveJSON } from '../lib/storage.js'
-import { createSandbox } from '../lib/sandbox/model.js'
+import { createSandbox, isSandboxShape } from '../lib/sandbox/model.js'
 import { runLine } from '../lib/az/shell.js'
 import { labById } from '../data/labs/index.js'
 import { useProgressStore, runKey } from './progress.js'
@@ -57,7 +57,8 @@ export const useLabRunStore = defineStore('labRun', {
       const saved = loadJSON(runKey(labId), null)
       const lab = labById(labId)
       if (!lab) throw new Error(`Unknown Lab '${labId}'`)
-      const data = saved && saved.labId === labId ? { ...freshRun(lab), ...saved, lastTickAt: null } : freshRun(lab)
+      const valid = saved && saved.labId === labId && isSandboxShape(saved.sandbox)
+      const data = valid ? { ...freshRun(lab), ...saved, lastTickAt: null } : freshRun(lab)
       Object.assign(this, data, { running: false })
       usePortalStore().resetForLab()
       this.persist()

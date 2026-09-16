@@ -7,6 +7,10 @@ export function createSandbox() {
   return { resourceGroups: [], namespaces: [], defaults: { group: null, location: null } }
 }
 
+export function isSandboxShape(sb) {
+  return !!sb && typeof sb === 'object' && Array.isArray(sb.resourceGroups) && Array.isArray(sb.namespaces) && !!sb.defaults && typeof sb.defaults === 'object'
+}
+
 export function cloneSandbox(sb) {
   return JSON.parse(JSON.stringify(sb))
 }
