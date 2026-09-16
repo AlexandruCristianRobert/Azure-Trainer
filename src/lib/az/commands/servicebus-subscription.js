@@ -24,14 +24,21 @@ const SCOPE = [NAME, ARG.namespace, ARG.topic, ARG.resourceGroup]
 // create/update, ops.getSubscription(...).name on delete).
 const sEvent = (type, ns, t, name) => event(type, 'subscription', { name, resourceGroup: ns.resourceGroup, namespace: ns.name, topic: t.name })
 
+// Ruling N helper (brief Step 4): fetches the parent chain from the
+// PRE-mutation sandbox, shared by all four commands below.
+function context(sandbox, v) {
+  const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
+  const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+  return { ns, t }
+}
+
 export const subscriptionGroup = defineGroup(['servicebus', 'topic', 'subscription'], 'Manage Azure Service Bus Subscription.', {
   create: defineCommand(['servicebus', 'topic', 'subscription', 'create'], 'Create the ServiceBus Subscription.', {
     latencyMs: LATENCY.mutate,
     args: [...SCOPE, ...PROPERTY_ARGS],
     examples: [{ summary: 'Create a new Subscription.', command: 'az servicebus topic subscription create --resource-group myresourcegroup --namespace-name mynamespace --topic-name mytopic --name mysubscription' }],
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+      const { ns, t } = context(sandbox, v)
       const existed = t.subscriptions.some((s) => s.name.toLowerCase() === v.name.toLowerCase())
       const { sandbox: next, resource } = ops.createSubscription(sandbox, { resourceGroup: v.resourceGroup, namespace: v.namespace, topic: v.topic, name: v.name, ...props(v) })
       return { sandbox: next, output: presentSubscription(resource, t, ns), events: [sEvent(existed ? 'updated' : 'created', ns, t, resource.name)] }
@@ -40,16 +47,14 @@ export const subscriptionGroup = defineGroup(['servicebus', 'topic', 'subscripti
   show: defineCommand(['servicebus', 'topic', 'subscription', 'show'], 'Get a subscription description for the specified topic.', {
     args: SCOPE,
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+      const { ns, t } = context(sandbox, v)
       return { sandbox, output: presentSubscription(ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.name), t, ns) }
     },
   }),
   list: defineCommand(['servicebus', 'topic', 'subscription', 'list'], 'List all the subscriptions under a specified topic.', {
     args: [ARG.namespace, ARG.topic, ARG.resourceGroup],
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+      const { ns, t } = context(sandbox, v)
       return { sandbox, output: ops.listSubscriptions(sandbox, v.resourceGroup, v.namespace, v.topic).map((s) => presentSubscription(s, t, ns)) }
     },
   }),
@@ -57,8 +62,7 @@ export const subscriptionGroup = defineGroup(['servicebus', 'topic', 'subscripti
     latencyMs: LATENCY.mutate,
     args: SCOPE,
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+      const { ns, t } = context(sandbox, v)
       const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.name)
       const { sandbox: next } = ops.deleteSubscription(sandbox, { resourceGroup: v.resourceGroup, namespace: v.namespace, topic: v.topic, name: v.name })
       return { sandbox: next, output: null, events: [sEvent('deleted', ns, t, s.name)] }

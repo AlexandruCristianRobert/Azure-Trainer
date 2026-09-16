@@ -27,15 +27,22 @@ function correlationFilter(v) {
 // create/update, ops.getRule(...).name on delete).
 const rEvent = (type, ns, t, s, name) => event(type, 'rule', { name, resourceGroup: ns.resourceGroup, namespace: ns.name, topic: t.name, subscription: s.name })
 
+// Ruling N helper (brief Step 3): fetches the parent chain from the
+// PRE-mutation sandbox, shared by all four commands below.
+function context(sandbox, v) {
+  const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
+  const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
+  const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription)
+  return { ns, t, s }
+}
+
 export const ruleGroup = defineGroup(['servicebus', 'topic', 'subscription', 'rule'], 'Manage Azure Service Bus Rule.', {
   create: defineCommand(['servicebus', 'topic', 'subscription', 'rule', 'create'], 'Create the ServiceBus Rule for Subscription.', {
     latencyMs: LATENCY.mutate,
     args: [...SCOPE, FILTER_TYPE, SQL, ...CORRELATION_ARGS],
     examples: [{ summary: 'Create Rule.', command: "az servicebus topic subscription rule create --resource-group myresourcegroup --namespace-name mynamespace --topic-name mytopic --subscription-name mysubscription --name myrule --filter-sql-expression \"myproperty='test'\"" }],
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
-      const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription)
+      const { ns, t, s } = context(sandbox, v)
       const existed = s.rules.some((r) => r.name.toLowerCase() === v.name.toLowerCase())
       const { sandbox: next, resource } = ops.createRule(sandbox, { resourceGroup: v.resourceGroup, namespace: v.namespace, topic: v.topic, subscription: v.subscription, name: v.name, filterType: v.filterType ?? 'SqlFilter', sqlExpression: v.sqlExpression ?? null, correlationFilter: correlationFilter(v) })
       return { sandbox: next, output: presentRule(resource, s, t, ns), events: [rEvent(existed ? 'updated' : 'created', ns, t, s, resource.name)] }
@@ -44,18 +51,14 @@ export const ruleGroup = defineGroup(['servicebus', 'topic', 'subscription', 'ru
   show: defineCommand(['servicebus', 'topic', 'subscription', 'rule', 'show'], 'Get the description for the specified rule.', {
     args: SCOPE,
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
-      const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription)
+      const { ns, t, s } = context(sandbox, v)
       return { sandbox, output: presentRule(ops.getRule(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription, v.name), s, t, ns) }
     },
   }),
   list: defineCommand(['servicebus', 'topic', 'subscription', 'rule', 'list'], 'List all the rules within given topic-subscription.', {
     args: [ARG.namespace, ARG.topic, ARG.subscription, ARG.resourceGroup],
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
-      const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription)
+      const { ns, t, s } = context(sandbox, v)
       return { sandbox, output: ops.listRules(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription).map((r) => presentRule(r, s, t, ns)) }
     },
   }),
@@ -63,9 +66,7 @@ export const ruleGroup = defineGroup(['servicebus', 'topic', 'subscription', 'ru
     latencyMs: LATENCY.mutate,
     args: SCOPE,
     run: ({ sandbox }, v) => {
-      const ns = ops.getNamespace(sandbox, v.resourceGroup, v.namespace)
-      const t = ops.getTopic(sandbox, v.resourceGroup, v.namespace, v.topic)
-      const s = ops.getSubscription(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription)
+      const { ns, t, s } = context(sandbox, v)
       const r = ops.getRule(sandbox, v.resourceGroup, v.namespace, v.topic, v.subscription, v.name)
       const { sandbox: next } = ops.deleteRule(sandbox, { resourceGroup: v.resourceGroup, namespace: v.namespace, topic: v.topic, subscription: v.subscription, name: v.name })
       return { sandbox: next, output: null, events: [rEvent('deleted', ns, t, s, r.name)] }
