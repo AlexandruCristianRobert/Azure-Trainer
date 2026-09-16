@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { displayLocation } from '../../lib/sandbox/locations.js'
@@ -14,9 +14,20 @@ const props = defineProps({ resourceGroup: { type: String, required: true }, nam
 const run = useLabRunStore()
 const portal = usePortalStore()
 const ns = computed(() => run.sandbox.namespaces.find((n) => n.resourceGroup.toLowerCase() === props.resourceGroup.toLowerCase() && n.name.toLowerCase() === props.name.toLowerCase()))
-const menuOverride = ref('overview')
-const activeMenu = computed(() => (props.tab === 'topics' ? 'topics' : props.tab === 'queues' && menuOverride.value === 'queues' ? 'queues' : 'overview'))
-watch(() => props.tab, () => { menuOverride.value = 'overview' })
+// Ruling X: the highlight is the last item explicitly clicked in the resource menu.
+// Only a tab change that did NOT originate from a menu click (e.g. a Blade-focus
+// event fired via portal.applyEvent after a Cloud Shell command) resets the
+// highlight to the tab's default (topics -> Topics, queues -> Overview).
+// `viaMenuClick` marks a tab change onMenu() itself triggered so the watcher below
+// leaves the just-clicked highlight alone; nextTick clears the flag afterwards so
+// it never lingers if the clicked tab was already active (no prop change to react to).
+const menuOverride = ref(props.tab === 'topics' ? 'topics' : 'overview')
+const viaMenuClick = ref(false)
+const activeMenu = computed(() => menuOverride.value)
+watch(() => props.tab, (t) => {
+  if (viaMenuClick.value) return
+  menuOverride.value = t === 'topics' ? 'topics' : 'overview'
+})
 
 const sections = [
   { items: [{ id: 'overview', label: 'Overview' }, { id: 'activity', label: 'Activity log' }, { id: 'iam', label: 'Access control (IAM)' }, { id: 'tags', label: 'Tags' }, { id: 'diagnose', label: 'Diagnose and solve problems' }] },
@@ -27,8 +38,12 @@ const sections = [
   { label: 'Help', collapsed: true, items: [] },
 ]
 function onMenu(id) {
-  if (id === 'queues' || id === 'topics') { menuOverride.value = id; setTab(id); return }
   menuOverride.value = id
+  if (id === 'queues' || id === 'topics') {
+    viaMenuClick.value = true
+    setTab(id)
+    nextTick(() => { viaMenuClick.value = false })
+  }
 }
 function setTab(tab) { portal.showBlade({ kind: 'servicebus-namespace', resourceGroup: props.resourceGroup, name: props.name, tab }) }
 
