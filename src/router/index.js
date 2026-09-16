@@ -3,6 +3,7 @@ import HomePage from '../pages/HomePage.vue'
 
 const routes = [
   { path: '/', name: 'home', component: HomePage },
+  { path: '/lab/:labId', name: 'lab', component: () => import('../pages/LabPage.vue'), props: true },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
