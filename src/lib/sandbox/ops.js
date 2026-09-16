@@ -60,6 +60,8 @@ function findGroup(sb, name) {
   return sb.resourceGroups.find((g) => g.name.toLowerCase() === String(name).toLowerCase())
 }
 
+// get* functions return the stored object itself (a read-only borrow, not a
+// copy) — callers must not mutate it. list* functions always return a copy.
 export function getResourceGroup(sb, name) {
   const g = findGroup(sb, name)
   if (!g) throw new AzError('ResourceGroupNotFound', `Resource group '${name}' could not be found.`)
@@ -67,7 +69,7 @@ export function getResourceGroup(sb, name) {
 }
 
 export function listResourceGroups(sb) {
-  return sb.resourceGroups
+  return sb.resourceGroups.slice()
 }
 
 export function createResourceGroup(sb, { name, location, tags = null }) {
@@ -110,7 +112,7 @@ export function getNamespace(sb, resourceGroup, name) {
 }
 
 export function listNamespaces(sb, resourceGroup = null) {
-  if (resourceGroup === null) return sb.namespaces
+  if (resourceGroup === null) return sb.namespaces.slice()
   getResourceGroup(sb, resourceGroup)
   return sb.namespaces.filter((n) => n.resourceGroup.toLowerCase() === resourceGroup.toLowerCase())
 }
@@ -174,7 +176,7 @@ export function getQueue(sb, resourceGroup, namespace, name) {
 }
 
 export function listQueues(sb, resourceGroup, namespace) {
-  return getNamespace(sb, resourceGroup, namespace).queues
+  return getNamespace(sb, resourceGroup, namespace).queues.slice()
 }
 
 export function createQueue(sb, { resourceGroup, namespace, name, ...props }) {
@@ -222,7 +224,7 @@ export function getTopic(sb, resourceGroup, namespace, name) {
 }
 
 export function listTopics(sb, resourceGroup, namespace) {
-  return getNamespace(sb, resourceGroup, namespace).topics
+  return getNamespace(sb, resourceGroup, namespace).topics.slice()
 }
 
 export function createTopic(sb, { resourceGroup, namespace, name, ...props }) {
@@ -263,7 +265,7 @@ export function getSubscription(sb, resourceGroup, namespace, topic, name) {
 }
 
 export function listSubscriptions(sb, resourceGroup, namespace, topic) {
-  return getTopic(sb, resourceGroup, namespace, topic).subscriptions
+  return getTopic(sb, resourceGroup, namespace, topic).subscriptions.slice()
 }
 
 export function createSubscription(sb, { resourceGroup, namespace, topic, name, ...props }) {
@@ -298,7 +300,7 @@ export function deleteSubscription(sb, { resourceGroup, namespace, topic, name }
 // ---- rules -----------------------------------------------------------------
 
 function findRule(s, name) {
-  return s.rules.find((r) => r.name === name)
+  return s.rules.find((r) => r.name.toLowerCase() === String(name).toLowerCase())
 }
 
 export function getRule(sb, resourceGroup, namespace, topic, subscription, name) {
@@ -309,7 +311,7 @@ export function getRule(sb, resourceGroup, namespace, topic, subscription, name)
 }
 
 export function listRules(sb, resourceGroup, namespace, topic, subscription) {
-  return getSubscription(sb, resourceGroup, namespace, topic, subscription).rules
+  return getSubscription(sb, resourceGroup, namespace, topic, subscription).rules.slice()
 }
 
 export function createRule(sb, { resourceGroup, namespace, topic, subscription, name, filterType = 'SqlFilter', sqlExpression = null, correlationFilter = null }) {
@@ -334,7 +336,7 @@ export function deleteRule(sb, { resourceGroup, namespace, topic, subscription, 
   getRule(sb, resourceGroup, namespace, topic, subscription, name)
   const next = cloneSandbox(sb)
   const s = findSubscription(findTopic(findNamespace(next, resourceGroup, namespace), topic), subscription)
-  s.rules = s.rules.filter((r) => r.name !== name)
+  s.rules = s.rules.filter((r) => r.name.toLowerCase() !== String(name).toLowerCase())
   return { sandbox: next, resource: null }
 }
 

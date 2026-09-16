@@ -135,6 +135,21 @@ describe('topics, subscriptions, rules', () => {
     expect(rules).toHaveLength(1)
     expect(rules[0]).toMatchObject({ name: 'eu-filter', filterType: 'SqlFilter', sqlExpression: "region = 'EU'" })
   })
+  it('looks up, updates in place, and deletes rules case-insensitively', () => {
+    let sb = withNamespace()
+    sb = ops.createTopic(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', name: 'order-events' }).sandbox
+    sb = ops.createSubscription(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', topic: 'order-events', name: 'eu-orders' }).sandbox
+    sb = ops.createRule(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', topic: 'order-events', subscription: 'eu-orders', name: 'eu-filter', sqlExpression: "region = 'EU'" }).sandbox
+    expect(ops.getRule(sb, 'rg-orders', 'sb-contoso-orders', 'order-events', 'eu-orders', 'EU-FILTER')).toMatchObject({ name: 'eu-filter', sqlExpression: "region = 'EU'" })
+    sb = ops.createRule(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', topic: 'order-events', subscription: 'eu-orders', name: 'EU-Filter', sqlExpression: "region = 'US'" }).sandbox
+    const afterUpdate = ops.listRules(sb, 'rg-orders', 'sb-contoso-orders', 'order-events', 'eu-orders')
+    expect(afterUpdate).toHaveLength(2)
+    expect(afterUpdate.find((r) => r.name === 'eu-filter')).toMatchObject({ name: 'eu-filter', sqlExpression: "region = 'US'" })
+    sb = ops.deleteRule(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', topic: 'order-events', subscription: 'eu-orders', name: '$default' }).sandbox
+    const afterDelete = ops.listRules(sb, 'rg-orders', 'sb-contoso-orders', 'order-events', 'eu-orders')
+    expect(afterDelete).toHaveLength(1)
+    expect(afterDelete[0].name).toBe('eu-filter')
+  })
   it('topic/subscription/rule lookups throw NotFound with the entity path', () => {
     const sb = withNamespace()
     try { ops.getTopic(sb, 'rg-orders', 'sb-contoso-orders', 'nope'); throw new Error('no throw') } catch (e) {
@@ -150,6 +165,29 @@ describe('topics, subscriptions, rules', () => {
     expect(ops.listTopics(sb, 'rg-orders', 'sb-contoso-orders')).toHaveLength(0)
     sb = ops.deleteNamespace(sb, { resourceGroup: 'rg-orders', name: 'sb-contoso-orders' }).sandbox
     expect(sb.namespaces).toHaveLength(0)
+  })
+})
+
+describe('list results', () => {
+  it('are copies: mutating a returned list does not affect stored state', () => {
+    const sb = withNamespace()
+    const withQueue = ops.createQueue(sb, { resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders', name: 'orders' }).sandbox
+
+    const queues = ops.listQueues(withQueue, 'rg-orders', 'sb-contoso-orders')
+    queues.push({ name: 'rogue' })
+    expect(ops.listQueues(withQueue, 'rg-orders', 'sb-contoso-orders')).toHaveLength(1)
+    expect(withQueue.namespaces[0].queues).toHaveLength(1)
+
+    const groups = ops.listResourceGroups(withQueue)
+    groups.reverse()
+    groups.push({ name: 'rogue-rg' })
+    expect(ops.listResourceGroups(withQueue)).toHaveLength(1)
+    expect(withQueue.resourceGroups).toHaveLength(1)
+
+    const namespaces = ops.listNamespaces(withQueue)
+    namespaces.push({ name: 'rogue-ns' })
+    expect(ops.listNamespaces(withQueue)).toHaveLength(1)
+    expect(withQueue.namespaces).toHaveLength(1)
   })
 })
 
