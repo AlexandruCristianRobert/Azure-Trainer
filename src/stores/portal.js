@@ -111,6 +111,8 @@ export const usePortalStore = defineStore('portal', {
     resetForLab() {
       this.blade = { ...DEFAULT_BLADE }
       this.toast = null
+      this.notifications = []
+      this.unread = 0
       this.notificationsOpen = false
       this.menuOpen = false
     },

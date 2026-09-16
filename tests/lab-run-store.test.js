@@ -136,5 +136,7 @@ describe('labRun store', () => {
     expect(run.elapsedMs).toBe(0)
     expect(progress.results).toHaveLength(1)
     expect(portal.blade).toEqual({ kind: 'resource-groups' })
+    expect(portal.notifications).toEqual([])
+    expect(portal.unread).toBe(0)
   })
 })
