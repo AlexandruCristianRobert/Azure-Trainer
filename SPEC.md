@@ -139,6 +139,8 @@ ignoring whitespace.
 - `useLabRunStore` (one active Lab run at a time): `{ labId, sandbox, scrollback: [{ text, kind:
   'cmd'|'out'|'err' }], history: [], hintsRevealed: { [taskId]: n }, solutionsRevealed: { [taskId]: true },
   elapsedMs, lastTickAt, completedAt, resultId }`, persisted at `at_run_<labId>` after every change.
+  `lastTickAt` is runtime-only (the wall-clock anchor `tick()` diffs against) and is deliberately not
+  written to `at_run_<labId>`; a reload resumes with `elapsedMs` intact and `lastTickAt` reset to null.
   `execute(line)` is async (spinner latency), re-evaluates Tasks, emits Portal notifications, and on
   the transition to all-done writes a Lab Result and fires the completion notification + toast.
   `restart()` reseeds the Sandbox and clears everything but keeps past Lab Results.

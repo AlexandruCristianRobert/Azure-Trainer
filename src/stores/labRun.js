@@ -97,7 +97,10 @@ export const useLabRunStore = defineStore('labRun', {
       if (result.clear) {
         this.scrollback = []
       } else {
-        for (const l of result.lines) this.pushLine(l.kind === 'err' ? { kind: 'err', text: `ERROR: ${l.text}` } : l)
+        // Ruling U: the `ERROR: ` prefix belongs to az-originated errors only.
+        // Shell-level errors (unknown command, tokenizer failure) already read
+        // as `bash: ...` straight from the engine — leave those verbatim.
+        for (const l of result.lines) this.pushLine(l.kind === 'err' && !l.text.startsWith('bash: ') ? { kind: 'err', text: `ERROR: ${l.text}` } : l)
       }
       this.sandbox = result.sandbox
       const portal = usePortalStore()

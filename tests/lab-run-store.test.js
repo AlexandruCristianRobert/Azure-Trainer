@@ -51,6 +51,15 @@ describe('labRun store', () => {
     expect(run.sandbox.resourceGroups).toHaveLength(0)
   })
 
+  it('shell-level errors keep their bash: wording; az errors still get the ERROR: prefix', async () => {
+    const run = useLabRunStore()
+    run.load(LAB)
+    await run.execute('foo', opts)
+    expect(run.scrollback[1]).toEqual({ kind: 'err', text: 'bash: foo: command not found' })
+    await run.execute('az servicebus topic create --name order-events', opts)
+    expect(run.scrollback[3].text.startsWith('ERROR: ')).toBe(true)
+  })
+
   it('clear empties the scrollback; blank lines only echo the prompt', async () => {
     const run = useLabRunStore()
     run.load(LAB)

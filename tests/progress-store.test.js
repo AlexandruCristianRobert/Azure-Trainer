@@ -35,4 +35,14 @@ describe('progress store', () => {
     expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 1 })
     expect(p.skillAreaProgress('containers')).toEqual({ total: 1, completed: 0, inProgress: 0 })
   })
+
+  it('a malformed persisted run does not throw and is treated as not-started', () => {
+    const p = useProgressStore()
+    localStorage.setItem('at_run_servicebus-order-backend', JSON.stringify({ labId: 'servicebus-order-backend' }))
+    expect(p.runSummary('servicebus-order-backend')).toBeNull()
+    expect(() => p.labStatus('servicebus-order-backend')).not.toThrow()
+    expect(p.labStatus('servicebus-order-backend')).toBe('not-started')
+    expect(() => p.skillAreaProgress('connect')).not.toThrow()
+    expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 0 })
+  })
 })

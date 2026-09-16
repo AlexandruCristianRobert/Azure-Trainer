@@ -23,7 +23,7 @@ export const useProgressStore = defineStore('progress', {
     runSummary(labId) {
       const run = loadJSON(runKey(labId), null)
       const lab = labById(labId)
-      if (!run || !lab) return null
+      if (!run || run.labId !== labId || !Array.isArray(run.sandbox?.resourceGroups) || !lab) return null
       const tasksDone = lab.tasks.filter((t) => t.check(run.sandbox)).length
       return { tasksDone, total: lab.tasks.length, completedAt: run.completedAt ?? null }
     },
