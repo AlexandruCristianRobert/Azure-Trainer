@@ -100,6 +100,12 @@ describe('az group', () => {
     const r = runLine(sb, 'az group show')
     expect(JSON.parse(out(r)).name).toBe('rg-orders')
   })
+  it('--yes=false is rejected (argparse ignored-explicit-argument wording), the group is not deleted', () => {
+    const sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    const r = runLine(sb, 'az group delete -n rg-orders --yes=false')
+    expect(err(r)).toBe("argument --yes/-y: ignored explicit argument 'false'")
+    expect(r.sandbox.resourceGroups).toHaveLength(1)
+  })
 })
 
 describe('global arguments (Controller Ruling AA)', () => {

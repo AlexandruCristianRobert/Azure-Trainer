@@ -47,7 +47,11 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) unrecognized.push(tokens[++i])
       continue
     }
-    if (spec.kind === 'flag') { values[spec.dest] = true; continue }
+    if (spec.kind === 'flag') {
+      if (inlineValue !== null) { fail(`argument ${displayName(spec)}: ignored explicit argument '${inlineValue}'`); continue }
+      values[spec.dest] = true
+      continue
+    }
     if (spec.kind === 'list') {
       const items = inlineValue !== null ? [inlineValue] : []
       while (inlineValue === null && i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) items.push(tokens[++i])
