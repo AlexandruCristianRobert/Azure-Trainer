@@ -30,7 +30,7 @@ export function bladeForEvent(e, current) {
   // deleted
   if (e.resourceType === 'resourceGroup') {
     const affected = (current.kind === 'resource-group' && current.name === e.name) || (current.kind === 'servicebus-namespace' && current.resourceGroup === e.name)
-    return affected ? DEFAULT_BLADE : current
+    return affected ? { ...DEFAULT_BLADE } : current
   }
   if (e.resourceType === 'namespace') {
     const affected = current.kind === 'servicebus-namespace' && current.name === e.name && current.resourceGroup === e.resourceGroup

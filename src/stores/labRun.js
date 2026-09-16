@@ -58,14 +58,16 @@ export const useLabRunStore = defineStore('labRun', {
       const lab = labById(labId)
       if (!lab) throw new Error(`Unknown Lab '${labId}'`)
       const valid = saved && saved.labId === labId && isSandboxShape(saved.sandbox)
-      const data = valid ? { ...freshRun(lab), ...saved, lastTickAt: null } : freshRun(lab)
-      Object.assign(this, data, { running: false })
-      usePortalStore().resetForLab()
-      this.persist()
+      if (valid) {
+        Object.assign(this, { ...freshRun(lab), ...saved, lastTickAt: null }, { running: false })
+        usePortalStore().resetForLab()
+        this.persist()
+      } else {
+        this._resetTo(lab)
+      }
     },
-    start(labId) {
-      const lab = labById(labId)
-      if (!lab) throw new Error(`Unknown Lab '${labId}'`)
+    // Shared by `load()` (when there is no valid saved run) and `restart()`.
+    _resetTo(lab) {
       Object.assign(this, freshRun(lab), { running: false })
       usePortalStore().resetForLab()
       this.persist()
@@ -83,7 +85,18 @@ export const useLabRunStore = defineStore('labRun', {
       if (this.running) return null
       this.pushLine({ kind: 'cmd', text: line })
       const trimmed = line.trim()
-      const result = runLine(this.sandbox, line)
+      let result
+      try {
+        result = runLine(this.sandbox, line)
+      } catch (e) {
+        // Defensive: `runLine`/`runAz` already turn `AzError`s into `err` lines and
+        // rethrow anything else. This should never fire, but if a command's `run()`
+        // throws a plain bug, the shell must not sit silently stuck.
+        this.pushLine({ kind: 'err', text: 'ERROR: ' + (e && e.message ? e.message : String(e)) })
+        this.running = false
+        this.persist()
+        return null
+      }
       // Ruling T: `clear` is a shell-level meta-command and never enters history.
       // Use the engine's `clear` flag (not a string match on the line) so stray
       // whitespace around `clear` is handled the same way the engine handles it.
@@ -157,9 +170,7 @@ export const useLabRunStore = defineStore('labRun', {
     },
     restart() {
       if (!this.lab) return
-      Object.assign(this, freshRun(this.lab), { running: false })
-      usePortalStore().resetForLab()
-      this.persist()
+      this._resetTo(this.lab)
     },
   },
 })

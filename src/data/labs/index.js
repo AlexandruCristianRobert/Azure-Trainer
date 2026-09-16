@@ -15,7 +15,3 @@ export const LABS = [
 export function labById(id) {
   return LABS.find((l) => l.id === id)
 }
-
-export function labsForSkillArea(skillAreaId) {
-  return LABS.filter((l) => l.skillAreaId === skillAreaId)
-}

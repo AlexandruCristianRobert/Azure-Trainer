@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { loadJSON, saveJSON, removeJSON } from '../lib/storage.js'
+import { loadJSON, saveJSON } from '../lib/storage.js'
 import { isSandboxShape } from '../lib/sandbox/model.js'
 import { LABS, labById } from '../data/labs/index.js'
 
@@ -9,7 +9,6 @@ export const runKey = (labId) => `at_run_${labId}`
 export const useProgressStore = defineStore('progress', {
   state: () => ({ results: loadJSON(RESULTS_KEY, []) }),
   getters: {
-    resultsForLab: (s) => (labId) => s.results.filter((r) => r.labId === labId),
     latestResult: (s) => (labId) => {
       const list = s.results.filter((r) => r.labId === labId)
       return list.length ? list[list.length - 1] : null
@@ -38,11 +37,6 @@ export const useProgressStore = defineStore('progress', {
       const labs = LABS.filter((l) => l.skillAreaId === skillAreaId)
       const statuses = labs.map((l) => this.labStatus(l.id))
       return { total: labs.length, completed: statuses.filter((s) => s === 'completed').length, inProgress: statuses.filter((s) => s === 'in-progress').length }
-    },
-    resetAll() {
-      this.results = []
-      removeJSON(RESULTS_KEY)
-      for (const l of LABS) removeJSON(runKey(l.id))
     },
   },
 })

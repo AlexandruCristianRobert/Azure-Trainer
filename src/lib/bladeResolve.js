@@ -9,11 +9,11 @@ function hasNamespace(sb, rg, name) {
 }
 
 export function resolveBlade(blade, sandbox) {
-  if (!blade) return LIST
+  if (!blade) return { ...LIST }
   if (blade.kind === 'servicebus-namespace') {
     if (hasNamespace(sandbox, blade.resourceGroup, blade.name)) return { ...blade, tab: blade.tab ?? 'queues' }
     return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
   }
-  if (blade.kind === 'resource-group') return hasGroup(sandbox, blade.name) ? blade : LIST
-  return LIST
+  if (blade.kind === 'resource-group') return hasGroup(sandbox, blade.name) ? { ...blade } : { ...LIST }
+  return { ...LIST }
 }
