@@ -1,0 +1,84 @@
+/* Azure-Trainer — design tokens. Source of truth: docs/design/Azure-Trainer Screens.dc.html */
+:root {
+  /* Surfaces */
+  --portal-bg: #F4F6F8;
+  --surface: #FFFFFF;
+  --chip-bg: #EEF1F4;
+  --code-bg: #F0F3F6;
+  --row-bg: #F5F9FF;
+
+  /* Lines */
+  --border: #E2E7ED;
+  --border-strong: #D5DCE3;
+  --border-input: #CBD4DD;
+  --border-faint: #EEF1F4;
+  --border-accent: #B9CCF0;
+  --border-hint: #DCE4EE;
+
+  /* Text */
+  --text: #1C2733;
+  --text-2: #33404D;
+  --text-dim: #5A6B7C;
+  --text-faint: #98A5B3;
+
+  /* Accent */
+  --accent: #2E5FCC;
+  --accent-strong: #2851AF;
+  --accent-soft: #EDF2FC;
+  --accent-soft-2: #E4ECF8;
+  --accent-ring: #9DB8E8;
+
+  /* Status */
+  --success: #1E7A3C;
+  --success-text: #175A2C;
+  --success-soft: #EFF7F1;
+  --success-bg: #EAF5EC;
+  --success-border: #CFE6D4;
+  --danger: #C0392B;
+
+  /* Header */
+  --header-bg: #1E2A38;
+  --header-search-bg: #2B3949;
+  --header-search-border: #3D4C5E;
+  --header-icon: #C4CFDB;
+  --header-muted: #93A5B6;
+  --header-accent: #4C82E8;
+
+  /* Cloud Shell */
+  --shell-header-bg: #141B23;
+  --shell-bg: #0D1117;
+  --shell-text: #C9D4DE;
+  --shell-muted: #8B9AAB;
+  --shell-title: #DDE6EF;
+  --shell-handle: #3A4552;
+  --shell-border: #2A3340;
+  --shell-green: #7EE787;
+  --shell-blue: #6CB6FF;
+  --shell-red: #F1707B;
+
+  /* Service tile tints (Home) */
+  --tint-blue: #EDF2FC;
+  --tint-teal: #E7F4F4;
+  --tint-purple: #F1ECFA;
+  --tint-amber: #FBF3E4;
+  --tint-violet: #F2EEFB;
+  --tint-steel: #EAF1F8;
+  --tint-red: #FAECEA;
+  --tint-slate: #EAF0F5;
+  --tint-grey: #EEF1F4;
+
+  /* Type */
+  --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+
+  /* Layout */
+  --header-h: 48px;
+  --resource-menu-w: 240px;
+  --lab-panel-w: 360px;
+  --shell-h: 280px;
+  --shell-header-h: 34px;
+  --radius-s: 3px;
+  --radius-m: 4px;
+  --radius-l: 6px;
+  --shadow-toast: 0 6px 20px rgba(23, 32, 42, 0.18);
+}
