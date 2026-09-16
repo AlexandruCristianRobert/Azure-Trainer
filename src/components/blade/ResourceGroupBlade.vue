@@ -13,6 +13,12 @@ const props = defineProps({ name: { type: String, required: true } })
 const run = useLabRunStore()
 const portal = usePortalStore()
 const active = ref('overview')
+// This Blade only ever renders the Overview content (no per-item sections exist yet);
+// clicking anything else still looks clickable but must not move the highlight.
+function onMenu(id) {
+  if (id !== 'overview') return
+  active.value = id
+}
 const group = computed(() => run.sandbox.resourceGroups.find((g) => g.name.toLowerCase() === props.name.toLowerCase()))
 const sections = [
   { items: [{ id: 'overview', label: 'Overview' }, { id: 'activity', label: 'Activity log' }, { id: 'iam', label: 'Access control (IAM)' }, { id: 'tags', label: 'Tags' }, { id: 'visualizer', label: 'Resource visualizer' }, { id: 'events', label: 'Events' }] },
@@ -47,7 +53,7 @@ const rows = computed(() => run.sandbox.namespaces.filter((n) => n.resourceGroup
 
 <template>
   <section class="blade">
-    <ResourceMenu :sections="sections" :active-id="active" @select="active = $event" />
+    <ResourceMenu :sections="sections" :active-id="active" @select="onMenu" />
     <div class="blade__content">
       <BladeHeader :crumbs="[{ label: 'Home', route: '/' }, { label: 'Resource groups', blade: { kind: 'resource-groups' } }, { label: name, blade: null }]" :title="name" subtitle="Resource group" icon="resource-group" :commands="commands" @navigate="portal.showBlade($event)" />
       <EssentialsGrid :items="essentials" />

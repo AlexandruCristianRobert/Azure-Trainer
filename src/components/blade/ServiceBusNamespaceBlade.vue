@@ -37,7 +37,11 @@ const sections = [
   { label: 'Automation', collapsed: true, items: [] },
   { label: 'Help', collapsed: true, items: [] },
 ]
+// Only these ids render different content in this Blade; clicking anything else
+// (Activity log, IAM, Tags, ...) still looks clickable but must not move the highlight.
+const MENU_CONTENT_IDS = ['overview', 'queues', 'topics']
 function onMenu(id) {
+  if (!MENU_CONTENT_IDS.includes(id)) return
   menuOverride.value = id
   if (id === 'queues' || id === 'topics') {
     viaMenuClick.value = true
