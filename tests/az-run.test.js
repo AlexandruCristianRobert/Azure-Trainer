@@ -83,4 +83,21 @@ describe('az group', () => {
     expect(r.sandbox.resourceGroups).toHaveLength(0)
     expect(r.events).toEqual([{ type: 'deleted', resourceType: 'resourceGroup', name: 'rg-orders', resourceGroup: 'rg-orders' }])
   })
+  it('delete events carry the canonical stored casing, not the user-typed casing', () => {
+    const sb = runLine(createSandbox(), 'az group create -n RG-Orders -l westeurope').sandbox
+    const r = runLine(sb, 'az group delete -n rg-orders --yes')
+    expect(r.events).toEqual([{ type: 'deleted', resourceType: 'resourceGroup', name: 'RG-Orders', resourceGroup: 'RG-Orders' }])
+  })
+  it('re-create on an existing group emits updated, not created', () => {
+    let sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    const r = runLine(sb, 'az group create -n rg-orders -l northeurope')
+    expect(r.events).toEqual([{ type: 'updated', resourceType: 'resourceGroup', name: 'rg-orders', resourceGroup: 'rg-orders' }])
+    expect(JSON.parse(out(r)).location).toBe('northeurope')
+  })
+  it('honours the configured default group on show', () => {
+    let sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    sb = runLine(sb, 'az configure --defaults group=rg-orders').sandbox
+    const r = runLine(sb, 'az group show')
+    expect(JSON.parse(out(r)).name).toBe('rg-orders')
+  })
 })
