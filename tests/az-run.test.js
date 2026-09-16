@@ -101,3 +101,26 @@ describe('az group', () => {
     expect(JSON.parse(out(r)).name).toBe('rg-orders')
   })
 })
+
+describe('global arguments (Controller Ruling AA)', () => {
+  it('-o json / jsonc are accepted no-ops; other formats are rejected', () => {
+    const sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    expect(out(runLine(sb, 'az group list -o json'))).toBe(out(runLine(sb, 'az group list')))
+    expect(err(runLine(sb, 'az group list -o table'))).toBe("argument --output/-o: only 'json' is available in the Sandbox Cloud Shell.")
+  })
+  it('--query is not available in the Sandbox Cloud Shell', () => {
+    const sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    expect(err(runLine(sb, 'az group list --query name'))).toBe('--query is not available in the Sandbox Cloud Shell.')
+  })
+  it('--verbose --debug --only-show-errors are accepted no-ops', () => {
+    const sb = runLine(createSandbox(), 'az group create -n rg-orders -l westeurope').sandbox
+    const r = runLine(sb, 'az group list --verbose --debug --only-show-errors')
+    expect(err(r)).toBe('')
+    expect(JSON.parse(out(r))).toHaveLength(1)
+  })
+  it('--subscription accepts the Sandbox id/name and rejects anything else', () => {
+    expect(err(runLine(createSandbox(), 'az account show --subscription Sandbox'))).toBe('')
+    expect(err(runLine(createSandbox(), `az account show --subscription ${SUBSCRIPTION_ID}`))).toBe('')
+    expect(err(runLine(createSandbox(), 'az account show --subscription nope'))).toBe("The subscription of 'nope' doesn't exist in cloud 'AzureCloud'.")
+  })
+})

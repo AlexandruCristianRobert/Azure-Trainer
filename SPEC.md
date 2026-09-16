@@ -100,6 +100,10 @@ Supported (`--help` on every group and command):
 | `clear` | clears the scrollback (shell level) |
 | anything else | `bash: <word>: command not found` |
 
+Global arguments shown in `--help` are recognised centrally: `--verbose`, `--debug`, `--only-show-errors`
+and `-o json` are accepted no-ops; `-o <other>`, `--query` and an unknown `--subscription` return
+Sandbox-specific errors.
+
 `--resource-group` falls back to `sandbox.defaults.group` when omitted. Error wording follows az:
 
 ```

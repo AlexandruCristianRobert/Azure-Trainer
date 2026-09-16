@@ -1,5 +1,18 @@
 // argparse-flavoured parsing of az arguments.
+import { SUBSCRIPTION_ID, SUBSCRIPTION_NAME } from '../sandbox/model.js'
+
 export const HELP_FLAGS = ['--help', '-h']
+
+// The `--help` renderer (help.js) advertises these on every command (Controller Ruling AA).
+// Recognised centrally here so every command gets them without touching per-command `args`.
+const GLOBAL_ARG_SPECS = [
+  { name: '--verbose', aliases: [], kind: 'flag', dest: 'globalVerbose' },
+  { name: '--debug', aliases: [], kind: 'flag', dest: 'globalDebug' },
+  { name: '--only-show-errors', aliases: [], kind: 'flag', dest: 'globalOnlyShowErrors' },
+  { name: '--output', aliases: ['-o'], kind: 'global-output', dest: 'globalOutput' },
+  { name: '--query', aliases: [], kind: 'global-query', dest: 'globalQuery' },
+  { name: '--subscription', aliases: [], kind: 'global-subscription', dest: 'globalSubscription' },
+]
 
 export function displayName(spec) {
   return [spec.name, ...(spec.aliases ?? [])].join('/')
@@ -12,6 +25,7 @@ function findSpec(specs, token) {
 export function parseArgs(specs, tokens, defaults = { group: null, location: null }) {
   const values = {}
   const unrecognized = []
+  const allSpecs = specs.concat(GLOBAL_ARG_SPECS)
   let wantsHelp = false
   let error = null
 
@@ -27,7 +41,7 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       tok = tok.slice(0, eq)
     }
     if (!tok.startsWith('-')) { unrecognized.push(tok); continue }
-    const spec = findSpec(specs, tok)
+    const spec = findSpec(allSpecs, tok)
     if (!spec) {
       unrecognized.push(tokens[i])
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) unrecognized.push(tokens[++i])
@@ -49,6 +63,18 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       raw = tokens[++i]
     }
     if (raw === '') { fail(`argument ${displayName(spec)}: expected one argument`); continue }
+    if (spec.kind === 'global-output') {
+      if (raw !== 'json' && raw !== 'jsonc') fail(`argument ${displayName(spec)}: only 'json' is available in the Sandbox Cloud Shell.`)
+      continue
+    }
+    if (spec.kind === 'global-query') {
+      fail('--query is not available in the Sandbox Cloud Shell.')
+      continue
+    }
+    if (spec.kind === 'global-subscription') {
+      if (raw !== SUBSCRIPTION_ID && raw !== SUBSCRIPTION_NAME) fail(`The subscription of '${raw}' doesn't exist in cloud 'AzureCloud'.`)
+      continue
+    }
     if (spec.kind === 'int') {
       if (!/^-?\d+$/.test(raw)) { fail(`argument ${spec.name}: invalid int value: '${raw}'`); continue }
       values[spec.dest] = parseInt(raw, 10)
