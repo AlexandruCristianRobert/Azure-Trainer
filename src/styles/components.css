@@ -183,3 +183,24 @@ code { font: 11px var(--font-mono); background: var(--code-bg); padding: 0 4px; 
 .entity-table__status { display: flex; align-items: center; gap: 6px; }
 .entity-table__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .entity-table__dot--off { background: var(--text-faint); }
+
+/* ---- Cloud Shell -------------------------------------------------------- */
+.shell { height: var(--shell-h); flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--shell-border); }
+.shell--minimized { height: var(--shell-header-h); }
+.shell--maximized { height: auto; flex: 1; min-height: 0; }
+.shell__header { height: var(--shell-header-h); flex: none; background: var(--shell-header-bg); display: flex; align-items: center; padding: 0 12px; position: relative; }
+.shell__handle { position: absolute; left: 50%; top: 4px; transform: translateX(-50%); width: 44px; height: 4px; border-radius: 2px; background: var(--shell-handle); }
+.shell__bash { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--font-mono); color: var(--shell-title); }
+.shell__spacer { flex: 1; }
+.shell__tools { display: flex; align-items: center; gap: 10px; color: var(--shell-muted); }
+.shell__tools button { display: inline-flex; color: inherit; padding: 3px; border-radius: 3px; }
+.shell__tools button:hover { color: var(--shell-title); background: rgba(255, 255, 255, 0.06); }
+
+.terminal { flex: 1; min-height: 0; background: var(--shell-bg); padding: 8px 14px; overflow: auto; font: 12px/1.45 var(--font-mono); color: var(--shell-text); cursor: text; }
+.terminal__pre { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-all; }
+.terminal__user { color: var(--shell-green); }
+.terminal__path { color: var(--shell-blue); }
+.terminal__err { color: var(--shell-red); }
+.terminal__spinner { color: var(--shell-muted); }
+.terminal__input-row { display: flex; align-items: baseline; }
+.terminal__input { flex: 1; background: transparent; border: 0; outline: none; font: inherit; color: inherit; padding: 0; caret-color: var(--shell-text); }
