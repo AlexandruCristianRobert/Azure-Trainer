@@ -30,7 +30,7 @@ function onShellClick() {
       </label>
     </div>
     <nav class="portal-header__actions" aria-label="Portal actions">
-      <button class="portal-header__icon-btn" type="button" aria-label="Cloud Shell" :aria-pressed="portal.shell.visible" @click="onShellClick"><FluentIcon name="window-console" :size="18" /></button>
+      <button class="portal-header__icon-btn" type="button" aria-label="Cloud Shell" :aria-pressed="route.name === 'lab' && portal.shell.visible" @click="onShellClick"><FluentIcon name="window-console" :size="18" /></button>
       <button class="portal-header__icon-btn" type="button" aria-label="Notifications" :aria-expanded="portal.notificationsOpen" @click="portal.toggleNotifications()">
         <FluentIcon name="alert" :size="18" />
         <span v-if="portal.unread" class="portal-header__badge">{{ portal.unread }}</span>

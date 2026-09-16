@@ -6,7 +6,7 @@ import FluentIcon from '../icons/FluentIcon.vue'
 
 const portal = usePortalStore()
 const route = useRoute()
-const style = computed(() => ({ right: route.name === 'lab' && !portal.labPanelCollapsed ? '372px' : '24px' }))
+const style = computed(() => ({ right: route.name === 'lab' && !portal.labPanelCollapsed ? '372px' : '48px' }))
 
 let timer = null
 watch(() => portal.toast, (t) => {
