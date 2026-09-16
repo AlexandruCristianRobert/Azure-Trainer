@@ -15,6 +15,7 @@ let spinner = null
 watch(() => run.running, (r) => {
   clearInterval(spinner)
   if (r) spinner = setInterval(() => { frame.value = (frame.value + 1) % frames.length }, 120)
+  else nextTick(focus)
 })
 
 const spinnerText = computed(() => `${frames[frame.value]} Running ..`)
