@@ -57,12 +57,17 @@ function onKeydown(e) {
 }
 
 function focus() { inputEl.value?.focus() }
+// A click that ends a text-drag selection (e.g. to copy a Task's example command out of
+// the scrollback) must not collapse it by refocusing the input.
+function onBodyClick() {
+  if (window.getSelection?.()?.isCollapsed !== false) focus()
+}
 onMounted(() => { focus(); scrollToBottom() })
 onBeforeUnmount(() => clearInterval(spinner))
 </script>
 
 <template>
-  <div ref="bodyEl" class="terminal" @click="focus">
+  <div ref="bodyEl" class="terminal" @click="onBodyClick">
     <pre class="terminal__pre"><template v-for="(line, i) in run.scrollback" :key="i"><template v-if="line.kind === 'cmd'"><span class="terminal__user">user@sandbox</span>:<span class="terminal__path">~</span>$ {{ line.text }}
 </template><span v-else-if="line.kind === 'err'" class="terminal__err">{{ line.text }}
 </span><template v-else>{{ line.text }}
