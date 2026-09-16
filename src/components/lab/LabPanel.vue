@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { skillAreaById } from '../../data/skillAreas.js'
@@ -13,7 +13,29 @@ const run = useLabRunStore()
 const portal = usePortalStore()
 const briefOpen = ref(true)
 const menuOpen = ref(false)
+const menuWrapEl = ref(null)
 const openNotes = ref(new Set())
+
+function onDocClick(e) {
+  if (menuWrapEl.value?.contains(e.target)) return
+  menuOpen.value = false
+}
+function onDocKeydown(e) {
+  if (e.key === 'Escape') menuOpen.value = false
+}
+watch(menuOpen, (open) => {
+  if (open) {
+    document.addEventListener('click', onDocClick)
+    document.addEventListener('keydown', onDocKeydown)
+  } else {
+    document.removeEventListener('click', onDocClick)
+    document.removeEventListener('keydown', onDocKeydown)
+  }
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('keydown', onDocKeydown)
+})
 const area = computed(() => skillAreaById(run.lab.skillAreaId))
 const service = computed(() => SERVICES[run.lab.service])
 const pct = computed(() => (run.total ? (run.doneCount / run.total) * 100 : 0))
@@ -31,8 +53,9 @@ function toggleNote(id) {
   openNotes.value = s
 }
 function stateOf(t) { return t.done ? 'done' : t.id === run.currentTaskId ? 'current' : 'pending' }
-function restart() {
+async function restart() {
   menuOpen.value = false
+  await nextTick()
   if (window.confirm('Restart this Lab? The Sandbox and the Cloud Shell history will be reset. Past Lab Results are kept.')) {
     run.restart()
     openNotes.value = new Set()
@@ -51,7 +74,7 @@ function restart() {
       <div class="lab-panel__header">
         <div class="lab-panel__title-row">
           <div class="lab-panel__title">{{ run.lab.title }}</div>
-          <div class="lab-panel__menu-wrap">
+          <div ref="menuWrapEl" class="lab-panel__menu-wrap">
             <button type="button" class="lab-panel__more" aria-label="Lab options" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><FluentIcon name="more-horizontal" :size="16" /></button>
             <div v-if="menuOpen" class="lab-panel__menu" role="menu">
               <button type="button" role="menuitem" @click="restart">Restart Lab</button>
