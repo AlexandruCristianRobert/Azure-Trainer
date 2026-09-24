@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
+    <title>F0 IndexedDB persistence checks</title>
+  </head>
+  <body>
+    <main>
+      <h1>F0 IndexedDB persistence checks</h1>
+      <pre id="result">Running…</pre>
+    </main>
+    <script type="module">
+      import { runPersistenceChecks } from './f0-persistence.browser.js'
+
+      runPersistenceChecks()
+    </script>
+  </body>
+</html>

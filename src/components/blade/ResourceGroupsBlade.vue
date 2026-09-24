@@ -26,7 +26,7 @@ const rows = computed(() => run.sandbox.resourceGroups.map((g) => ({ name: g.nam
   <section class="blade">
     <div class="blade__content blade__content--full">
       <BladeHeader :crumbs="[{ label: 'Home', route: '/' }, { label: 'Resource groups', blade: null }]" title="Resource groups" :subtitle="SUBSCRIPTION_NAME" icon="resource-group" :commands="commands" @navigate="portal.showBlade($event)" />
-      <div class="blade__filters"><input type="search" placeholder="Filter for any field..." aria-label="Filter resource groups" /><span class="blade__count">Showing 1 to {{ rows.length }} of {{ rows.length }} records.</span></div>
+      <div class="blade__filters"><input type="search" placeholder="Filter for any field..." aria-label="Filter resource groups" /><span class="blade__count">Showing {{ rows.length ? 1 : 0 }} to {{ rows.length }} of {{ rows.length }} records.</span></div>
       <EntityTable :columns="columns" :rows="rows" empty-text="No resource groups to display" @open="portal.showBlade({ kind: 'resource-group', name: $event.name })" />
       <p v-if="!rows.length" class="blade__hint">Nothing here yet. Create your first resource group from the Cloud Shell below: <code>az group create --name &lt;name&gt; --location &lt;location&gt;</code></p>
     </div>

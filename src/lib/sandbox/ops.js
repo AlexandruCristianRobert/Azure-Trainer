@@ -1,6 +1,14 @@
 import { cloneSandbox, nowIso } from './model.js'
 import { normalizeLocation, LOCATIONS } from './locations.js'
 import { AzError, notFoundEntity } from './errors.js'
+import { deleteContainerAppResourcesInGroup } from './containerapps.js'
+import { deleteCosmosAccountsInGroup } from './cosmosdb.js'
+import { deleteKeyVaultsInGroup } from './keyvault.js'
+import { deleteFunctionResourcesInGroup } from './functions.js'
+import { deleteEventGridTopicsInGroup } from './eventgrid.js'
+import { deleteRegistriesInGroup } from './registry.js'
+import { deleteIdentitiesInGroup } from './identity.js'
+import { deleteFoundryAccountsInGroup } from './foundry.js'
 
 const SKUS = ['Basic', 'Standard', 'Premium']
 const RG_NAME_RE = /^[-\w.()]{1,90}$/
@@ -90,7 +98,14 @@ export function createResourceGroup(sb, { name, location, tags = null }) {
 
 export function deleteResourceGroup(sb, { name }) {
   getResourceGroup(sb, name)
-  const next = cloneSandbox(sb)
+  let next = deleteContainerAppResourcesInGroup(sb, name)
+  next = deleteCosmosAccountsInGroup(next, name)
+  next = deleteKeyVaultsInGroup(next, name)
+  next = deleteFunctionResourcesInGroup(next, name)
+  next = deleteEventGridTopicsInGroup(next, name)
+  next = deleteRegistriesInGroup(next, name)
+  next = deleteFoundryAccountsInGroup(next, name)
+  next = deleteIdentitiesInGroup(next, name)
   next.resourceGroups = next.resourceGroups.filter((g) => g.name.toLowerCase() !== name.toLowerCase())
   next.namespaces = next.namespaces.filter((n) => n.resourceGroup.toLowerCase() !== name.toLowerCase())
   return { sandbox: next, resource: null }

@@ -40,7 +40,12 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       inlineValue = tok.slice(eq + 1)
       tok = tok.slice(0, eq)
     }
-    if (!tok.startsWith('-')) { unrecognized.push(tok); continue }
+    if (!tok.startsWith('-')) {
+      const positional = specs.find((spec) => spec.kind === 'positional' && values[spec.dest] === undefined)
+      if (positional) values[positional.dest] = tok
+      else unrecognized.push(tok)
+      continue
+    }
     const spec = findSpec(allSpecs, tok)
     if (!spec) {
       unrecognized.push(tokens[i])
@@ -52,10 +57,17 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       values[spec.dest] = true
       continue
     }
-    if (spec.kind === 'list') {
+    if (spec.kind === 'list' || spec.kind === 'pairs') {
       const items = inlineValue !== null ? [inlineValue] : []
       while (inlineValue === null && i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) items.push(tokens[++i])
-      values[spec.dest] = Object.fromEntries(items.map((kv) => { const j = kv.indexOf('='); return j === -1 ? [kv, ''] : [kv.slice(0, j), kv.slice(j + 1)] }))
+      const pairs = items.map((kv) => { const j = kv.indexOf('='); return j === -1 ? [kv, ''] : [kv.slice(0, j), kv.slice(j + 1)] })
+      values[spec.dest] = spec.kind === 'pairs' ? [...(values[spec.dest] ?? []), ...pairs] : Object.fromEntries(pairs)
+      continue
+    }
+    if (spec.kind === 'raw') {
+      const items = inlineValue !== null ? [inlineValue] : []
+      while (inlineValue === null && i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) items.push(tokens[++i])
+      values[spec.dest] = [...(values[spec.dest] ?? []), ...items]
       continue
     }
     let raw = inlineValue
@@ -66,7 +78,7 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
       }
       raw = tokens[++i]
     }
-    if (raw === '') { fail(`argument ${displayName(spec)}: expected one argument`); continue }
+    if (raw === '' && !spec.allowEmpty) { fail(`argument ${displayName(spec)}: expected one argument`); continue }
     if (spec.kind === 'global-output') {
       if (raw !== 'json' && raw !== 'jsonc') fail(`argument ${displayName(spec)}: only 'json' is available in the Sandbox Cloud Shell.`)
       continue

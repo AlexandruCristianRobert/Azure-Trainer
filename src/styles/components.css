@@ -179,6 +179,36 @@ code { font: 11px var(--font-mono); background: var(--code-bg); padding: 0 4px; 
 .entity-table__head, .entity-table__row { display: grid; grid-template-columns: var(--cols); padding: 8px 4px; border-bottom: 1px solid var(--border); font-size: 12.5px; align-items: center; }
 .entity-table__head { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
 .entity-table__row { padding: 9px 4px; border-bottom-color: var(--border-faint); }
+.keyvault-versions .entity-table__row > div,
+.keyvault-assignments .entity-table__row > div { min-width: 0; overflow-wrap: anywhere; }
+.keyvault-secret-essentials .essentials__value { min-width: 0; overflow-wrap: anywhere; }
+.function-app-essentials .essentials__value,
+.function-app-essentials .essentials__row > a,
+.storage-account-essentials .essentials__value,
+.storage-account-essentials .essentials__row > a,
+.function-app-settings .entity-table__row > div,
+.function-app-cors .entity-table__row > div,
+.storage-account-functions .entity-table__row > div,
+.storage-account-functions .entity-table__row > a,
+.function-app-blade .blade-header__title,
+.function-app-blade .blade-header__crumbs > a,
+.function-app-blade .blade-header__crumbs > span:not(.blade-header__sep),
+.storage-account-blade .blade-header__title,
+.storage-account-blade .blade-header__crumbs > a,
+.storage-account-blade .blade-header__crumbs > span:not(.blade-header__sep),
+.eventgrid-topic-essentials .essentials__value,
+.eventgrid-topic-essentials .essentials__row > a,
+.eventgrid-subscription-essentials .essentials__value,
+.eventgrid-subscription-essentials .essentials__row > a,
+.eventgrid-topic-subscriptions .entity-table__row > div,
+.eventgrid-topic-subscriptions .entity-table__row > a,
+.eventgrid-topic-blade .blade-header__title,
+.eventgrid-topic-blade .blade-header__crumbs > a,
+.eventgrid-topic-blade .blade-header__crumbs > span:not(.blade-header__sep),
+.eventgrid-subscription-blade .blade-header__title,
+.eventgrid-subscription-blade .blade-header__crumbs > a,
+.eventgrid-subscription-blade .blade-header__crumbs > span:not(.blade-header__sep),
+.eventgrid-subscription-note { min-width: 0; overflow-wrap: anywhere; }
 .entity-table__empty { padding: 28px 4px; font-size: 12.5px; color: var(--text-dim); text-align: center; border-bottom: 1px solid var(--border-faint); }
 .entity-table__status { display: flex; align-items: center; gap: 6px; }
 .entity-table__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
@@ -219,6 +249,7 @@ code { font: 11px var(--font-mono); background: var(--code-bg); padding: 0 4px; 
 .lab-panel__menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; font-size: 12.5px; border-radius: 3px; }
 .lab-panel__menu button:hover { background: var(--accent-soft); }
 .lab-panel__chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lab-panel__chips .pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .lab-panel__progress-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; margin-bottom: 6px; }
 .lab-panel__count { font-size: 12px; font-weight: 600; }
 .lab-panel__timer { font: 500 12px var(--font-mono); color: var(--text-dim); }

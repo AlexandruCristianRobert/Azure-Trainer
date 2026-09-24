@@ -4,14 +4,15 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { useProgressStore } from '../../stores/progress.js'
 import { formatDuration, formatClock } from '../../lib/format.js'
 import { renderInline } from '../../lib/inlineCode.js'
-import { LABS } from '../../data/labs/index.js'
+import { nextLabFor } from '../../data/labs/index.js'
 import FluentIcon from '../icons/FluentIcon.vue'
+defineProps({ error: { type: String, default: '' } })
 
 const run = useLabRunStore()
 const progress = useProgressStore()
 const emit = defineEmits(['restart'])
-const result = computed(() => progress.results.find((r) => r.id === run.resultId) ?? progress.latestResult(run.labId))
-const nextLab = computed(() => LABS.find((l) => l.id !== run.labId))
+const result = computed(() => progress.allResults.find((r) => r.id === run.resultId) ?? progress.latestResult(run.labId))
+const nextLab = computed(() => nextLabFor(run.lab))
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 </script>
 
@@ -31,9 +32,13 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
       </ol>
     </div>
     <div class="lab-complete__actions">
+      <p v-if="error" role="alert">{{ error }}</p>
       <RouterLink class="btn btn--primary btn--block" to="/">Back to Home</RouterLink>
       <button type="button" class="btn btn--secondary btn--block" @click="emit('restart')">Restart Lab</button>
-      <button type="button" class="btn btn--disabled btn--block lab-complete__next" disabled>
+      <RouterLink v-if="nextLab?.status === 'available'" class="btn btn--secondary btn--block lab-complete__next" :to="`/lab/${nextLab.id}`">
+        <span>Next Lab: {{ nextLab.title }}</span>
+      </RouterLink>
+      <button v-else-if="nextLab" type="button" class="btn btn--disabled btn--block lab-complete__next" disabled>
         <span>Next Lab: {{ nextLab?.title }}</span><span class="lab-complete__soon">Coming soon</span>
       </button>
     </div>

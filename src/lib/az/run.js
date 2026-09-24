@@ -32,7 +32,7 @@ function bannerText(root) {
 }
 
 // tokens: argv after the leading "az"
-export function runAz(sandbox, tokens) {
+export function runAz(sandbox, tokens, context) {
   const root = buildTree()
   const out = (text) => ({ text, kind: 'out' })
   const err = (text) => ({ text, kind: 'err' })
@@ -60,18 +60,25 @@ export function runAz(sandbox, tokens) {
   if (node.type === 'group') return { sandbox, lines: [out(renderGroupHelp(node))], events: [], latencyMs: 0 }
 
   const { values, error, wantsHelp } = parseArgs(node.args, tokens.slice(i), sandbox.defaults)
-  if (wantsHelp) return { sandbox, lines: [out(renderCommandHelp(node))], events: [], latencyMs: 0 }
+  if (wantsHelp) {
+    const selected = Array.isArray(context?.lab?.bicepTargets) && node.path[0] === 'deployment'
+      && ['validate', 'what-if', 'create'].includes(node.path[2])
+      ? { ...node, args: node.args.map(arg => arg.name === '--parameters'
+        ? { ...arg, help: `Saved local parameter file: ${context.lab.bicepTargets.map(target => target.parameterPath).join(' or ')}.` }
+        : arg) } : node
+    return { sandbox, lines: [out(renderCommandHelp(selected))], events: [], latencyMs: 0 }
+  }
   if (error) return { sandbox, lines: [err(error)], events: [], latencyMs: 0 }
 
   try {
-    const result = node.run({ sandbox }, values)
+    const result = node.run({ sandbox, context }, values)
     const lines = []
     if (result.output !== null && result.output !== undefined) {
       lines.push(out(typeof result.output === 'string' ? result.output : toAzJson(result.output)))
     }
-    return { sandbox: result.sandbox ?? sandbox, lines, events: result.events ?? [], latencyMs: node.latencyMs }
+    return { sandbox: result.sandbox ?? sandbox, lines, events: result.events ?? [], latencyMs: node.latencyMs, ...(result.effects ? { effects: result.effects } : {}) }
   } catch (e) {
-    if (e instanceof AzError) return { sandbox, lines: [err(formatError(e))], events: [], latencyMs: Math.min(node.latencyMs, 600) }
+    if (e instanceof AzError) return { sandbox, lines: [err(formatError(e))], events: [], latencyMs: Math.min(node.latencyMs, 600), ...(e.diagnostics ? { diagnostics: e.diagnostics } : {}) }
     throw e
   }
 }

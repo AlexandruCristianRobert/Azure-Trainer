@@ -28,17 +28,17 @@ describe('catalog integrity', () => {
     expect(SKILL_AREAS.map((a) => a.id)).toEqual(['containers', 'data', 'connect', 'secure'])
     expect(HOME_SERVICES.every((k) => SERVICES[k])).toBe(true)
   })
-  it('exactly one Lab is available and it has 5 Tasks with 2 hints each', () => {
-    const available = LABS.filter((l) => l.status === 'available')
-    expect(available).toHaveLength(1)
-    const lab = available[0]
-    expect(lab.id).toBe('servicebus-order-backend')
-    expect(lab.tasks).toHaveLength(5)
-    for (const t of lab.tasks) {
-      expect(t.hints).toHaveLength(2)
-      expect(typeof t.check).toBe('function')
-      expect(t.solution.length).toBeGreaterThan(0)
-      expect(t.examNote.length).toBeGreaterThan(0)
+  it('all six available Labs have 5 Tasks with 2 hints each', () => {
+    const available = LABS.filter((l) => l.status === 'available' && l.engineVersion === undefined)
+    expect(available.map((l) => l.id)).toEqual(['servicebus-order-backend', 'containerapps-keda', 'cosmos-vector-search', 'keyvault-secrets', 'functions-serverless-api', 'eventgrid-filtered-subscription'])
+    for (const lab of available) {
+      expect(lab.tasks).toHaveLength(5)
+      for (const t of lab.tasks) {
+        expect(t.hints).toHaveLength(2)
+        expect(typeof t.check).toBe('function')
+        expect(t.solution.length).toBeGreaterThan(0)
+        expect(t.examNote.length).toBeGreaterThan(0)
+      }
     }
     expect(labById('nope')).toBeUndefined()
   })

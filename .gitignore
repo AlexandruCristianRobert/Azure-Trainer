@@ -6,3 +6,4 @@ dist/
 .claude/
 *.log
 .superpowers/
+.playwright-mcp/

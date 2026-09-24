@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest'
+import { LABS, labById, nextLabFor } from '../src/data/labs/index.js'
+
+describe('Next Lab routing', () => {
+  it('keeps the six legacy Labs in their original sequence', () => {
+    const legacy = LABS.filter((lab) => lab.engineVersion === undefined)
+    expect(legacy).toHaveLength(6)
+    expect(nextLabFor(legacy.at(-2))).toBe(legacy.at(-1))
+    expect(nextLabFor(legacy.at(-1))).toBeNull()
+  })
+  it('routes deployment Labs through all three CPU Labs', () => {
+    const guided = labById('aca-deploy-guided')
+    const troubleshooting = labById('aca-deploy-troubleshooting')
+    const independent = labById('aca-deploy-independent')
+    const cpuGuided = labById('aca-cpu-guided')
+    const cpuTroubleshooting = labById('aca-cpu-troubleshooting')
+    const cpuIndependent = labById('aca-cpu-independent')
+    expect(nextLabFor(guided)).toBe(troubleshooting)
+    expect(nextLabFor(troubleshooting)).toBe(independent)
+    expect(nextLabFor(independent)).toBe(cpuGuided)
+    expect(nextLabFor(cpuGuided)).toBe(cpuTroubleshooting)
+    expect(nextLabFor(cpuTroubleshooting)).toBe(cpuIndependent)
+    expect(nextLabFor(cpuIndependent)).toBe(labById('aca-probes-guided'))
+    expect(nextLabFor(labById('aca-probes-guided'))).toBe(labById('aca-probes-troubleshooting'))
+    expect(nextLabFor(labById('aca-probes-troubleshooting'))).toBe(labById('aca-probes-independent'))
+    expect(nextLabFor(labById('aca-probes-independent'))).toBe(labById('aca-foundry-guided'))
+    expect(nextLabFor(labById('aca-foundry-guided'))).toBe(labById('aca-foundry-troubleshooting'))
+    expect(nextLabFor(labById('aca-foundry-troubleshooting'))).toBe(labById('aca-foundry-independent'))
+    expect(nextLabFor(labById('aca-foundry-independent'))).toBe(labById('aca-bicep-guided'))
+    expect(nextLabFor(labById('aca-bicep-guided'))).toBe(labById('aca-bicep-troubleshooting'))
+    expect(nextLabFor(labById('aca-bicep-troubleshooting'))).toBe(labById('aca-bicep-independent'))
+    expect(nextLabFor(labById('aca-bicep-independent'))).toBe(labById('aca-capstone'))
+    expect(nextLabFor(labById('aca-capstone'))).toBeNull()
+  })
+})

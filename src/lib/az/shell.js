@@ -3,12 +3,12 @@ import { runAz } from './run.js'
 
 const EMPTY = (sandbox) => ({ sandbox, lines: [], events: [], latencyMs: 0, clear: false })
 
-export function runLine(sandbox, line) {
+export function runLine(sandbox, line, context) {
   const { tokens, error } = tokenize(line)
   if (error) return { ...EMPTY(sandbox), lines: [{ text: `bash: ${error}`, kind: 'err' }] }
   if (tokens.length === 0) return EMPTY(sandbox)
   const [cmd, ...rest] = tokens
   if (cmd === 'clear') return { ...EMPTY(sandbox), clear: true }
-  if (cmd === 'az') return { ...runAz(sandbox, rest), clear: false }
+  if (cmd === 'az') return { ...runAz(sandbox, rest, context), clear: false }
   return { ...EMPTY(sandbox), lines: [{ text: `bash: ${cmd}: command not found`, kind: 'err' }] }
 }

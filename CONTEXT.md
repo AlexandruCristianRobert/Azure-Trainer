@@ -1,31 +1,57 @@
 # Azure-Trainer
 
+Delivery status: all 16 Container Apps journey Labs are implemented and published through GitHub Pages. The Capstone combines image publication, bootstrap/main Bicep deployment, healthy Foundry/probe/CPU proof, simulated incident diagnosis and repair, recovery checkpoint, and owned-resource cleanup. The deployment review separates target provenance; neither the trainer nor the Capstone calls live Azure.
+
 A static browser app for hands-on preparation for exam AI-200 (Developing AI Cloud Solutions on Azure, the successor of the retired AZ-204): a simulated Azure portal with a Cloud Shell in which you complete realistic developer tasks against a Sandbox, with no real Azure subscription involved.
 
 ## Language
 
 **Portal**:
-The simulated Azure-portal-like frame the whole app lives in: top bar, portal menu, resource lists and Blades. In the demo it only displays state; it never changes it.
+The simulated Azure-portal-like frame the whole app lives in, including navigation, resource lists, Blades, and the tools used to complete Labs.
 _Avoid_: Dashboard, Console, Simulator, Fake portal
 
 **Cloud Shell**:
-The simulated terminal docked at the bottom of the Portal that accepts `az` commands. The only way to change state in the demo.
+The simulated terminal docked at the bottom of the Portal where learners enter supported commands to configure, deploy, and inspect Sandbox resources.
 _Avoid_: Terminal, Console, CLI panel, Shell drawer
+
+**Experiment Controls**:
+Visual controls for sending simulated requests, applying load, and introducing faults to observe how a deployed setup behaves.
+_Avoid_: Azure commands, Deployment controls
 
 **Blade**:
 One Portal page showing a resource, a resource list or a settings section, opened from the portal menu or from a resource. Read-only in the demo: a mirror of the current state.
 _Avoid_: Page, View, Panel, Screen
 
 **Lab**:
-One hands-on exercise: a short business brief followed by Tasks you complete in the Cloud Shell. The unit all practice and progress is organized around.
+One hands-on exercise: a short business brief followed by Tasks involving resource configuration, application or deployment files, and verification of behavior. The unit all practice and progress is organized around.
 _Avoid_: Exercise, Test, Challenge, Scenario, Quiz
 
+**Guided Lab**:
+A Lab that teaches a topic through an ordered walkthrough of building a working setup and verifying its behavior.
+_Avoid_: Tutorial mode
+
+**Troubleshooting Lab**:
+A Lab that starts with a faulty setup and requires the learner to diagnose the cause, repair it, and verify recovery.
+_Avoid_: Debugging quiz
+
+**Independent Lab**:
+A Lab that presents requirements without a prescribed sequence of steps, requiring the learner to apply the topic and demonstrate correct behavior.
+_Avoid_: Challenge, Assessment mode
+
+**Capstone Lab**:
+A final Lab that combines the topics practiced in the preceding Labs, requiring the learner to assemble and troubleshoot the complete application setup from scratch.
+_Avoid_: Final quiz, Final exam
+
+**Application Factory**:
+A reusable application starter containing a REST API, configuration, container image, and deployment infrastructure that the learner adapts and deploys during Labs.
+_Avoid_: Azure Data Factory, application factory function
+
 **Task**:
-One checkable step of a Lab, stated as a condition over the Sandbox (e.g. "a storage account named contoso01 exists with LRS redundancy"). Re-evaluated after every command and ticked as soon as the Sandbox satisfies it, regardless of which commands or order got it there.
+One checkable step of a Lab, stated as a condition over the Sandbox's resource configuration or evidence of observed behavior (e.g. replicas increasing under load). A Task is satisfied by meeting its condition, rather than by entering a prescribed command sequence.
 _Avoid_: Step, Objective, Requirement, Check
 
 **Sandbox**:
-The simulated Azure subscription a Lab runs in: the resources that exist and their properties. Commands in the Cloud Shell change it; Blades display it; Tasks are judged against it. Disposable and isolated per Lab.
+The simulated Azure subscription a Lab runs in: its resources, their properties, and evidence of their simulated behavior. It is disposable and isolated per Lab; Tasks are judged against it.
 _Avoid_: Subscription, Environment, State, Workspace
 
 **Skill Area**:
@@ -37,7 +63,7 @@ One of up to two on-demand nudges attached to a Task, ordered from concept to co
 _Avoid_: Tip, Clue, Help
 
 **Solution**:
-The full command (or commands) that satisfies a Task, revealed on demand after the Hints as the last resort. Recorded on the Lab Result like a Hint.
+The complete worked answer to a Task, including the commands or file changes needed to satisfy it, revealed on demand after the Hints as the last resort. Recorded on the Lab Result like a Hint.
 _Avoid_: Answer, Cheat, Reveal
 
 **Exam Note**:

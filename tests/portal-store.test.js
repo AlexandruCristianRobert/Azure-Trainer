@@ -19,6 +19,14 @@ describe('bladeForEvent', () => {
     expect(bladeForEvent({ type: 'deleted', resourceType: 'queue', name: 'orders', resourceGroup: 'rg-orders', namespace: 'sb-contoso-orders' }, NS)).toEqual(NS)
     expect(bladeForEvent({ type: 'deleted', resourceType: 'namespace', name: 'other', resourceGroup: 'rg-orders' }, NS)).toEqual(NS)
   })
+  it('focuses new registry and identity families and falls back after deletion', () => {
+    const registry = { kind: 'container-registry', resourceGroup: 'rg-guided', name: 'acrguided' }
+    const identity = { kind: 'managed-identity', resourceGroup: 'rg-guided', name: 'id-guided' }
+    expect(bladeForEvent({ type: 'created', resourceType: 'containerRegistry', resourceGroup: 'rg-guided', name: 'acrguided' }, LIST)).toEqual(registry)
+    expect(bladeForEvent({ type: 'created', resourceType: 'managedIdentity', resourceGroup: 'rg-guided', name: 'id-guided' }, LIST)).toEqual(identity)
+    expect(bladeForEvent({ type: 'deleted', resourceType: 'containerRegistry', resourceGroup: 'rg-guided', name: 'acrguided' }, registry)).toEqual({ kind: 'resource-group', name: 'rg-guided' })
+    expect(bladeForEvent({ type: 'deleted', resourceType: 'managedIdentity', resourceGroup: 'rg-guided', name: 'id-guided' }, identity)).toEqual({ kind: 'resource-group', name: 'rg-guided' })
+  })
 })
 
 describe('notificationForEvent', () => {
