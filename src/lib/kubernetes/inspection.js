@@ -14,7 +14,7 @@ export function projectKubernetesInspection(run, clusterId) {
     const readyBackends = resources.filter(pod => pod.kind === 'Pod' && pod.metadata.namespace === namespace
       && pod.status?.phase === 'Running' && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
       && Object.entries(service.spec.selector ?? {}).every(([key, value]) => pod.metadata.labels?.[key] === value)
-      && pod.spec.containers?.some(container => container.ports?.some(port => port.containerPort === targetPort || port.name === targetPort)))
+      && (typeof targetPort === 'number' || pod.spec.containers?.some(container => container.ports?.some(port => port.name === targetPort))))
       .sort(byName).map(pod => ({ name: pod.metadata.name, image: pod.spec.containers?.[0]?.image ?? '' }))
     const container = resources.find(pod => pod.kind === 'Pod' && pod.metadata.namespace === namespace && readyBackends.some(backend => backend.name === pod.metadata.name))?.spec.containers?.[0]
     const resolvedPort = typeof targetPort === 'number' ? targetPort : container?.ports?.find(port => port.name === targetPort)?.containerPort ?? null

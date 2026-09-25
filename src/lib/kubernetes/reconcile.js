@@ -12,8 +12,8 @@ function hasKubeletPull(sandbox, cluster, image) {
     && item.roleDefinitionId === ACR_PULL_ROLE_ID)
 }
 
-function addEvent(state, reason, message) {
-  state.events = [...state.events, { apiVersion: 'v1', kind: 'Event', metadata: { name: `event-${state.events.length + 1}` }, reason, message, simulated: true }].slice(-300)
+function addEvent(state, reason, message, namespace) {
+  state.events = [...state.events, { apiVersion: 'v1', kind: 'Event', metadata: { name: `event-${state.events.length + 1}`, namespace }, reason, message, simulated: true }].slice(-300)
 }
 
 function capturePod(run, pod, artifactId) {
@@ -42,7 +42,7 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
     spec: clone(template.spec), status: reason ? { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] } : { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
   }
   state.resources[kubeObjectKey('Pod', value.metadata.namespace, podName)] = value
-  if (reason) addEvent(state, reason, `Simulated image pull for ${container.image} failed: ${reason}.`)
+  if (reason) addEvent(state, reason, `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
   else capturePod(run, { ...value, clusterId: cluster.id, template }, artifactId)
   return value
 }

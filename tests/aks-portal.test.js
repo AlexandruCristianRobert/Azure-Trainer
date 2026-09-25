@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { projectKubernetesInspection } from '../src/lib/kubernetes/inspection.js'
 import { seedFoundation } from './helpers/aks.js'
+import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
 
 it('projects only the selected cluster without mutating the run', () => {
   const { run, clusterId } = seedFoundation()
@@ -33,4 +34,23 @@ it('retains an event namespace so the blade can scope image failures', () => {
   run.runtime.kubernetes.clusters[clusterId].events.push({ metadata: { name: 'event-other', namespace: 'other' }, reason: 'ImageNotFound', message: 'Other namespace only.' })
   const view = projectKubernetesInspection(run, clusterId)
   expect(view.events[0].metadata.namespace).toBe('other')
+})
+
+it('keeps numeric targetPort endpoints even without a declared container port', () => {
+  const { run, clusterId } = seedFoundation()
+  const service = Object.values(run.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'Service')
+  service.spec.ports[0].targetPort = 9090
+  for (const pod of Object.values(run.runtime.kubernetes.clusters[clusterId].resources).filter(item => item.kind === 'Pod')) pod.spec.containers[0].ports = []
+  const endpoint = projectKubernetesInspection(run, clusterId).serviceEndpoints[0]
+  expect(endpoint.resolvedPort).toBe(9090)
+  expect(endpoint.readyBackends).toHaveLength(2)
+})
+
+it('records the emitting namespace on new image pull events', () => {
+  const { run, clusterId } = seedFoundation()
+  const deployment = Object.values(run.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'Deployment')
+  deployment.spec.replicas = 3
+  deployment.spec.template.spec.containers[0].image = 'acraks01.azurecr.io/assistant:missing'
+  const view = projectKubernetesInspection(reconcileKubernetes(run), clusterId)
+  expect(view.events.find(item => item.reason === 'ImageNotFound')?.metadata.namespace).toBe('assistant')
 })

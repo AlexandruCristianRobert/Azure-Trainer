@@ -19,8 +19,9 @@ const dirty = computed(() => text.value !== saved.value)
 const version = computed(() => current.value?.fileVersions?.[path.value] ?? 0)
 const published = computed(() => Object.values(run.behavioralRun?.artifacts?.buildsById ?? {}).at(-1))
 const isKubernetes = computed(() => manifest.value?.runtimeFamily === 'aks' || manifest.value?.language === 'python')
-function semanticManifest(value) {
-  return { apiVersion: value.apiVersion, kind: value.kind, metadata: { name: value.metadata?.name, ...(value.metadata?.namespace ? { namespace: value.metadata.namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }, ...(value.spec ? { spec: value.spec } : {}) }
+function semanticManifest(value, defaultNamespace = '') {
+  const namespace = value.kind === 'Namespace' ? '' : value.metadata?.namespace ?? defaultNamespace
+  return { apiVersion: value.apiVersion, kind: value.kind, metadata: { name: value.metadata?.name, ...(namespace ? { namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }, ...(value.spec ? { spec: value.spec } : {}) }
 }
 const applied = computed(() => {
   if (!isKubernetes.value || !path.value.startsWith('k8s/')) return 'Not a Kubernetes manifest.'
@@ -29,7 +30,7 @@ const applied = computed(() => {
   const context = run.behavioralRun?.runtime?.kubernetes?.contexts?.[run.behavioralRun?.runtime?.kubernetes?.currentContext]
   const resources = context && run.behavioralRun?.runtime?.kubernetes?.clusters?.[context.clusterId]?.resources
   if (!resources) return 'Not applied to a current cluster.'
-  const current = parsed.documents.every(document => Object.values(resources).some(resource => kubeJson(semanticManifest(resource)) === kubeJson(semanticManifest(document))))
+  const current = parsed.documents.every(document => Object.values(resources).some(resource => kubeJson(semanticManifest(resource, context.namespace)) === kubeJson(semanticManifest(document, context.namespace))))
   return current ? 'Applied to the current cluster.' : 'Not applied to the current cluster.'
 })
 

@@ -26,6 +26,7 @@ it('labels Python/YAML project state and registers the AKS portal blade', async 
   expect(editor).toContain('Built')
   expect(editor).toContain('parseKubernetesYaml')
   expect(editor).toContain('Applied to the current cluster')
+  expect(editor).toContain('context.namespace')
   expect(host).toContain('AksClusterBlade')
   expect(group).toContain("kind: 'aks-cluster'")
 })
