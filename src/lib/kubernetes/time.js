@@ -1,5 +1,6 @@
 import { projectConfigurationAt } from './configuration.js'
 import { processProbeTimestamp, reconcileHealth } from './probes.js'
+import { reconcileServices } from './services.js'
 
 const clone = value => structuredClone(value)
 
@@ -35,12 +36,17 @@ function scheduledEventCount(run, atMs) {
   return count
 }
 
+function reconcileProbeServices(run) {
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileServices(run, clusterId)
+  return run
+}
+
 export function advanceKubernetesTimeResult(input, seconds, lab) {
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) return { run: input, diagnostics: [{ code: 'INVALID_AKS_ADVANCE', message: 'AKS time advance requires whole seconds from 1 through 300.' }] }
   let run = reconcileHealth(clone(input), lab)
   const target = run.runtime.simTimeMs + seconds * 1000
   run = projectConfigurationAt(run, run.runtime.simTimeMs)
-  run = processProbeTimestamp(run, run.runtime.simTimeMs, lab)
+  run = reconcileProbeServices(processProbeTimestamp(run, run.runtime.simTimeMs, lab))
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
@@ -50,11 +56,11 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
     run.runtime.simTimeMs = next
     run = projectConfigurationAt(run, next)
-    run = processProbeTimestamp(run, next, lab)
+    run = reconcileProbeServices(processProbeTimestamp(run, next, lab))
   }
   run.runtime.simTimeMs = target
   run = projectConfigurationAt(run, target)
-  run = processProbeTimestamp(run, target, lab)
+  run = reconcileProbeServices(processProbeTimestamp(run, target, lab))
   return { run, diagnostics: [] }
 }
 
