@@ -123,6 +123,9 @@ export function reconcileKubernetes(input, lab) {
       const current = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid))
       const removed = [...previous, ...current.slice(deployment.spec.replicas)]
       for (const stale of removed) {
+        if (state.connectivity && lab?.id !== 'aks-connectivity-troubleshooting') {
+          state.connectivity.applicationLogs = state.connectivity.applicationLogs.filter(log => log.podUid !== stale.metadata.uid)
+        }
         delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
         delete state.podSnapshots[stale.metadata.uid]
         delete state.projectionDue[stale.metadata.uid]

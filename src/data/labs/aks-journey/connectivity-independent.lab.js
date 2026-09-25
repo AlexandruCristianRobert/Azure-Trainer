@@ -9,6 +9,7 @@ import { connectivityScenario } from './connectivity-helpers.js'
 const clusterId = `/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourceGroups/${CONNECTIVITY_INDEPENDENT_GROUP}/providers/Microsoft.ContainerService/managedClusters/${CONNECTIVITY_INDEPENDENT_CLUSTER}`
 const internalOrigin = { kind: 'diagnostic', namespace: 'diagnostics', name: 'diagnostics' }
 const question = { question: 'How long are backups kept?' }
+const sharedImage = 'acraksnetworkindependent.azurecr.io/assistant:shared'
 const reviewAnswer = { status: 200, body: { answer: 'Review backups are kept for 7 days.', sources: ['review-backups'], environment: 'review', displayName: 'Review assistant' } }
 const primaryAnswer = { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'production', displayName: 'Primary assistant' } }
 const file = path => ({ kind: 'file', path, content: CONNECTIVITY_INDEPENDENT_SOLUTION_FILES[path] })
@@ -16,6 +17,12 @@ const commands = (...lines) => lines.map(line => ({ kind: 'command', line }))
 const target = (namespace, serviceName) => ({ clusterId, namespace, serviceName, deploymentName: 'assistant', clientPodUid: `diagnostic/${clusterId}` })
 const record = (context, taskId) => context.evidence?.experimentsById?.[context.evidence?.currentEvidenceByTask?.[taskId]]
 const yaml = path => parseKubernetesYaml(CONNECTIVITY_INDEPENDENT_FILES[path], path).documents[0]
+const deploymentSpec = spec => {
+  const { annotations: originalAnnotations, ...metadata } = spec?.template?.metadata ?? {}
+  const annotations = { ...(originalAnnotations ?? {}) }
+  delete annotations['kubectl.kubernetes.io/restarted-at']
+  return { ...spec, template: { ...spec?.template, metadata: { ...metadata, ...(Object.keys(annotations).length ? { annotations } : {}) } } }
+}
 const serviceReady = (context, namespace, name, type, port) => {
   const run = context.run ?? context
   const service = run.runtime.kubernetes?.clusters?.[clusterId]?.resources?.[`Service/${namespace}/${name}`]
@@ -26,12 +33,24 @@ const serviceReady = (context, namespace, name, type, port) => {
 const primaryIntact = context => {
   const run = context.run ?? context; const state = run.runtime.kubernetes?.clusters?.[clusterId]
   const paths = ['app.py', 'Dockerfile', 'k8s/primary-namespace.yaml', 'k8s/primary-configmap.yaml', 'k8s/primary-secret.yaml', 'k8s/primary-deployment.yaml', 'k8s/primary-service-internal.yaml', 'k8s/primary-service-external.yaml']
+  const config = yaml('k8s/primary-configmap.yaml')?.data
+  const pods = Object.values(state?.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === 'primary' && item.metadata.labels?.app === 'assistant')
+  const snapshotsCurrent = pods.length === 2 && pods.every(pod => {
+    const snapshot = state?.podSnapshots?.[pod.metadata.uid]; const artifact = snapshot && run.artifacts.buildsById?.[snapshot.artifactId]
+    return pod.status?.phase === 'Running' && pod.status.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
+      && pod.spec.containers?.[0]?.image === sharedImage && artifact?.image?.loginServer === 'acraksnetworkindependent.azurecr.io'
+      && artifact.image?.repository === 'assistant' && artifact.image?.tag === 'shared'
+      && snapshot.environment?.APP_ENV === config?.APP_ENV && snapshot.environment?.COLLECTION === config?.COLLECTION
+      && snapshot.environment?.PGHOST === config?.PGHOST && snapshot.environment?.PGPASSWORD === 'training-only-password'
+      && snapshot.files?.['/etc/assistant/settings.json'] === config?.['settings.json']
+  })
   return paths.every(path => run.project.savedFiles[path] === CONNECTIVITY_INDEPENDENT_FILES[path])
-    && canonicalize(state?.resources?.['ConfigMap/primary/assistant-config']?.data) === canonicalize(yaml('k8s/primary-configmap.yaml')?.data)
+    && canonicalize(state?.resources?.['ConfigMap/primary/assistant-config']?.data) === canonicalize(config)
     && canonicalize(state?.resources?.['Secret/primary/assistant-credentials']?.data) === canonicalize({ PGPASSWORD: 'dHJhaW5pbmctb25seS1wYXNzd29yZA==' })
-    && canonicalize(state?.resources?.['Deployment/primary/assistant']?.spec) === canonicalize(yaml('k8s/primary-deployment.yaml')?.spec)
+    && canonicalize(deploymentSpec(state?.resources?.['Deployment/primary/assistant']?.spec)) === canonicalize(deploymentSpec(yaml('k8s/primary-deployment.yaml')?.spec))
     && canonicalize(state?.resources?.['Service/primary/assistant-internal']?.spec) === canonicalize({ type: 'ClusterIP', selector: { app: 'assistant' }, ports: [{ protocol: 'TCP', port: 8080, targetPort: 'http' }], clusterIP: state?.resources?.['Service/primary/assistant-internal']?.spec?.clusterIP })
-    && serviceReady(run, 'primary', 'assistant-internal', 'ClusterIP', 8080) && serviceReady(run, 'primary', 'assistant-public', 'LoadBalancer', 80)
+    && canonicalize(state?.resources?.['Service/primary/assistant-public']?.spec) === canonicalize({ type: 'LoadBalancer', selector: { app: 'assistant' }, ports: [{ protocol: 'TCP', port: 80, targetPort: 'http' }], clusterIP: state?.resources?.['Service/primary/assistant-public']?.spec?.clusterIP })
+    && snapshotsCurrent && serviceReady(run, 'primary', 'assistant-internal', 'ClusterIP', 8080) && serviceReady(run, 'primary', 'assistant-public', 'LoadBalancer', 80)
 }
 const answerTask = ({ id, stageId, text, explanation, hints, examNote, scenarioId, namespace, serviceName }) => ({
   id, stageId, text, explanation, hints, examNote,
