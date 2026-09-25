@@ -56,4 +56,25 @@ describe('AKS assistant integration evidence', () => {
     malformed.runtime.kubernetes.requests[0].integrationTrace.queryBindings = { collection: { leaked: true } }
     expect(() => validateBehavioralRun(malformed, lab)).toThrow()
   })
+
+  it('accepts retrieval binding boundaries and rejects values outside the retrieval contract', () => {
+    const { run, lab } = seedIntegrationTest()
+    const observed = act(run, lab, { type: 'aks-request', scenarioId: 'ai-healthy' }).run
+    const valid = structuredClone(observed)
+    valid.runtime.kubernetes.requests[0].integrationTrace.queryBindings = {
+      collection: 'training', audience: 'employee', published: true,
+      vector: '[1e+308,0,0]', cutoff: 2, limit: 3,
+    }
+    expect(validateBehavioralRun(valid, lab)).toBe(valid)
+
+    for (const bindings of [
+      { collection: 'training', audience: 'employee', published: true, vector: '[1,0,0]', cutoff: 2.1, limit: 1 },
+      { collection: 'training', audience: 'employee', published: true, vector: '[1,0,0]', cutoff: 2, limit: 0 },
+      { collection: 'training', audience: 'employee', published: true, vector: '[1,0,0]', cutoff: 2, limit: 4 },
+    ]) {
+      const invalid = structuredClone(observed)
+      invalid.runtime.kubernetes.requests[0].integrationTrace.queryBindings = bindings
+      expect(() => validateBehavioralRun(invalid, lab)).toThrow()
+    }
+  })
 })

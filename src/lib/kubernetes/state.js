@@ -53,14 +53,19 @@ function validIntegrationTrace(trace) {
     && (attempt.errorCode === null || typeof attempt.errorCode === 'string')
   const safeText = value => typeof value === 'string' && value.length <= 128
     && !/[a-z][a-z+.-]*:\/\/[^/\s]*?(?::[^@/\s]+)?@/i.test(value)
+  const validVector = value => {
+    if (typeof value !== 'string' || !/^\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:\s*,\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*\s*\]$/.test(value)) return false
+    const components = value.slice(1, -1).split(',').map(item => Number(item.trim()))
+    return components.length === 3 && components.every(Number.isFinite) && !components.every(component => component === 0)
+  }
   const safeBindings = value => isPlainObject(value) && Object.entries(value).every(([key, item]) => {
     if (!safeBindingKeys.has(key)) return false
     if (item === '[redacted]') return true
     if (key === 'collection' || key === 'audience') return safeText(item)
     if (key === 'published') return typeof item === 'boolean'
-    if (key === 'vector') return typeof item === 'string' && /^\[-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?\]$/.test(item)
-    if (key === 'cutoff') return Number.isFinite(item) && item >= 0 && item <= 1
-    return Number.isInteger(item) && item >= 0 && item <= 100
+    if (key === 'vector') return validVector(item)
+    if (key === 'cutoff') return Number.isFinite(item) && item >= 0 && item <= 2
+    return Number.isInteger(item) && item >= 1 && item <= 3
   })
   return isPlainObject(trace) && trace.version === 1 && Object.keys(trace).every(key => ['version', 'graphHash', 'queryHash', 'fixtureVersion', 'profileId', 'inputDisposition', 'vectorProvenance', 'queryBindings', 'selectedIds', 'contextIds', 'sourceProvenance', 'elapsedMs', 'attempts'].includes(key))
     && typeof trace.graphHash === 'string' && typeof trace.queryHash === 'string' && Number.isInteger(trace.fixtureVersion)
