@@ -1,5 +1,9 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
+import { getProjectManifest } from '../project/manifests.js'
+import { projectSourceHash } from '../project/build.js'
+import { parsePythonProject } from '../project/python.js'
+import { parsePythonDockerfile } from '../project/python-dockerfile.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -13,11 +17,13 @@ export function emptyClusterState(clusterId) {
 export function validateKubernetesRuntime(runtime, run) {
   if (!isPlainObject(runtime) || runtime.version !== 1 || (runtime.currentContext !== null && typeof runtime.currentContext !== 'string')
     || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
-    || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string' && /^aks-request-\d+$/.test(item.id)
-      && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence <= run.nextSequence
+    || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string'
+      && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence < run.nextSequence
+      && item.id === `aks-request-${item.sequence}`
       && typeof item.scenarioId === 'string' && Number.isInteger(item.status) && typeof item.namespace === 'string'
       && item.request?.method === 'GET' && item.request?.path === '/api/info')
-    || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
+    || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
+    || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   const clusterIds = new Set((run.sandbox.aksClusters ?? []).map(cluster => cluster.id))
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
@@ -90,16 +96,44 @@ function validClusterState(state, run) {
       || !isPlainObject(snapshot) || typeof snapshot.artifactId !== 'string' || typeof snapshot.templateHash !== 'string'
       || !isPlainObject(snapshot.environment) || JSON.stringify(snapshot.environment) !== JSON.stringify(environment)
       || !isPlainObject(snapshot.files) || !source || JSON.stringify(snapshot.files) !== JSON.stringify(source.files)
+      || !validCapturedArtifact(artifact, source, run)
       || !imageKeyMatches || !Array.isArray(snapshot.configRefs)) return false
   }
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' && resource.status?.phase === 'Running' && !Object.hasOwn(state.podSnapshots, resource.metadata.uid)) return false
     if (resource.kind === 'Pod' && resource.status?.phase !== 'Running' && Object.hasOwn(state.podSnapshots, resource.metadata.uid)) return false
   }
-  return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => isPlainObject(receipt)
-    && typeof receipt.deletedPodUid === 'string' && typeof receipt.deletedPodName === 'string'
-    && (receipt.replacementPodUid === null || (typeof receipt.replacementPodUid === 'string' && typeof receipt.replacementPodName === 'string')))
+  return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
+    && new Set(state.receipts.map(receipt => receipt.sequence)).size === state.receipts.length
     && Object.values(state.projectionDue).every(value => Number.isFinite(value) && value >= 0)
+}
+
+function validCapturedArtifact(artifact, source, run) {
+  const manifest = getProjectManifest(run.project.manifestId)
+  if (manifest.language !== 'python' || source.hash !== artifact.sourceHash || projectSourceHash(source.files) !== artifact.sourceHash
+    || JSON.stringify(Object.keys(source.files).sort()) !== JSON.stringify([...manifest.buildFiles].sort())) return false
+  const app = parsePythonProject(source.files, manifest)
+  const docker = parsePythonDockerfile(source.files.Dockerfile, { buildFiles: manifest.buildFiles })
+  const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
+    : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
+      : JSON.stringify(value)
+  return app.diagnostics.length === 0 && docker.diagnostics.length === 0
+    && stable(app.appSpec) === stable(artifact.appSpec) && stable(docker.dockerSpec) === stable(artifact.dockerSpec)
+    && artifact.id && artifact.image && typeof artifact.image.registryId === 'string'
+    && typeof artifact.image.loginServer === 'string' && typeof artifact.image.repository === 'string' && typeof artifact.image.tag === 'string'
+}
+
+function validReceipt(receipt, run) {
+  if (!isPlainObject(receipt) || !['pod-delete', 'template'].includes(receipt.cause)
+    || !Number.isSafeInteger(receipt.sequence) || receipt.sequence < 1 || receipt.sequence >= run.nextSequence
+    || !/^kube-[1-9]\d*$/.test(receipt.deletedPodUid ?? '') || !/^kube-[1-9]\d*$/.test(receipt.deletedReplicaSetUid ?? '')
+    || !/^kube-[1-9]\d*$/.test(receipt.replacementPodUid ?? '') || !/^kube-[1-9]\d*$/.test(receipt.replacementReplicaSetUid ?? '')
+    || typeof receipt.deletedPodName !== 'string' || typeof receipt.replacementPodName !== 'string'
+    || !/^[\da-f]{8}$/.test(receipt.templateHash ?? '') || receipt.replacementTemplateHash !== receipt.templateHash) return false
+  const deletedId = Number(receipt.deletedPodUid.slice(5)); const replacementId = Number(receipt.replacementPodUid.slice(5))
+  if (deletedId >= replacementId || receipt.sequence !== replacementId || !receipt.deletedPodName.endsWith(`-${deletedId}`)
+    || !receipt.replacementPodName.endsWith(`-${replacementId}`)) return false
+  return receipt.cause !== 'pod-delete' || receipt.deletedReplicaSetUid === receipt.replacementReplicaSetUid
 }
 
 function validNamespace(value) {

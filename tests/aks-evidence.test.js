@@ -17,7 +17,7 @@ describe('AKS request evidence', () => {
     const { run, lab } = seedFoundation()
     const result = request(run, lab)
     expect(result.diagnostics).toEqual([])
-    const record = result.run.evidence.experimentsById[`evidence-${run.nextSequence}`]
+    const record = result.run.evidence.experimentsById[`evidence-${run.nextSequence + 1}`]
     expect(record.outcome).toBe('passed')
     expect(record.measurements.status).toBe(200)
     expect(record.measurements.selectedPodUid).toBeTruthy()
@@ -39,9 +39,57 @@ describe('AKS request evidence', () => {
   it('does not verify replacement without a matching deletion receipt', () => {
     const { run, lab } = seedFoundation()
     const result = applyRunAction(run, { type: 'aks-request', scenarioId: 'replacement' }, lab)
-    const record = result.run.evidence.experimentsById[`evidence-${run.nextSequence}`]
+    const record = result.run.evidence.experimentsById[`evidence-${run.nextSequence + 1}`]
     expect(record.outcome).toBe('failed')
     expect(record.measurements.replacementProven).toBe(false)
+  })
+
+  it('does not accept a causal-looking replacement receipt without a matching Pod delete command', () => {
+    const { run, lab, clusterId } = seedFoundation()
+    const state = run.runtime.kubernetes.clusters[clusterId]
+    const pod = Object.values(state.resources).find(item => item.kind === 'Pod')
+    const fake = { cause: 'pod-delete', sequence: Number(pod.metadata.uid.slice(5)), deletedPodUid: 'kube-1', deletedPodName: 'forged-1',
+      deletedReplicaSetUid: pod.metadata.ownerReferences[0].uid, templateHash: state.podSnapshots[pod.metadata.uid].templateHash,
+      replacementPodUid: pod.metadata.uid, replacementPodName: pod.metadata.name,
+      replacementReplicaSetUid: pod.metadata.ownerReferences[0].uid, replacementTemplateHash: state.podSnapshots[pod.metadata.uid].templateHash }
+    const forged = { ...run, runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes,
+      clusters: { ...run.runtime.kubernetes.clusters, [clusterId]: { ...state, receipts: [fake] } } } } }
+    const result = applyRunAction(forged, { type: 'aks-request', scenarioId: 'replacement' }, lab)
+    const record = result.run.evidence.experimentsById[`evidence-${run.nextSequence + 1}`]
+    expect(record.outcome).toBe('failed')
+    expect(record.measurements.replacementProven).toBe(false)
+  })
+
+  it('rejects a saved build artifact whose appSpec no longer matches its captured files', () => {
+    const { run, lab, clusterId } = seedFoundation()
+    const state = run.runtime.kubernetes.clusters[clusterId]
+    const pod = Object.values(state.resources).find(item => item.kind === 'Pod')
+    const artifactId = state.podSnapshots[pod.metadata.uid].artifactId
+    const artifact = run.artifacts.buildsById[artifactId]
+    const forged = { ...run, artifacts: { ...run.artifacts, buildsById: { ...run.artifacts.buildsById,
+      [artifactId]: { ...artifact, appSpec: { ...artifact.appSpec, version: 'forged' } } } } }
+    expect(() => applyRunAction(forged, { type: 'aks-request', scenarioId: 'info' }, lab)).toThrow(/Kubernetes/)
+  })
+
+  it('keeps request sequences unique and earlier than their verification records', () => {
+    const { run, lab } = seedFoundation()
+    const first = request(run, lab).run
+    const second = request(first, lab).run
+    const runtimeRequests = second.runtime.kubernetes.requests
+    expect(new Set(runtimeRequests.map(item => item.sequence)).size).toBe(runtimeRequests.length)
+    expect(runtimeRequests.every(item => item.sequence < second.nextSequence)).toBe(true)
+    const requestRecord = second.evidence.experimentsById[`evidence-${first.nextSequence + 1}`]
+    expect(requestRecord.sequence).toBeGreaterThan(runtimeRequests.at(-1).sequence)
+  })
+
+  it('bounds Pod-delete receipts while retaining the latest recovery records', () => {
+    const { run: initial, lab, clusterId } = seedFoundation()
+    let run = initial
+    for (let index = 0; index < 105; index++) {
+      const pod = Object.values(run.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'Pod')
+      run = applyRunAction(run, { type: 'command', line: `kubectl delete pod ${pod.metadata.name} -n assistant` }, lab).run
+    }
+    expect(run.runtime.kubernetes.clusters[clusterId].receipts).toHaveLength(100)
   })
 
   it('rejects a Service targetPort that does not reach the captured listener', () => {
@@ -53,7 +101,7 @@ describe('AKS request evidence', () => {
       clusters: { ...run.runtime.kubernetes.clusters, [clusterId]: { ...state, resources: { ...state.resources, 'Service/assistant/assistant': changed } } } } } }
     const result = request(broken, lab)
     expect(result.run.runtime.kubernetes.requests.at(-1).diagnosticCode).toBe('TARGET_PORT_MISMATCH')
-    expect(result.run.evidence.experimentsById[`evidence-${run.nextSequence}`].outcome).toBe('failed')
+    expect(result.run.evidence.experimentsById[`evidence-${run.nextSequence + 1}`].outcome).toBe('failed')
   })
 
   it('reports a Service with zero selected Pods as a failed request', () => {
@@ -72,7 +120,7 @@ describe('AKS request evidence', () => {
     const { run, lab } = seedFoundation()
     const edited = applyRunAction(run, { type: 'save-file', path: 'app.py', text: run.project.savedFiles['app.py'].replace('"1.0"', '"2.0"') }, lab)
     const result = request(edited.run, lab)
-    const record = result.run.evidence.experimentsById[`evidence-${edited.run.nextSequence}`]
+    const record = result.run.evidence.experimentsById[`evidence-${edited.run.nextSequence + 1}`]
     expect(record.measurements.body.version).toBe('1.0')
     expect(result.run.dependencyGenerations[Object.keys(lab.tasks[0].dependencies).find(key => key.startsWith('aks-source:'))]).toBe(1)
     expect(result.run.dependencyGenerations['file:app.py']).toBe(run.dependencyGenerations['file:app.py'] + 1)
@@ -118,11 +166,11 @@ describe('AKS request evidence', () => {
   it('accepts a fresh request only after a Pod deletion replacement receipt', () => {
     const { run, lab, clusterId } = seedFoundation()
     const pod = Object.values(run.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'Pod')
-    const deleted = applyRunAction(run, { type: 'command', line: `kubectl delete pod ${pod.metadata.name} -n assistant` }, lab)
+    const deleted = applyRunAction(run, { type: 'command', line: `kubectl delete -n assistant pod ${pod.metadata.name}` }, lab)
     expect(deleted.run.runtime.kubernetes.clusters[clusterId].receipts.some(item => item.cause === 'pod-delete'
       && item.replacementPodUid && item.replacementPodUid !== item.deletedPodUid)).toBe(true)
     const result = applyRunAction(deleted.run, { type: 'aks-request', scenarioId: 'replacement' }, lab)
-    const record = result.run.evidence.experimentsById[`evidence-${deleted.run.nextSequence}`]
+    const record = result.run.evidence.experimentsById[`evidence-${deleted.run.nextSequence + 1}`]
     expect(record.outcome).toBe('passed')
     expect(record.measurements.replacementProven).toBe(true)
   })

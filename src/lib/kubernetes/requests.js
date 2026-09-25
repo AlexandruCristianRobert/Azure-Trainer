@@ -1,7 +1,23 @@
 import { getDeploymentPods } from './reconcile.js'
 import { canonicalize } from '../labEngine/evidence.js'
+import { tokenize } from '../az/tokenize.js'
 
 const diagnostic = (code, message) => ({ code, message })
+function hasPodDeleteCommand(history, name) {
+  return history.some(line => {
+    if (typeof line !== 'string') return false
+    const tokens = tokenize(line).tokens ?? []
+    if (tokens[0] !== 'kubectl' || tokens[1] !== 'delete') return false
+    const positional = []
+    for (let index = 2; index < tokens.length; index++) {
+      const token = tokens[index]
+      if (['-n', '--namespace', '--context'].includes(token)) { index++; continue }
+      if (token.startsWith('--namespace=') || token.startsWith('--context=')) continue
+      if (!token.startsWith('-')) positional.push(token)
+    }
+    return ['pod', 'pods'].includes(positional[0]) && positional[1] === name && positional.length === 2
+  })
+}
 
 export function simulateKubernetesRequest(run, scenario) {
   const { clusterId, namespace, serviceName, deploymentName } = scenario.target
@@ -60,14 +76,18 @@ export function simulateKubernetesRequest(run, scenario) {
   })
   const replacementReceipts = cluster?.receipts?.filter(receipt => receipt.cause === 'pod-delete' && receipt.replacementPodUid
     && selected.some(pod => pod.metadata.uid === receipt.replacementPodUid)
+    && receipt.sequence < run.nextSequence
+    && hasPodDeleteCommand(run.history, receipt.deletedPodName)
     && receipt.deletedReplicaSetUid === selected[0]?.metadata.ownerReferences?.[0]?.uid
-    && receipt.replacementReplicaSetUid === selected[0]?.metadata.ownerReferences?.[0]?.uid) ?? []
+    && receipt.replacementReplicaSetUid === selected[0]?.metadata.ownerReferences?.[0]?.uid
+    && receipt.replacementTemplateHash === cluster.podSnapshots[selected[0]?.metadata.uid]?.templateHash) ?? []
   const replacementProven = !scenario.requireReplacement || replacementReceipts.length > 0
   if (status === 200 && scenario.requireReplacement && !replacementProven) {
     status = 409; body = { error: 'ReplacementNotProven' }; issue = diagnostic('REPLACEMENT_NOT_PROVEN', 'No current-template Pod replacement receipt supports this request.')
   }
   const deploymentGeneration = deployment?.metadata.generation ?? null
-  const measurement = { status, body, clusterId, namespace, serviceName, serviceVersion: service?.metadata.resourceVersion ?? null,
+  const requestSequence = run.nextSequence
+  const measurement = { status, body, requestSequence, clusterId, namespace, serviceName, serviceVersion: service?.metadata.resourceVersion ?? null,
     deploymentName, deploymentGeneration, selectedPodUid: selected[0]?.metadata.uid ?? null, podUid: selected[0]?.metadata.uid ?? null,
     artifactId: selectedPods[0]?.artifactId ?? null, sourceHash: selectedPods[0]?.sourceHash ?? null,
     selectedPods: selectedPods.slice(0, 3), runningReplicaCount: selected.length,
@@ -77,8 +97,9 @@ export function simulateKubernetesRequest(run, scenario) {
   const outcome = status === scenario.expected.status && canonicalize(body) === canonicalize(scenario.expected.body)
     && selectedPods.filter(pod => pod.matchesExpected).length >= expectedReplicas && replacementProven
   const runtime = run.runtime.kubernetes
-  const requests = [...runtime.requests, { id: `aks-request-${run.nextSequence}`, sequence: run.nextSequence,
+  const requests = [...runtime.requests, { id: `aks-request-${requestSequence}`, sequence: requestSequence,
     scenarioId: scenario.id, ...measurement }].slice(-100)
-  const nextRun = { ...run, runtime: { ...run.runtime, kubernetes: { ...runtime, requests } } }
+  const nextRun = { ...run, nextSequence: requestSequence + 1,
+    runtime: { ...run.runtime, kubernetes: { ...runtime, requests } } }
   return { run: nextRun, outcome, status, body, measurements: measurement, diagnostic: issue }
 }

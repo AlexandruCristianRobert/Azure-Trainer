@@ -60,8 +60,13 @@ export function getDeploymentPods(run, clusterId, namespace, name) {
 function recordReplacement(state, deleted, replacement, cause = 'template') {
   const pending = state.receipts.find(item => item.deletedPodUid === deleted.metadata.uid && item.replacementPodUid === null)
   const nextOwner = replacement.metadata.ownerReferences?.[0]
-  if (pending) { pending.replacementPodUid = replacement.metadata.uid; pending.replacementPodName = replacement.metadata.name; pending.replacementReplicaSetUid = nextOwner?.uid; return }
-  state.receipts.push({ cause, deletedPodUid: deleted.metadata.uid, deletedPodName: deleted.metadata.name, deletedReplicaSetUid: deleted.metadata.ownerReferences?.[0]?.uid, replacementPodUid: replacement.metadata.uid, replacementPodName: replacement.metadata.name, replacementReplicaSetUid: nextOwner?.uid })
+  const replacementTemplateHash = getPodTemplateHash(state, replacement)
+  if (pending) { pending.replacementPodUid = replacement.metadata.uid; pending.replacementPodName = replacement.metadata.name; pending.replacementReplicaSetUid = nextOwner?.uid; pending.replacementTemplateHash = replacementTemplateHash; return }
+  const sequence = Number(replacement.metadata.uid.slice(5))
+  state.receipts.push({ cause, sequence, deletedPodUid: deleted.metadata.uid, deletedPodName: deleted.metadata.name,
+    deletedReplicaSetUid: deleted.metadata.ownerReferences?.[0]?.uid, replacementPodUid: replacement.metadata.uid,
+    replacementPodName: replacement.metadata.name, replacementReplicaSetUid: nextOwner?.uid,
+    templateHash: replacementTemplateHash, replacementTemplateHash })
   if (state.receipts.length > 100) state.receipts.splice(0, state.receipts.length - 100)
 }
 
@@ -104,6 +109,7 @@ export function reconcileKubernetes(input, lab) {
         receipt.replacementPodUid = replacement.metadata.uid
         receipt.replacementPodName = replacement.metadata.name
         receipt.replacementReplicaSetUid = replacement.metadata.ownerReferences?.[0]?.uid ?? null
+        receipt.replacementTemplateHash = getPodTemplateHash(state, replacement)
       }
       if (replicaSet.spec.replicas !== deployment.spec.replicas) {
         replicaSet.spec.replicas = deployment.spec.replicas
@@ -112,4 +118,12 @@ export function reconcileKubernetes(input, lab) {
     }
   }
   return run
+}
+
+export function getPodTemplateHash(state, pod) {
+  const snapshotHash = state.podSnapshots[pod.metadata.uid]?.templateHash
+  if (snapshotHash) return snapshotHash
+  const ownerUid = pod.metadata.ownerReferences?.[0]?.uid
+  const replicaSet = Object.values(state.resources).find(item => item.kind === 'ReplicaSet' && item.metadata.uid === ownerUid)
+  return replicaSet ? hash(replicaSet.spec.template) : null
 }
