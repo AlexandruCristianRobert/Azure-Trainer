@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { aksDeployIndependentLab } from '../src/data/labs/aks-journey/deploy-independent.lab.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 import { act } from './helpers/aks.js'
 
 function started(attemptId = 'independent') {
@@ -41,6 +42,12 @@ function alternateManifests() {
 }
 
 describe('independent AKS deployment lab', () => {
+  it('routes the first three AKS Labs in order and stops after Lab 3', () => {
+    expect(nextLabFor(labById('aks-deploy-guided'))?.id).toBe('aks-deploy-troubleshooting')
+    expect(nextLabFor(labById('aks-deploy-troubleshooting'))).toBe(aksDeployIndependentLab)
+    expect(nextLabFor(aksDeployIndependentLab)).toBeNull()
+  })
+
   it('does not accept the primary response as proof of the new instance', () => {
     let run = started('isolation')
     run = act(run, aksDeployIndependentLab, { type: 'aks-request', scenarioId: 'independent-primary' }).run

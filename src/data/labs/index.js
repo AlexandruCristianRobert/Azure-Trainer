@@ -22,6 +22,7 @@ import { bicepIndependentLab } from './containerapps-journey/bicep-independent.l
 import { capstoneLab } from './containerapps-journey/capstone.lab.js'
 import { aksDeployGuidedLab } from './aks-journey/deploy-guided.lab.js'
 import { aksDeployTroubleshootingLab } from './aks-journey/deploy-troubleshooting.lab.js'
+import { aksDeployIndependentLab } from './aks-journey/deploy-independent.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -49,6 +50,7 @@ export const LABS = [
   capstoneLab,
   aksDeployGuidedLab,
   aksDeployTroubleshootingLab,
+  aksDeployIndependentLab,
 ]
 
 export function labById(id) {
