@@ -2,7 +2,7 @@ import { projectConfigurationAt } from './configuration.js'
 import { processProbeTimestamp, reconcileHealth } from './probes.js'
 import { reconcileServices } from './services.js'
 import { processContainerLifecycle } from './container-lifecycle.js'
-import { finishProbeExperiment } from './probe-experiments.js'
+import { finishProbeExperiment, observeProbeExperiment } from './probe-experiments.js'
 
 const clone = value => structuredClone(value)
 
@@ -32,9 +32,15 @@ function nextExperimentDeadline(run, limit) {
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
     const experiment = state.health?.experiment; if (!experiment || experiment.status !== 'active') continue
     const script = experiment.script ?? {}
-    for (const value of [experiment.startedAtMs + (script.startAfterStartSeconds ?? 0) * 1000,
-      script.endAfterStartSeconds === undefined ? null : experiment.startedAtMs + script.endAfterStartSeconds * 1000,
-      experiment.endsAtMs]) {
+    const anchor = experiment.baselineReadyAtMs
+    const relative = Number.isFinite(anchor)
+      ? [anchor + (script.startAfterStartSeconds ?? 0) * 1000,
+        script.endAfterStartSeconds === undefined ? null : anchor + script.endAfterStartSeconds * 1000,
+        ...(script.sampleAtSeconds ?? []).map(value => anchor + value * 1000),
+        ...(Number.isInteger(script.firstSampleAfterStartSeconds) && Number.isInteger(script.sampleIntervalSeconds)
+          ? Array.from({ length: script.maxSamples ?? 0 }, (_, index) => anchor + (script.firstSampleAfterStartSeconds + index * script.sampleIntervalSeconds) * 1000) : [])]
+      : []
+    for (const value of [...relative, experiment.endsAtMs]) {
       if (Number.isFinite(value) && value > run.runtime.simTimeMs && value <= limit && (next === null || value < next)) next = value
     }
   }
@@ -64,6 +70,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   const target = run.runtime.simTimeMs + seconds * 1000
   run = projectConfigurationAt(run, run.runtime.simTimeMs)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, run.runtime.simTimeMs, lab), run.runtime.simTimeMs, lab))
+  run = observeProbeExperiment(run, run.runtime.simTimeMs, lab)
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
@@ -74,10 +81,12 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
     run.runtime.simTimeMs = next
     run = projectConfigurationAt(run, next)
     run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, next, lab), next, lab))
+    run = observeProbeExperiment(run, next, lab)
   }
   run.runtime.simTimeMs = target
   run = projectConfigurationAt(run, target)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
+  run = observeProbeExperiment(run, target, lab)
   return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }
 

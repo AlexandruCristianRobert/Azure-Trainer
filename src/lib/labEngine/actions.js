@@ -27,6 +27,7 @@ import { reconcileKubernetes } from '../kubernetes/reconcile.js'
 import { initializeConnectivity } from '../kubernetes/services.js'
 import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
 import { advanceConnectivityIncident } from '../kubernetes/connectivity-incidents.js'
+import { cancelChangedProbeExperiments } from '../kubernetes/probe-experiments.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -681,6 +682,7 @@ export function applyRunAction(run, action, lab) {
         sealedStages: result.run.stages.sealedStages.slice(0, 5), cleanupCheckpoint: null } }
     }
   }
+  result.run = cancelChangedProbeExperiments(result.run)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result

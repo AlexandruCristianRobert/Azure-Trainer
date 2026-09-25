@@ -35,6 +35,12 @@ function check(probe, atMs) {
   return probe ? { nextAtMs: atMs, pending: null, successes: 0, failures: 0 } : null
 }
 
+function recordHealthEvent(state, event) {
+  state.health.events ??= []
+  state.health.events.push(event)
+  if (state.health.events.length > 1000) state.health.events.splice(0, state.health.events.length - 1000)
+}
+
 function probesFor(pod) {
   const container = pod.spec?.containers?.[0] ?? {}
   return { startup: container.startupProbe ?? null, readiness: container.readinessProbe ?? null, liveness: container.livenessProbe ?? null }
@@ -77,7 +83,8 @@ export function reconcileHealth(input, lab) {
   const duration = fixtureDuration(lab)
   if (duration === null) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
-    state.health ??= { version: 1, containers: {}, experiment: null, receipts: [] }
+    state.health ??= { version: 1, containers: {}, experiment: null, receipts: [], events: [] }
+    state.health.events ??= []
     const runningPods = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running')
     const activeUids = new Set(runningPods.map(item => item.metadata.uid))
     for (const uid of Object.keys(state.health.containers)) if (!activeUids.has(uid)) delete state.health.containers[uid]
@@ -98,10 +105,12 @@ export function reconcileHealth(input, lab) {
   return run
 }
 
-function complete(container, pod, appSpec, type, nowMs) {
+function complete(state, container, pod, appSpec, type, nowMs) {
   const item = container.checks[type]; if (!item?.pending || item.pending.containerId !== container.containerId || item.pending.completeAtMs > nowMs) return
   const { result, startedAtMs } = item.pending; item.pending = null
   const success = Number.isInteger(result.status) && result.status >= 200 && result.status <= 399
+  recordHealthEvent(state, { type: 'probe-result', atMs: nowMs, podUid: pod.metadata.uid, probeType: type, success,
+    status: result.status ?? null, failures: success ? 0 : item.failures + 1 })
   if (success) { item.successes++; item.failures = 0 } else { item.failures++; item.successes = 0 }
   const probe = probesFor(pod)[type]
   item.nextAtMs = startedAtMs + probe.periodSeconds * 1000
@@ -116,7 +125,7 @@ function complete(container, pod, appSpec, type, nowMs) {
   if ((type === 'startup' || type === 'liveness') && !success && item.failures >= probe.failureThreshold) scheduleProbeRestart(container, pod, type, nowMs)
 }
 
-function start(container, pod, appSpec, type, nowMs, dependencySignals) {
+function start(state, container, pod, appSpec, type, nowMs, dependencySignals) {
   const item = container.checks[type]; const probe = probesFor(pod)[type]
   if (!item || item.pending || item.nextAtMs === null || item.nextAtMs > nowMs) return
   const result = evaluateHealthEndpoint(appSpec, container, dependencySignals, probe.httpGet.path, probe.httpGet.port, nowMs, pod)
@@ -124,14 +133,19 @@ function start(container, pod, appSpec, type, nowMs, dependencySignals) {
     : { containerId: container.containerId, startedAtMs: nowMs, completeAtMs: nowMs, result }
   item.pending = pending
   item.nextAtMs = null
+  recordHealthEvent(state, { type: 'probe-start', atMs: nowMs, podUid: pod.metadata.uid, probeType: type, timeout: result.timeout === true })
 }
 
 export function processProbeTimestamp(input, atMs, lab) {
   let run = reconcileHealth(input, lab)
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
-    const script = state.health?.experiment?.status === 'active' ? state.health.experiment.script : null
-    const elapsedSeconds = script ? (atMs - state.health.experiment.startedAtMs) / 1000 : -1
+    const experiment = state.health?.experiment?.status === 'active' ? state.health.experiment : null
+    const script = experiment?.script ?? null
+    // Fault scripts intentionally begin only after both recreated baseline Pods
+    // become Ready.  Warmup is not part of a scenario's relative timeline.
+    const elapsedSeconds = script && Number.isFinite(experiment.baselineReadyAtMs)
+      ? (atMs - experiment.baselineReadyAtMs) / 1000 : -1
     const activeFault = script && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
       && (script.endAfterStartSeconds === undefined || elapsedSeconds < script.endAfterStartSeconds)
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
@@ -140,11 +154,16 @@ export function processProbeTimestamp(input, atMs, lab) {
       if (!container || pod.status?.phase !== 'Running') continue
       if (script) {
         const selected = pod.metadata.uid === pods[0]?.metadata.uid
-        container.localFaults.admissionClosed = selected && activeFault && script.kind === 'temporaryAdmissionClosure'
-        container.localFaults.hung = selected && activeFault && script.kind === 'processHang'
+        const admissionClosed = selected && activeFault && script.kind === 'temporaryAdmissionClosure'
+        const hung = selected && activeFault && script.kind === 'processHang'
+        if (container.localFaults.admissionClosed !== admissionClosed || container.localFaults.hung !== hung) {
+          recordHealthEvent(state, { type: 'fault', atMs, podUid: pod.metadata.uid, admissionClosed, hung })
+        }
+        container.localFaults.admissionClosed = admissionClosed
+        container.localFaults.hung = hung
       }
       const appSpec = healthAppSpec(run, state, pod)
-      for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
+      for (const type of ['startup', 'readiness', 'liveness']) complete(state, container, pod, appSpec, type, atMs)
     }
     for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
@@ -152,14 +171,14 @@ export function processProbeTimestamp(input, atMs, lab) {
       const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) {
         if ((type === 'readiness' || type === 'liveness') && !container.startupPassed) continue
-        start(container, pod, appSpec, type, atMs, {})
+        start(state, container, pod, appSpec, type, atMs, {})
       }
     }
     for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       const appSpec = healthAppSpec(run, state, pod)
-      for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
+      for (const type of ['startup', 'readiness', 'liveness']) complete(state, container, pod, appSpec, type, atMs)
       syncPodReadiness(pod, container)
     }
     // A startup completion can enable zero-delay readiness/liveness at this
@@ -169,8 +188,8 @@ export function processProbeTimestamp(input, atMs, lab) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       const appSpec = healthAppSpec(run, state, pod)
-      for (const type of ['readiness', 'liveness']) if (container.startupPassed) start(container, pod, appSpec, type, atMs, {})
-      for (const type of ['readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
+      for (const type of ['readiness', 'liveness']) if (container.startupPassed) start(state, container, pod, appSpec, type, atMs, {})
+      for (const type of ['readiness', 'liveness']) complete(state, container, pod, appSpec, type, atMs)
       syncPodReadiness(pod, container)
     }
   }
