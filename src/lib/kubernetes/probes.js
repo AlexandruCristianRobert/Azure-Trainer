@@ -1,3 +1,4 @@
+import { scheduleProbeRestart } from './container-lifecycle.js'
 const clone = value => structuredClone(value)
 
 function evaluate(expression, signals) {
@@ -105,6 +106,7 @@ function complete(container, pod, appSpec, type, nowMs) {
     if (success && item.successes >= probe.successThreshold) container.ready = true
     if (!success && item.failures >= probe.failureThreshold) container.ready = false
   }
+  if ((type === 'startup' || type === 'liveness') && !success && item.failures >= probe.failureThreshold) scheduleProbeRestart(container, pod, type, nowMs)
 }
 
 function start(container, pod, appSpec, type, nowMs, dependencySignals) {

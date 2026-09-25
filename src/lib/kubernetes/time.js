@@ -1,6 +1,7 @@
 import { projectConfigurationAt } from './configuration.js'
 import { processProbeTimestamp, reconcileHealth } from './probes.js'
 import { reconcileServices } from './services.js'
+import { processContainerLifecycle } from './container-lifecycle.js'
 
 const clone = value => structuredClone(value)
 
@@ -12,6 +13,7 @@ function nextHealthDeadline(run, limit) {
         if (Number.isFinite(deadline) && deadline > run.runtime.simTimeMs && deadline <= limit && (next === null || deadline < next)) next = deadline
       }
     }
+    for (const deadline of [container.terminatedAtMs, container.restartAtMs]) if (Number.isFinite(deadline) && deadline > run.runtime.simTimeMs && deadline <= limit && (next === null || deadline < next)) next = deadline
   }
   return next
 }
@@ -46,7 +48,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   let run = reconcileHealth(clone(input), lab)
   const target = run.runtime.simTimeMs + seconds * 1000
   run = projectConfigurationAt(run, run.runtime.simTimeMs)
-  run = reconcileProbeServices(processProbeTimestamp(run, run.runtime.simTimeMs, lab))
+  run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, run.runtime.simTimeMs, lab), run.runtime.simTimeMs, lab))
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
@@ -56,11 +58,11 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
     run.runtime.simTimeMs = next
     run = projectConfigurationAt(run, next)
-    run = reconcileProbeServices(processProbeTimestamp(run, next, lab))
+    run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, next, lab), next, lab))
   }
   run.runtime.simTimeMs = target
   run = projectConfigurationAt(run, target)
-  run = reconcileProbeServices(processProbeTimestamp(run, target, lab))
+  run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
   return { run, diagnostics: [] }
 }
 
