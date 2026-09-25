@@ -114,6 +114,12 @@ describe('AKS controlled probe experiments and evidence', () => {
     expect(stateFor(complete, seeded.clusterId).health.experiment).toBeNull()
     expect(stateFor(complete, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ scenarioId: 'coldStartup', status: 'completed', endedAtMs: 30_000 })
     expect(evidenceFor(complete, 'probe-coldStartup').outcome).toBe('passed')
+    const receiptEvidenceId = stateFor(complete, seeded.clusterId).health.receipts.at(-1).evidenceId
+    const evidenceCount = Object.keys(complete.evidence.experimentsById).length
+    const advancedAfterCompletion = advanceHealth(complete, seeded.lab, 5)
+    expect(stateFor(advancedAfterCompletion, seeded.clusterId).health.receipts.at(-1).evidenceId).toBe(receiptEvidenceId)
+    expect(Object.keys(advancedAfterCompletion.evidence.experimentsById)).toHaveLength(evidenceCount)
+    expect(validateBehavioralRun(advancedAfterCompletion, seeded.lab)).toBe(advancedAfterCompletion)
     const reloaded = JSON.parse(JSON.stringify(complete))
     expect(inspectProbes(reloaded, seeded.target).receipts.at(-1)).toMatchObject({ status: 'completed', scenarioId: 'coldStartup' })
 
