@@ -3,7 +3,7 @@ import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 
 const clone = value => structuredClone(value)
-const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16) }
+const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
 
 function hasKubeletPull(sandbox, cluster, image) {
   const [registryHost] = image.split('/')
@@ -124,6 +124,7 @@ export function reconcileKubernetes(input, lab) {
       for (const stale of removed) {
         delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
         delete state.podSnapshots[stale.metadata.uid]
+        delete state.projectionDue[stale.metadata.uid]
       }
       for (const old of Object.values(state.resources).filter(item => item.kind === 'ReplicaSet'
         && item.metadata.namespace === deployment.metadata.namespace && item.metadata.ownerReferences?.some(ref => ref.uid === deployment.metadata.uid)

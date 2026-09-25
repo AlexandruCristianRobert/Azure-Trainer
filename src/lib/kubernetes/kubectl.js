@@ -178,7 +178,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const next = structuredClone(run); const deployment = next.runtime.kubernetes.clusters[selection.clusterId].resources[kubeObjectKey('Deployment', selection.namespace, name)]
     if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
-    deployment.spec.template.metadata.annotations = { ...(deployment.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restartedAt': `sim-${run.runtime.simTimeMs}-${run.nextSequence}` }
+    deployment.spec.template.metadata.annotations = { ...(deployment.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': `sim-${run.runtime.simTimeMs}-${run.nextSequence}` }
     deployment.metadata.generation += 1; deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
     const reconciled = reconcileKubernetes(next, lab)
     return response(sandbox, [out(`deployment.apps/${name} restarted`)], stateEffect(reconciled))

@@ -24,6 +24,10 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       return { run: next, lines, diagnostics: [{ code: 'KUBE_NAMESPACE_NOT_FOUND', message: `Namespace '${ns}' was not found.` }] }
     }
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
+    if (object.kind === 'Deployment' && old?.spec?.template?.metadata?.annotations?.['kubectl.kubernetes.io/restarted-at']
+      && object.spec.template.metadata.annotations?.['kubectl.kubernetes.io/restarted-at'] === undefined) {
+      object.spec.template.metadata.annotations = { ...(object.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': old.spec.template.metadata.annotations['kubectl.kubernetes.io/restarted-at'] }
+    }
     const desired = JSON.stringify(desiredObject(object))
     if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }

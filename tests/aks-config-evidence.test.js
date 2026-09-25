@@ -2,6 +2,25 @@ import { expect, it } from 'vitest'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { act, seedConfiguredAssistant } from './helpers/aks.js'
 import { configurationDependencies } from '../src/lib/kubernetes/evidence.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
+
+it('preserves restart annotation and Pod identities on unchanged saved Deployment apply', () => {
+  let { run, lab, clusterId } = seedConfiguredAssistant()
+  const updated = run.project.savedFiles['k8s/configmap.yaml'].replace('Training assistant', 'Updated assistant')
+  run = act(run, lab, { type: 'save-file', path: 'k8s/configmap.yaml', text: updated }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 59 }).run
+  const restart = applyRunAction(run, { type: 'command', line: 'kubectl rollout restart deployment/assistant -n assistant' }, lab)
+  expect(restart.diagnostics).toEqual([])
+  run = restart.run
+  const pods = getDeploymentPods(run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid)
+  const deployment = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant']
+  const annotation = deployment.spec.template.metadata.annotations
+  const applied = applyRunAction(run, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }, lab)
+  expect(applied.diagnostics).toEqual([])
+  expect(getDeploymentPods(applied.run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid)).toEqual(pods)
+  expect(applied.run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].spec.template.metadata.annotations).toEqual(annotation)
+})
 
 it('keeps environment old but refreshes mounted files after explicit simulated time', () => {
   let { run, lab, clusterId } = seedConfiguredAssistant()
