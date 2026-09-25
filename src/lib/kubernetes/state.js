@@ -265,7 +265,7 @@ function validApplicationLog(log, byUid, state, run) {
 }
 
 function validHistoricalConnectivityLog(log, request, run, state) {
-  if (!isPlainObject(request) || !isPlainObject(request.route) || run.labId !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID
+  if (!isPlainObject(request) || !isPlainObject(request.route) || !['aks-connectivity-guided', CONNECTIVITY_TROUBLESHOOTING_LAB_ID, 'aks-connectivity-independent'].includes(run.labId)
     || request.route?.podUid !== log.podUid || request.route?.podName !== log.podName
     || request.route?.namespace !== log.namespace || request.route?.artifactId !== log.artifactId) return false
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId

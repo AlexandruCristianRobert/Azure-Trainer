@@ -104,9 +104,12 @@ describe('independent AKS connectivity Lab', () => {
 
   it('invalidates only the restarted review route and retains primary proof through a review-only repair', () => {
     let run = solve(createBehavioralRun(aksConnectivityIndependentLab, { attemptId: 'route-scoped-repair' }))
+    const clusterId = run.sandbox.aksClusters[0].id
+    const priorReviewLog = run.runtime.kubernetes.clusters[clusterId].connectivity.applicationLogs.find(log => log.namespace === 'review')
     expect(done(run, 'review-internal-answer')).toBe(true)
     expect(done(run, 'primary-internal-answer')).toBe(true)
     run = act(run, aksConnectivityIndependentLab, { type: 'command', line: 'kubectl rollout restart deployment/assistant -n review' }).run
+    expect(run.runtime.kubernetes.clusters[clusterId].connectivity.applicationLogs.some(log => log.requestId === priorReviewLog.requestId)).toBe(true)
     expect(done(run, 'review-internal-answer')).toBe(false)
     expect(done(run, 'primary-internal-answer')).toBe(true)
     run = act(run, aksConnectivityIndependentLab, { type: 'aks-request', scenarioId: 'independent-network-review-internal' }).run
