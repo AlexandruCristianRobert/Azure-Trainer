@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+import { reactive } from 'vue'
 import { seedFoundation, seedConnectivityTest, act } from './helpers/aks.js'
 import { getServiceBackends, initializeConnectivity, reconcileServices } from '../src/lib/kubernetes/services.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
@@ -12,6 +13,14 @@ it('keeps a numeric backend port even if the application does not listen there',
   const view = getServiceBackends(run, { clusterId, namespace: 'assistant', serviceName: 'assistant' })
   expect(view.readyEndpoints).toHaveLength(2)
   expect(view.readyEndpoints.every(endpoint => endpoint.port === 8081)).toBe(true)
+})
+
+it('projects Service backends from reactive runtime state', () => {
+  let { run, clusterId } = seedFoundation()
+  run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
+  const view = getServiceBackends(reactive(run), { clusterId, namespace: 'assistant', serviceName: 'assistant' })
+  expect(view.service.metadata.name).toBe('assistant')
+  expect(view.readyEndpoints).toHaveLength(2)
 })
 
 it('seeds a configured assistant and a trusted diagnostic Pod without requests', () => {

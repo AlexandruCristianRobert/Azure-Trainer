@@ -1,6 +1,7 @@
 import { kubeObjectKey } from './objects.js'
 
 const clone = value => structuredClone(value)
+const project = value => JSON.parse(JSON.stringify(value))
 const serviceAddress = value => `10.96.${Math.floor(value / 254)}.${(value % 254) + 1}`
 const podAddress = value => `10.244.${Math.floor(value / 254)}.${(value % 254) + 1}`
 const externalAddress = value => `192.0.2.${value}`
@@ -44,7 +45,7 @@ export function getServiceBackends(run, target) {
     const address = pod.status?.podIP
     return resolved === null || !address ? [] : [{ podUid: pod.metadata.uid, podName: pod.metadata.name, namespace: pod.metadata.namespace, address, port: resolved, ready: ready(pod) }]
   }).sort((a, b) => a.podUid.localeCompare(b.podUid))
-  return { service: clone(service), selectedPods: clone(selected), endpoints, readyEndpoints: endpoints.filter(endpoint => endpoint.ready), diagnostics: [] }
+  return { service: project(service), selectedPods: project(selected), endpoints, readyEndpoints: endpoints.filter(endpoint => endpoint.ready), diagnostics: [] }
 }
 
 function allocate(state, field, limit, render) {
