@@ -21,6 +21,26 @@ export function act(run, lab, action) {
   return result
 }
 
+export function executeAksSolution(run, lab, task) {
+  for (const step of task.solution?.steps ?? []) {
+    if (step.kind === 'file') {
+      run = act(run, lab, { type: 'draft', path: step.path, text: step.content }).run
+      run = act(run, lab, { type: 'save-file', path: step.path }).run
+    } else if (step.kind === 'command') {
+      const action = step.resolver
+        ? lab.solutionActionResolvers?.[step.resolver]?.(run, lab, task, step.resolver)
+        : { type: 'command', line: step.line }
+      if (!action) throw new Error(`Unknown AKS solution command resolver: ${step.resolver ?? '(missing)'}`)
+      run = act(run, lab, action).run
+    } else if (step.kind === 'scenario') {
+      run = act(run, lab, { type: 'aks-request', scenarioId: step.scenarioId }).run
+    } else if (step.kind !== 'inspect') {
+      throw new Error(`Unsupported AKS solution step: ${step.kind}`)
+    }
+  }
+  return run
+}
+
 export function createAksTestRun(overrides = {}) {
   const lab = makeAksLab(overrides)
   return { lab, run: createBehavioralRun(lab, { attemptId: 'test-aks' }) }

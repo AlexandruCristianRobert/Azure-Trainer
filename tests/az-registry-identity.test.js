@@ -39,6 +39,13 @@ describe('registry and identity resources', () => {
     expect(isSandboxShape(created.sandbox)).toBe(true)
   })
 
+  it('accepts -r as the short registry flag when building a saved image', () => {
+    const base = withRegistry()
+    const result = runLine(base, 'az acr build -r acrguided -t api:v1 .', buildContext())
+    expect(error(result)).toBe('')
+    expect(result.effects?.find(effect => effect.type === 'publish-build')?.artifacts.publishedTags['acrguided.azurecr.io/api:v1']).toBe('build-1')
+  })
+
   it('rejects invalid names, sku, and conflicting re-creation without mutation', () => {
     const base = withRegistry()
     for (const line of [

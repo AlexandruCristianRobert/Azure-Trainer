@@ -5,7 +5,7 @@ import { buildImage } from '../../project/build.js'
 import { AzError } from '../../sandbox/errors.js'
 
 const NAME = ARG.name('Name of the Azure Container Registry (5-50 alphanumeric characters).')
-const REGISTRY = { name: '--registry', aliases: [], required: true, kind: 'string', dest: 'registry', help: 'Existing simulated registry name.' }
+const REGISTRY = { name: '--registry', aliases: ['-r'], required: true, kind: 'string', dest: 'registry', help: 'Existing simulated registry name.' }
 const IMAGE = { name: '--image', aliases: ['-t'], required: true, kind: 'string', dest: 'image', help: 'Repository:tag to publish in the registry.' }
 const FILE = { name: '--file', aliases: ['-f'], required: false, kind: 'string', dest: 'file', help: 'Supported Dockerfile path: Dockerfile.' }
 const CONTEXT = { name: '<context>', aliases: [], required: true, kind: 'positional', dest: 'buildContext', help: 'Supported local context: . Remote URLs are unavailable.' }
