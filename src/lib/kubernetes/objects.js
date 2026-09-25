@@ -31,10 +31,17 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     const desired = JSON.stringify(desiredObject(object))
     if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
+    if (old?.kind === 'Service' && old.spec.type !== object.spec.type) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SERVICE_TYPE', message: 'Changing a Service type in place is unsupported by this trainer.' }] }
     const uid = old?.metadata.uid ?? `kube-${next.nextSequence++}`
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
     const generation = object.kind === 'Deployment' ? (old ? (JSON.stringify(old.spec) === JSON.stringify(object.spec) ? old.metadata.generation : (old.metadata.generation ?? 1) + 1) : 1) : undefined
-    next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
+    const generatedService = old?.kind === 'Service' ? {
+      spec: { ...(old.spec.clusterIP ? { clusterIP: old.spec.clusterIP } : {}) },
+      ...(old.status ? { status: clone(old.status) } : {}),
+    } : {}
+    next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, ...generatedService,
+      ...(object.kind === 'Service' ? { spec: { ...object.spec, ...(generatedService.spec ?? {}) } } : {}),
+      metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
     if (object.kind === 'ConfigMap' || object.kind === 'Secret') next = scheduleConfigurationProjection(next, clusterId, key)
     lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} ${old ? 'configured' : 'created'}`, kind: 'out' })
   }

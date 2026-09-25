@@ -91,7 +91,7 @@ describe('Kubernetes foundation schema', () => {
     expect(validateKubernetesObject(namespace, options).diagnostics[0]).toMatchObject({ code: 'KUBE_CLUSTER_SCOPED' })
   })
 
-  it('resolves a Service named targetPort against the labelled container port', () => {
+  it('accepts a Service named targetPort for per-Pod resolution', () => {
     const deployment = validateKubernetesObject(parseKubernetesYaml(deploymentYaml, 'k8s/deployment.yaml').documents[0], options).object
     const service = validateKubernetesObject(parseKubernetesYaml(serviceYaml, 'k8s/service.yaml').documents[0], {
       ...options, capabilities: { deployments: [deployment] },
@@ -100,8 +100,7 @@ describe('Kubernetes foundation schema', () => {
 
     const invalid = structuredClone(parseKubernetesYaml(serviceYaml, 'k8s/service.yaml').documents[0])
     invalid.spec.ports[0].targetPort = 'missing'
-    expect(validateKubernetesObject(invalid, { ...options, capabilities: { deployments: [deployment] } }).diagnostics[0])
-      .toMatchObject({ code: 'KUBE_TARGET_PORT_NOT_FOUND' })
+    expect(validateKubernetesObject(invalid, { ...options, capabilities: { deployments: [deployment] } }).diagnostics).toEqual([])
   })
 
   it('accepts an unnamed numeric container port and numeric Service targetPort', () => {

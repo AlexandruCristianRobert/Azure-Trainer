@@ -72,7 +72,7 @@ function validClusterState(state, run) {
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
-  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1' }
+  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1', EndpointSlice: 'discovery.k8s.io/v1' }
   for (const [key, resource] of resources) {
     if (!isPlainObject(resource) || typeof resource.apiVersion !== 'string' || typeof resource.kind !== 'string'
       || !isPlainObject(resource.metadata) || typeof resource.metadata.name !== 'string' || !resource.metadata.name
@@ -92,13 +92,14 @@ function validClusterState(state, run) {
       apiVersion: resource.apiVersion,
       kind: resource.kind,
       metadata: { name: resource.metadata.name, ...(resource.metadata.namespace === undefined ? {} : { namespace: resource.metadata.namespace }), ...(resource.metadata.labels === undefined ? {} : { labels: resource.metadata.labels }) },
-      ...(resource.spec === undefined ? {} : { spec: resource.spec }),
+      ...(resource.spec === undefined ? {} : { spec: resource.kind === 'Service' ? (() => { const { clusterIP, ...spec } = resource.spec; return spec })() : resource.spec }),
       ...(resource.type === undefined ? {} : { type: resource.type }),
       ...(resource.data === undefined ? {} : { data: resource.data }),
     }
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
+  if (!validConnectivity(state, resources, byUid)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
       if (!Array.isArray(resource.metadata.ownerReferences) || resource.metadata.ownerReferences.length !== 1) return false
@@ -143,6 +144,42 @@ function validClusterState(state, run) {
   return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
     && new Set(state.receipts.map(receipt => receipt.sequence)).size === state.receipts.length
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
+}
+
+function validConnectivity(state, resources, byUid) {
+  if (state.connectivity === undefined) return !resources.some(([, resource]) => resource.kind === 'EndpointSlice')
+  const value = state.connectivity
+  if (!isPlainObject(value) || value.version !== 1 || !Number.isInteger(value.nextServiceAddress) || value.nextServiceAddress < 1 || value.nextServiceAddress > 4064
+    || !Number.isInteger(value.nextPodAddress) || value.nextPodAddress < 1 || value.nextPodAddress > 4064
+    || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
+    || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
+    || !value.diagnosticPodUids.every(uid => byUid.get(uid)?.kind === 'Pod') || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200 || value.incident !== null) return false
+  const addresses = new Set()
+  for (const [, resource] of resources) {
+    if (resource.kind === 'Service') {
+      if (!/^10\.96\.(?:[0-9]|1[0-5])\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(resource.spec?.clusterIP ?? '') || addresses.has(resource.spec.clusterIP)) return false
+      addresses.add(resource.spec.clusterIP)
+      const external = resource.status?.loadBalancer?.ingress?.[0]?.ip
+      if (resource.spec.type === 'LoadBalancer' ? !/^192\.0\.2\.(?:1[0-9]|[2-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(external ?? '') : external !== undefined) return false
+      if (external) { if (addresses.has(external)) return false; addresses.add(external) }
+    }
+    if (resource.kind === 'Pod' && resource.status?.podIP !== undefined) {
+      if (!/^10\.244\.(?:[0-9]|1[0-5])\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(resource.status.podIP) || addresses.has(resource.status.podIP)) return false
+      addresses.add(resource.status.podIP)
+    }
+  }
+  return resources.filter(([, resource]) => resource.kind === 'EndpointSlice').every(([, slice]) => {
+    const owner = slice.metadata.ownerReferences?.[0]; const service = owner && byUid.get(owner.uid)
+    if (!service || service.kind !== 'Service' || owner.kind !== 'Service' || owner.name !== service.metadata.name
+      || slice.metadata.namespace !== service.metadata.namespace || slice.metadata.labels?.['kubernetes.io/service-name'] !== service.metadata.name
+      || slice.addressType !== 'IPv4' || !Array.isArray(slice.ports) || !Array.isArray(slice.endpoints)) return false
+    return slice.endpoints.every(endpoint => {
+      const pod = byUid.get(endpoint.targetRef?.uid)
+      return pod?.kind === 'Pod' && endpoint.targetRef.kind === 'Pod' && endpoint.targetRef.name === pod.metadata.name
+        && endpoint.targetRef.namespace === pod.metadata.namespace && Array.isArray(endpoint.addresses) && endpoint.addresses.length === 1
+        && endpoint.addresses[0] === pod.status?.podIP && typeof endpoint.conditions?.ready === 'boolean'
+    })
+  })
 }
 
 function validCapturedArtifact(artifact, source, run) {

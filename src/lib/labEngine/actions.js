@@ -24,6 +24,7 @@ import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/stat
 import { applyAksAction } from '../kubernetes/actions.js'
 import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
 import { reconcileKubernetes } from '../kubernetes/reconcile.js'
+import { initializeConnectivity } from '../kubernetes/services.js'
 import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
@@ -247,6 +248,9 @@ function commandAction(run, action, lab) {
     const clusters = Object.fromEntries((next.sandbox.aksClusters ?? []).map(cluster => [cluster.id,
       next.runtime.kubernetes.clusters[cluster.id] ?? emptyClusterState(cluster.id)]))
     next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext, clusters } } }
+    if (lab.capabilities?.kubernetesConnectivity === true) {
+      for (const cluster of next.sandbox.aksClusters ?? []) next = initializeConnectivity(next, cluster.id)
+    }
     const pullStateChanged = (result.events ?? []).some(event => ['aksCluster', 'roleAssignment'].includes(event.resourceType)
       && ['created', 'updated', 'deleted'].includes(event.type))
       || (result.effects ?? []).some(effect => effect.type === 'publish-build')

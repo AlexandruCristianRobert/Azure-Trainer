@@ -3,6 +3,7 @@ import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
 import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../src/data/templates/aks-python/configuration.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
+import { initializeConnectivity, reconcileServices } from '../../src/lib/kubernetes/services.js'
 
 export function makeTrainingSnapshot() {
   return {
@@ -103,4 +104,17 @@ export function seedConfiguredAssistant({ namespace = 'assistant', profile = 'tr
   const dependencies = kubernetesDependencies(clusterId, namespace, 'assistant', 'assistant', { sourceSensitive: true })
   const scenario = { kind: 'aks-request', version: 1, target: { clusterId, namespace, serviceName: 'assistant', deploymentName: 'assistant' }, request: { method: 'GET', path: '/api/info' }, expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: profile } }, requireReplacement: false }
   return { lab: { ...lab, scenarios: { info: scenario }, tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false }] }, run, clusterId }
+}
+
+export function seedConnectivityTest({ namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
+  let { lab, run, clusterId } = seedFoundation({ namespace })
+  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConfiguration: true, kubernetesConnectivity: true } }
+  const service = run.runtime.kubernetes.clusters[clusterId].resources[`Service/${namespace}/${namespace}`]
+  service.spec.type = serviceType
+  service.spec.ports[0].targetPort = targetPort
+  if (listener !== 8080) {
+    for (const pod of Object.values(run.runtime.kubernetes.clusters[clusterId].resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)) pod.spec.containers[0].ports[0].containerPort = listener
+  }
+  run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
+  return { lab, run, clusterId, diagnosticPodUid: null, target: { clusterId, namespace, serviceName: namespace } }
 }

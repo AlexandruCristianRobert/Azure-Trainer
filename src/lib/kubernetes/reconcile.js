@@ -1,4 +1,5 @@
 import { kubeObjectKey } from './objects.js'
+import { reconcileServices } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 
@@ -103,7 +104,7 @@ function recordReplacement(state, deleted, replacement, cause = 'template') {
 }
 
 export function reconcileKubernetes(input, lab) {
-  const run = clone(input)
+  let run = clone(input)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
@@ -151,6 +152,7 @@ export function reconcileKubernetes(input, lab) {
       }
     }
   }
+  for (const cluster of run.sandbox.aksClusters ?? []) run = reconcileServices(run, cluster.id)
   return run
 }
 

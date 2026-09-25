@@ -163,16 +163,10 @@ function validateSecret(value, root) {
   return null
 }
 
-function matchingDeployment(deployments, service) {
-  return deployments.find(deployment => deployment?.kind === 'Deployment'
-    && deployment.metadata?.namespace === service.metadata?.namespace
-    && Object.entries(service.spec.selector ?? {}).every(([key, value]) => deployment.spec?.template?.metadata?.labels?.[key] === value))
-}
-
 function validateService(value, root, capabilities) {
   let issue = allowed(value.spec, new Set(['type', 'selector', 'ports']), root)
   if (issue) return issue
-  if (!['ClusterIP', 'LoadBalancer'].includes(value.spec?.type)) return diag('INVALID_SERVICE_TYPE', value.spec?.type, root)
+  if (!['ClusterIP', 'LoadBalancer'].includes(value.spec?.type ?? 'ClusterIP')) return diag('INVALID_SERVICE_TYPE', value.spec?.type, root)
   if (!validLabels(value.spec.selector) || !Object.keys(value.spec.selector).length) return diag('INVALID_LABELS', 'selector', root)
   if (!Array.isArray(value.spec.ports) || value.spec.ports.length !== 1) return diag('INVALID_SERVICE_PORTS', 'ports', root, 'Exactly one Service port is required.')
   const port = value.spec.ports[0]
@@ -180,14 +174,7 @@ function validateService(value, root, capabilities) {
   if (issue) return issue
   if (!Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return diag('INVALID_SERVICE_PORT', port.port, root)
   if (port.protocol !== 'TCP') return diag('INVALID_SERVICE_PROTOCOL', port.protocol, root)
-  if (!(Number.isInteger(port.targetPort) && port.targetPort >= 1 && port.targetPort <= 65535) && typeof port.targetPort !== 'string') return diag('INVALID_TARGET_PORT', port.targetPort, root)
-  if (typeof port.targetPort === 'string' && Array.isArray(capabilities?.deployments)) {
-    const deployment = matchingDeployment(capabilities.deployments, value)
-    if (deployment) {
-      const ports = deployment.spec?.template?.spec?.containers?.[0]?.ports ?? []
-      if (!ports.some(item => item.name === port.targetPort)) return diag('KUBE_TARGET_PORT_NOT_FOUND', port.targetPort, root, 'Service targetPort does not match a selected named container port.')
-    }
-  }
+  if (port.targetPort !== undefined && !(Number.isInteger(port.targetPort) && port.targetPort >= 1 && port.targetPort <= 65535) && typeof port.targetPort !== 'string') return diag('INVALID_TARGET_PORT', port.targetPort, root)
   return null
 }
 
@@ -215,6 +202,10 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   else issue = validateService(input, root, capabilities)
   if (issue) return { object: null, diagnostics: [issue] }
   const output = clone(input)
+  if (output.kind === 'Service') {
+    output.spec.type ??= 'ClusterIP'
+    output.spec.ports[0].targetPort ??= output.spec.ports[0].port
+  }
   if (output.kind === 'Secret') { output.type ??= 'Opaque'; output.data = { ...(output.data ?? {}), ...(output.stringData ? Object.fromEntries(Object.entries(output.stringData).map(([key, value]) => [key, encodeBase64(value)])) : {}) }; delete output.stringData }
   if (namespaced && output.metadata.namespace === undefined) output.metadata.namespace = resolvedNamespace
   return { object: output, diagnostics: [] }
