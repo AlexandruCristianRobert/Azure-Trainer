@@ -16,7 +16,7 @@ const command = (...lines) => ({ steps: lines.map(line => ({ kind: 'command', li
 const file = path => ({ kind: 'file', path, content: troubleshootingSolutionFiles[path] })
 
 export const aksDeployTroubleshootingLab = {
-  id: 'aks-deploy-troubleshooting', title: 'Recover an AKS deployment incident', status: 'draft',
+  id: 'aks-deploy-troubleshooting', title: 'Recover an AKS deployment incident', status: 'available',
   skillAreaId: 'containers', service: 'aks', minutes: 30,
   brief: 'The assistant does not respond at its expected endpoint, and its Pods show image-related events. Inspect the current context, manifests, events and registry artifacts, then recover the intended deployment and remove the unintended workload.',
   engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 2, labMode: 'troubleshooting',
@@ -33,11 +33,11 @@ export const aksDeployTroubleshootingLab = {
   tasks: [
     { id: 'target-namespace', stageId: 'diagnose', text: 'Select the intended `assistant` namespace in the connected AKS context.',
       explanation: 'A kubectl context carries a namespace default. The incident began because the saved manifests and selected context both pointed at staging.', check: troubleshootingContextReady,
-      hints: ['Run `kubectl config current-context`, then inspect the selected namespace before making repairs.', 'Set the current context namespace to `assistant` with `kubectl config set-context --current --namespace assistant`.'],
+      hints: ['Run `kubectl config get-contexts` to inspect the selected namespace, and `kubectl get events -n staging` to investigate the accidental workload before making repairs.', 'Set the current context namespace to `assistant` with `kubectl config set-context --current --namespace assistant`.'],
       solution: command('kubectl config set-context --current --namespace assistant'), examNote: 'Namespace names are case-sensitive boundaries; a correct command in the wrong namespace changes a different workload.' },
     { id: 'published-image', stageId: 'diagnose', text: 'Use the published `assistant:v1` image from `acrakstrouble` in the repaired Deployment.',
       explanation: 'The registry contains an immutable artifact for v1. The seeded missing tag is a distinct failure from authorization.', check: troubleshootingPublishedImageReady,
-      hints: ['Inspect image-pull events and compare the Deployment image with the registry’s published tag.', 'The published image is `acrakstrouble.azurecr.io/assistant:v1`; update saved YAML before applying it.'],
+      hints: ['A denied pull can mask a missing tag. Compare the saved Deployment image with the registry Published images list as well as the Pod events.', 'The published image is `acrakstrouble.azurecr.io/assistant:v1`; update saved YAML before applying it.'],
       solution: { steps: [file('k8s/deployment.yaml')] }, examNote: 'ImageNotFound means the requested tag has no artifact; granting pull access cannot create that tag.' },
     { id: 'registry-access', stageId: 'diagnose', text: 'Attach `acrakstrouble` to `aks-troubleshooting` so its kubelet identity receives registry-scoped AcrPull.',
       explanation: 'A valid private image still needs the cluster kubelet to authenticate before new Pods can pull it.', check: troubleshootingRegistryAccessReady,

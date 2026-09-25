@@ -47,6 +47,24 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   return value
 }
 
+function retryPendingPod(run, cluster, deployment, pod) {
+  if (pod.status?.phase !== 'Pending') return
+  const container = pod.spec.containers[0]
+  const artifactId = run.artifacts.publishedTags[container.image]
+  const reason = !hasKubeletPull(run.sandbox, cluster, container.image) ? 'RegistryAccessDenied'
+    : !artifactId ? 'ImageNotFound' : null
+  const previous = pod.status.containerStatuses?.[0]?.state?.waiting?.reason
+  if (reason === previous) return
+  if (reason) {
+    pod.status = { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] }
+    addEvent(run.runtime.kubernetes.clusters[cluster.id], reason,
+      `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
+  } else {
+    pod.status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] }
+    capturePod(run, { ...pod, clusterId: cluster.id, template: deployment.spec.template }, artifactId)
+  }
+}
+
 export function getDeploymentPods(run, clusterId, namespace, name) {
   const resources = run.runtime.kubernetes.clusters[clusterId]?.resources ?? {}
   const deployment = resources[kubeObjectKey('Deployment', namespace, name)]
@@ -101,6 +119,7 @@ export function reconcileKubernetes(input, lab) {
       const created = []
       const remaining = current.length - current.slice(deployment.spec.replicas).length
       for (let index = Math.max(0, remaining); index < deployment.spec.replicas; index++) created.push(createPod(run, cluster, deployment, replicaSet, index))
+      for (const pending of current.slice(0, deployment.spec.replicas)) retryPendingPod(run, cluster, deployment, pending)
       removed.forEach((old, index) => { if (created[index]) recordReplacement(state, old, created[index]) })
       const deletedReceipts = state.receipts.filter(item => item.replacementPodUid === null)
       for (const receipt of deletedReceipts) {

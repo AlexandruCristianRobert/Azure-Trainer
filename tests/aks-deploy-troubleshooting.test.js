@@ -66,6 +66,20 @@ describe('AKS deployment troubleshooting Lab', () => {
     expect(evaluateLab(aksDeployTroubleshootingLab, run).isComplete).toBe(true)
   })
 
+  it('retries pending image pulls when AcrPull is granted after applying the target Deployment', () => {
+    let run = createBehavioralRun(aksDeployTroubleshootingLab, { attemptId: 'grant-after-apply' })
+    for (const id of ['target-namespace', 'published-image', 'repaired-manifests']) {
+      run = executeAksSolution(run, aksDeployTroubleshootingLab, aksDeployTroubleshootingLab.tasks.find(task => task.id === id))
+    }
+    const cluster = run.sandbox.aksClusters.find(item => item.name === 'aks-troubleshooting')
+    const targetPods = () => Object.values(run.runtime.kubernetes.clusters[cluster.id].resources)
+      .filter(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant')
+    expect(targetPods()).toHaveLength(2)
+    expect(targetPods().every(pod => pod.status.phase === 'Pending')).toBe(true)
+    run = executeAksSolution(run, aksDeployTroubleshootingLab, aksDeployTroubleshootingLab.tasks.find(task => task.id === 'registry-access'))
+    expect(targetPods().every(pod => pod.status.phase === 'Running')).toBe(true)
+  })
+
   it('does not accept a request against a different cluster as recovery evidence', () => {
     let run = executeAll(createBehavioralRun(aksDeployTroubleshootingLab, { attemptId: 'decoy' }), { skip: ['recovery'] })
     run = act(run, aksDeployTroubleshootingLab, { type: 'command', line: 'az group create -n rg-decoy -l eastus' }).run

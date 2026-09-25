@@ -23,6 +23,7 @@ import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
 import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/state.js'
 import { applyAksAction } from '../kubernetes/actions.js'
 import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
+import { reconcileKubernetes } from '../kubernetes/reconcile.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -245,6 +246,10 @@ function commandAction(run, action, lab) {
     const clusters = Object.fromEntries((next.sandbox.aksClusters ?? []).map(cluster => [cluster.id,
       next.runtime.kubernetes.clusters[cluster.id] ?? emptyClusterState(cluster.id)]))
     next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext, clusters } } }
+    const pullStateChanged = (result.events ?? []).some(event => ['aksCluster', 'roleAssignment'].includes(event.resourceType)
+      && ['created', 'updated', 'deleted'].includes(event.type))
+      || (result.effects ?? []).some(effect => effect.type === 'publish-build')
+    if (pullStateChanged) next = reconcileKubernetes(next, lab)
   }
   if (lab.capabilities?.foundryInference === true) {
     const generations = { ...next.dependencyGenerations }
