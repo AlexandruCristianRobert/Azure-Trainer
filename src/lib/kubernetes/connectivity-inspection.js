@@ -42,15 +42,21 @@ function traceFor(run, clusterId, request) {
   const failedTransport = !request.transport?.ok
   const dnsReached = !!service || (!!request.hostname && !['DNS_NOT_FOUND', 'UNKNOWN_ADDRESS', 'INTERNAL_ADDRESS'].includes(request.transport?.reason))
   const appReached = request.status !== null && request.status !== undefined
-  const dependencyStatus = item => item ? (item.status === 'succeeded' ? 'Succeeded' : 'Failed') : 'Not reached'
+  const dependencyStatus = item => item ? (item.status === 'succeeded' ? 'Reached' : 'Failed') : 'Not reached'
   const dependencyDetail = item => item ? [item.reason, item.selectedSourceIds?.join(', ')].filter(Boolean).join(' · ') : ''
   const reason = request.transport?.reason
   return [
-    stage('Origin', originPod ? `${originPod.metadata.namespace}/${originPod.metadata.name}` : 'External client', originPod || request.origin?.kind === 'external' ? 'Reached' : 'Not reached'),
-    stage('DNS/address', request.hostname ?? '', dnsReached ? (service ? `${service.spec.clusterIP}${service.status?.loadBalancer?.ingress?.[0]?.ip ? ` · ${service.status.loadBalancer.ingress[0].ip}` : ''}` : 'Resolved') : reason ?? 'Not reached'),
-    stage('Service', service ? `${service.metadata.namespace}/${service.metadata.name}` : route.serviceName ?? '', service ? `Reached · port ${request.port} → ${service.spec.ports?.[0]?.targetPort ?? service.spec.ports?.[0]?.port}` : failedTransport ? (reason ?? 'Not reached') : 'Not reached'),
-    stage('Pod/listener', pod ? `${pod.metadata.namespace}/${pod.metadata.name}` : route.podName ?? '', pod ? `Reached · ${route.backendPort ?? 'unknown'}${request.transport?.ok ? '' : ` · ${reason}`}` : failedTransport ? (reason ?? 'Not reached') : 'Not reached'),
-    stage('Application', '', appReached ? `HTTP ${request.status}` : 'Not reached'),
+    stage('Origin', originPod || request.origin?.kind === 'external' ? 'Reached' : 'Not reached', originPod ? `${originPod.metadata.namespace}/${originPod.metadata.name}` : request.origin?.kind === 'external' ? 'External client' : reason ?? 'Origin unavailable'),
+    stage('DNS/address', service || dnsReached ? 'Reached' : failedTransport ? 'Failed' : 'Not reached', service
+      ? `${request.hostname ?? ''} · ${service.spec.clusterIP}${service.status?.loadBalancer?.ingress?.[0]?.ip ? ` · ${service.status.loadBalancer.ingress[0].ip}` : ''}`
+      : [request.hostname, reason].filter(Boolean).join(' · ') || 'Not reached'),
+    stage('Service', route.serviceUid ? 'Reached' : failedTransport ? 'Failed' : 'Not reached', service
+      ? `${service.metadata.namespace}/${service.metadata.name} · service port ${request.port} → targetPort ${service.spec.ports?.[0]?.targetPort ?? service.spec.ports?.[0]?.port}`
+      : [route.serviceName, reason].filter(Boolean).join(' · ') || 'Not reached'),
+    stage('Pod/listener', pod || route.podUid ? reason === 'CONNECTION_REFUSED' ? 'Failed' : 'Reached' : failedTransport ? 'Failed' : 'Not reached', pod
+      ? `${pod.metadata.namespace}/${pod.metadata.name} · backend port ${route.backendPort ?? 'unknown'}${reason ? ` · ${reason}` : ''}`
+      : [route.podName, reason].filter(Boolean).join(' · ') || 'Not reached'),
+    stage('Application', appReached ? 'Reached' : 'Not reached', appReached ? `HTTP ${request.status}` : reason ?? 'Not reached'),
     stage('Embedding', dependencyStatus(op('embedding')), dependencyDetail(op('embedding'))),
     stage('PostgreSQL', dependencyStatus(op('postgres-query')), dependencyDetail(op('postgres-query'))),
     stage('Answer', dependencyStatus(op('answer')), dependencyDetail(op('answer'))),
@@ -77,7 +83,7 @@ export function inspectConnectivity(run, target) {
   const requests = (run.runtime.kubernetes.requests ?? []).filter(item => item.connectivity === true && item.origin?.clusterId === clusterId
     && (item.route?.serviceUid === service.metadata.uid || item.route?.serviceName === service.metadata.name && item.route?.namespace === service.metadata.namespace))
     .slice(-100).reverse().map(item => ({ id: item.id, requestId: item.id, sequence: item.sequence, method: item.request?.method,
-      path: item.request?.path, hostname: item.hostname, port: item.port, status: item.status, transport: copy(item.transport ?? { ok: false, reason: null }),
+      path: item.request?.path, hostname: item.hostname, port: item.port, status: item.status, scenarioId: item.scenarioId ?? null, transport: copy(item.transport ?? { ok: false, reason: null }),
       route: copy(item.route ?? {}), dependencyTrace: copy(item.dependencyTrace ?? []), trace: traceFor(run, clusterId, item),
       logsCommand: item.route?.podName ? `kubectl logs ${item.route.podName} -n ${item.route.namespace}` : null }))
   const requestIds = new Set(requests.map(item => item.id))

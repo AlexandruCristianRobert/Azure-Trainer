@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { inspectConnectivity } from '../src/lib/kubernetes/connectivity-inspection.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
-import { seedConnectivityTest } from './helpers/aks.js'
+import { projectKubernetesInspection } from '../src/lib/kubernetes/inspection.js'
+import { seedConnectivityTest, seedConfiguredAssistant } from './helpers/aks.js'
 
 function request(run, seed, hostname = 'assistant-internal.assistant', port = 80, method = 'GET') {
   const result = routeServiceRequest(run, { origin: { kind: 'pod', clusterId: seed.clusterId, podUid: seed.diagnosticPodUid }, hostname, port, method, path: method === 'GET' ? '/api/info' : '/api/ask', ...(method === 'POST' ? { body: { question: 'How long are backups kept?' } } : {}) }, seed.lab)
@@ -20,6 +21,8 @@ describe('AKS connectivity inspection', () => {
     expect(view.backends.length).toBeGreaterThan(0)
     expect(view.backends.every(row => row.listenerPort === 8080)).toBe(true)
     expect(view.requests[0].transport.reason).toBe('CONNECTION_REFUSED')
+    expect(view.requests[0].trace.slice(0, 5).map(stage => stage.status)).toEqual(['Reached', 'Reached', 'Reached', 'Failed', 'Not reached'])
+    expect(view.requests[0].trace[3].detail).toContain('CONNECTION_REFUSED')
     expect(view.logs).toEqual([])
     expect(JSON.stringify(view)).not.toContain('postgres-query')
     expect(seed.run.runtime.kubernetes.requests).toEqual([])
@@ -39,9 +42,25 @@ describe('AKS connectivity inspection', () => {
     expect(outcome).toMatchObject({ transport: { ok: true }, status: 503 })
     expect(view.requests[0].route.podUid).toBeTruthy()
     expect(view.requests[0].trace.map(stage => stage.name)).toEqual(['Origin', 'DNS/address', 'Service', 'Pod/listener', 'Application', 'Embedding', 'PostgreSQL', 'Answer'])
+    expect(view.requests[0].trace.slice(0, 4).map(stage => stage.status)).toEqual(['Reached', 'Reached', 'Reached', 'Reached'])
+    expect(view.requests[0].trace[0].detail).toBe('diagnostics/diagnostics')
+    expect(view.requests[0].trace[2].detail).toContain('assistant/assistant-internal')
+    expect(view.requests[0].trace[3].detail).toContain('assistant/')
     expect(view.requests[0].trace.find(stage => stage.name === 'PostgreSQL')).toMatchObject({ status: 'Failed' })
     expect(view.logs).toHaveLength(1)
     expect(view.logs[0].requestId).toBe(outcome.requestId)
+  })
+
+  it('projects scenario IDs so a panel can select the matching request, not newer Service traffic', async () => {
+    const seed = seedConnectivityTest()
+    let first = request(seed.run, seed)
+    first.run.runtime.kubernetes.requests.at(-1).scenarioId = 'info-check'
+    const second = request(first.run, seed, undefined, undefined, 'POST')
+    second.run.runtime.kubernetes.requests.at(-1).scenarioId = 'assistant-check'
+    const view = inspectConnectivity(second.run, seed.target)
+    expect(view.requests.map(item => item.scenarioId)).toEqual(['assistant-check', 'info-check'])
+    const panel = await readFile(new URL('../src/components/lab/AksExperimentPanel.vue', import.meta.url), 'utf8')
+    expect(panel).toContain('item.scenarioId === choice.value')
   })
 
   it('redacts Secret values by provenance throughout projected requests and logs', () => {
@@ -64,6 +83,9 @@ describe('AKS connectivity inspection', () => {
     const panel = await readFile(new URL('../src/components/lab/AksExperimentPanel.vue', import.meta.url), 'utf8')
     expect(blade).toContain('>Services</button>')
     expect(blade).toContain('inspectConnectivity')
+    expect(blade).toContain('serviceRows')
+    expect(blade).toContain('connectivityEnabled')
+    expect(blade).toContain('No Services in this namespace')
     expect(blade).toContain('@click')
     expect(blade).toContain('max-width: 640px')
     expect(blade).toContain('button:focus-visible')
@@ -81,5 +103,15 @@ describe('AKS connectivity inspection', () => {
     const result = applyRunAction(seed.run, { type: 'aks-request', scenarioId: 'not-declared' }, seed.lab)
     expect(result.diagnostics.length).toBeGreaterThan(0)
     expect(result.run).toEqual(seed.run)
+  })
+
+  it('retains the legacy ready-Service projection for Labs without connectivity capability', async () => {
+    const { run, clusterId } = seedConfiguredAssistant()
+    const legacyView = projectKubernetesInspection(run, clusterId)
+    expect(legacyView.serviceEndpoints.length).toBeGreaterThan(0)
+    expect(legacyView.serviceEndpoints[0].readyBackends.length).toBeGreaterThan(0)
+    const blade = await readFile(new URL('../src/components/blade/AksClusterBlade.vue', import.meta.url), 'utf8')
+    expect(blade).toContain('!connectivityEnabled')
+    expect(blade).toContain(':rows="serviceRows"')
   })
 })

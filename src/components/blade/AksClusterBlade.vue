@@ -16,6 +16,7 @@ const view = computed(() => projectKubernetesInspection(run.behavioralRun, clust
 const namespaces = computed(() => view.value.namespaces.map(item => item.metadata.name))
 watch(namespaces, values => { if (!values.includes(namespace.value)) namespace.value = values[0] ?? '' }, { immediate: true })
 const configCapable = computed(() => run.lab?.capabilities?.kubernetesConfiguration === true)
+const connectivityEnabled = computed(() => run.lab?.capabilities?.kubernetesConnectivity === true)
 const namespacePods = computed(() => view.value.pods.filter(item => item.metadata?.namespace === namespace.value))
 const selectedPodUid = ref('')
 watch(namespacePods, pods => { if (!pods.some(item => item.metadata.uid === selectedPodUid.value)) selectedPodUid.value = pods[0]?.metadata.uid ?? '' }, { immediate: true })
@@ -31,6 +32,7 @@ const rows = (items, mapper) => computed(() => items.value.map(mapper))
 function selectBladeTab(tab) { bladeTab.value = tab; document.getElementById(`aks-${tab}-tab`)?.focus() }
 const deploymentRows = rows(scoped('deployments'), item => ({ name: item.metadata.name, status: `${item.spec.replicas} desired`, image: item.spec.template.spec.containers[0]?.image ?? '' }))
 const podRows = rows(scoped('pods'), item => ({ name: item.metadata.name, status: item.status?.phase ?? 'Unknown', image: item.spec.containers[0]?.image ?? '' }))
+const serviceRows = computed(() => view.value.serviceEndpoints.filter(item => item.namespace === namespace.value).map(item => ({ name: item.name, status: item.type, endpoint: `${item.readyBackends.length} ready: ${item.readyBackends.map(backend => backend.name).join(', ') || 'none'} · ${item.targetPort ?? 'none'} → ${item.resolvedPort ?? 'unresolved'}` })))
 const connectivityViews = computed(() => view.value.services.filter(item => item.metadata?.namespace === namespace.value)
   .map(item => ({ service: item, view: inspectConnectivity(run.behavioralRun, { clusterId: cluster.value?.id, namespace: namespace.value, serviceName: item.metadata.name }) })))
 const imageEvents = computed(() => view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['RegistryAccessDenied', 'ImageNotFound'].includes(item.reason))
@@ -76,6 +78,8 @@ const configurationEvents = computed(() => configCapable.value
     </div>
     <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">
       <h3 class="blade__section-title">Services and selected backends</h3>
+      <EntityTable v-if="!connectivityEnabled" :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Type' }, { key: 'endpoint', label: 'Endpoint' }]" :rows="serviceRows" empty-text="No Services in this namespace" />
+      <template v-else>
       <p>Addresses and endpoints are simulated from the applied Service and current Pods.</p>
       <p v-if="!connectivityViews.length">No Services in this namespace.</p>
       <article v-for="item in connectivityViews" :key="item.service.metadata.uid" class="aks-service-card">
@@ -85,6 +89,7 @@ const configurationEvents = computed(() => configCapable.value
         <div class="aks-services-tab__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Readiness</th><th scope="col">Endpoint</th><th scope="col">Backend port</th><th scope="col">Application listener</th></tr></thead><tbody><tr v-for="backend in item.view.backends" :key="backend.podUid"><th scope="row">{{ backend.name }}</th><td>{{ backend.ready ? 'Ready' : 'Not ready' }}</td><td>{{ backend.address ?? 'Not assigned' }}</td><td>{{ backend.endpointPort ?? 'Unresolved' }}</td><td>{{ backend.listenerPort ?? 'Unknown' }}</td></tr></tbody></table></div>
         <p v-if="!item.view.backends.length">No selected Pods.</p>
       </article>
+      </template>
     </div>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
 </div></section></template>

@@ -31,7 +31,7 @@ const connectivityTarget = computed(() => {
   return { clusterId: scenario.target.clusterId, namespace: host.length > 1 ? host[1] : scenario.target.namespace, serviceName: host[0] }
 })
 const connectivityView = computed(() => connectivityTarget.value ? inspectConnectivity(run.behavioralRun, connectivityTarget.value) : null)
-const latestRequest = computed(() => connectivityView.value?.requests?.[0] ?? null)
+const latestRequest = computed(() => connectivityView.value?.requests?.find(item => item.scenarioId === choice.value) ?? null)
 const latestLog = computed(() => connectivityView.value?.logs?.find(item => item.requestId === latestRequest.value?.requestId) ?? null)
 const diagnosticCommands = computed(() => {
   const scenario = selectedScenario.value; const route = scenario?.connectivity
