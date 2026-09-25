@@ -156,6 +156,41 @@ describe('AKS container restart lifecycle', () => {
     expect(stateFor(restarted, clusterId).health.receipts.at(-1)).toMatchObject({ cause: 'probe', podUid })
   })
 
+  it('resolves an updated published image tag at the next automatic container start', () => {
+    const { lab, run: initial, clusterId, podUids } = restartSeed()
+    const podUid = podUids[0]
+    let current = advanceHealth(initial, lab, 1)
+    const before = stateFor(current, clusterId).podSnapshots[podUid].artifactId
+    current = act(current, lab, { type: 'save-file', path: 'app.py',
+      text: current.project.savedFiles['app.py'].replace('SERVICE_VERSION = "2.0"', 'SERVICE_VERSION = "2.2"') }).run
+    current = act(current, lab, { type: 'command', line: 'az acr build --registry acraksprobesguided -t assistant:health-v1 .' }).run
+    const published = current.artifacts.publishedTags['acraksprobesguided.azurecr.io/assistant:health-v1']
+    expect(published).not.toBe(before)
+    expect(stateFor(current, clusterId).podSnapshots[podUid].artifactId).toBe(before)
+    const failed = failLiveness({ lab, run: current, clusterId, podUid })
+    const restarted = restartAtDeadline(failed, lab, clusterId, podUid)
+    expect(stateFor(restarted, clusterId).podSnapshots[podUid].artifactId).toBe(published)
+    expect(getDeploymentPods(restarted, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid)).toContain(podUid)
+  })
+
+  it('keeps a failed replacement waiting when kubelet image-pull access is revoked', () => {
+    const { lab, run: initial, clusterId, podUids } = restartSeed()
+    const podUid = podUids[0]
+    const running = advanceHealth(initial, lab, 1)
+    const failed = failLiveness({ lab, run: running, clusterId, podUid })
+    const denied = structuredClone(failed)
+    denied.sandbox.roleAssignments = []
+    const blocked = restartAtDeadline(denied, lab, clusterId, podUid)
+    expect(healthContainer(blocked, clusterId, podUid).restartCount).toBe(0)
+    expect(healthContainer(blocked, clusterId, podUid).restartBlockReason).toBe('RegistryAccessDenied')
+    expect(stateFor(blocked, clusterId).resources[`Pod/assistant/${getDeploymentPods(blocked, clusterId, 'assistant', 'assistant').find(pod => pod.metadata.uid === podUid).metadata.name}`].status.containerStatuses[0].state.waiting.reason).toBe('RegistryAccessDenied')
+    const restored = structuredClone(blocked)
+    restored.sandbox.roleAssignments = structuredClone(running.sandbox.roleAssignments)
+    const resumed = advanceHealth(restored, lab, 1)
+    expect(healthContainer(resumed, clusterId, podUid).restartCount).toBe(1)
+    expect(healthContainer(resumed, clusterId, podUid).startedAtMs).toBe(blocked.runtime.simTimeMs)
+  })
+
   it('round-trips restart state through behavioral run validation', () => {
     const { lab, run: initial, clusterId, podUids } = restartSeed()
     const run = advanceHealth(initial, lab, 1)
@@ -165,5 +200,21 @@ describe('AKS container restart lifecycle', () => {
     expect(healthContainer(saved, clusterId, podUids[0])).toMatchObject({ restartAtMs: expect.any(Number), terminatedAtMs: expect.any(Number) })
     const restored = restartAtDeadline(saved, lab, clusterId, podUids[0])
     expect(healthContainer(restored, clusterId, podUids[0])).toMatchObject({ restartCount: 1, previous: { containerId: expect.any(String) } })
+  })
+
+  it('rejects corrupted persisted restart deadlines, counters, and previous-container logs', () => {
+    const { lab, run: initial, clusterId, podUids } = restartSeed()
+    const running = advanceHealth(initial, lab, 1)
+    const failed = failLiveness({ lab, run: running, clusterId, podUid: podUids[0] })
+    for (const corrupt of [
+      value => { value.restartAtMs = value.terminatedAtMs },
+      value => { value.consecutiveRestarts = -1 },
+      value => { value.checks.liveness.pending = { containerId: 'foreign', startedAtMs: 0, completeAtMs: 1 } },
+      value => { value.previous = { containerId: 'foreign', logs: ['x'], reason: 'Unknown' } },
+    ]) {
+      const candidate = structuredClone(failed)
+      corrupt(candidate.runtime.kubernetes.clusters[clusterId].health.containers[podUids[0]])
+      expect(() => validateBehavioralRun(candidate, lab)).toThrow()
+    }
   })
 })

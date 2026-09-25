@@ -64,7 +64,7 @@ export function processContainerLifecycle(run, atMs, lab) {
     }
     delete state.projectionDue[uid]
     const restartCount = container.restartCount + 1
-    const startedAtMs = container.restartAtMs
+    const startedAtMs = atMs
     const duration = lab.healthFixture.initializationSeconds * 1000
     const probes = pod.spec.containers[0]
     state.health.containers[uid] = {

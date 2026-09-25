@@ -171,7 +171,7 @@ function validClusterState(state, run, lab, clusterId) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
-  if (probesEnabled && !validHealthState(state.health, byUid)) return false
+  if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
@@ -221,26 +221,41 @@ function validClusterState(state, run, lab, clusterId) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validHealthState(health, byUid) {
+function validHealthState(health, byUid, nowMs) {
   const ids = new Set()
   const managedRunning = [...byUid.values()].filter(pod => pod.kind === 'Pod' && pod.status?.phase === 'Running' && pod.metadata.ownerReferences?.[0])
   return managedRunning.every(pod => Object.hasOwn(health.containers, pod.metadata.uid)) && Object.entries(health.containers).every(([uid, value]) => {
     const pod = byUid.get(uid)
     if (!pod || pod.kind !== 'Pod' || pod.status?.phase !== 'Running' || !isPlainObject(value)
       || typeof value.containerId !== 'string' || !value.containerId || ids.has(value.containerId)
-      || !Number.isFinite(value.startedAtMs) || !Number.isFinite(value.initializedAtMs)
+      || !Number.isFinite(value.startedAtMs) || value.startedAtMs < 0 || value.startedAtMs > nowMs
+      || !Number.isFinite(value.initializedAtMs) || value.initializedAtMs < value.startedAtMs
       || typeof value.startupPassed !== 'boolean' || typeof value.ready !== 'boolean'
       || !Number.isInteger(value.restartCount) || value.restartCount < 0
+      || !Number.isInteger(value.consecutiveRestarts) || value.consecutiveRestarts < 0 || value.consecutiveRestarts > value.restartCount
+      || (value.restartAtMs !== null && (!Number.isFinite(value.restartAtMs) || value.restartAtMs < nowMs && !value.restartBlockReason))
+      || (value.terminatedAtMs !== null && (!Number.isFinite(value.terminatedAtMs) || value.terminatedAtMs < nowMs))
+      || (value.restartAtMs !== null && value.terminatedAtMs !== null && value.restartAtMs <= value.terminatedAtMs)
       || !isPlainObject(value.localFaults) || typeof value.localFaults.admissionClosed !== 'boolean' || typeof value.localFaults.hung !== 'boolean'
-      || !isPlainObject(value.checks) || !Array.isArray(value.currentLogs) || value.currentLogs.length > 100) return false
+      || !isPlainObject(value.checks) || !Array.isArray(value.currentLogs) || value.currentLogs.length > 100
+      || !value.currentLogs.every(line => typeof line === 'string' && line.length <= 4096)
+      || (value.previous !== null && (!isPlainObject(value.previous) || typeof value.previous.containerId !== 'string'
+        || !Array.isArray(value.previous.logs) || value.previous.logs.length > 100
+        || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096)
+        || !['StartupProbeFailed', 'LivenessProbeFailed'].includes(value.previous.reason)))) return false
     ids.add(value.containerId)
-    return ['startup', 'readiness', 'liveness'].every(type => value.checks[type] === null || isPlainObject(value.checks[type])
+    return ['startup', 'readiness', 'liveness'].every(type => {
+      const probe = pod.spec.containers[0]?.[`${type}Probe`]
+      const check = value.checks[type]
+      if (!!probe !== !!check) return false
+      return check === null || isPlainObject(check)
       && Number.isInteger(value.checks[type].successes) && value.checks[type].successes >= 0
       && Number.isInteger(value.checks[type].failures) && value.checks[type].failures >= 0
       && (value.checks[type].nextAtMs === null || Number.isFinite(value.checks[type].nextAtMs))
       && (value.checks[type].pending === null || isPlainObject(value.checks[type].pending)
         && value.checks[type].pending.containerId === value.containerId && Number.isFinite(value.checks[type].pending.startedAtMs)
-        && Number.isFinite(value.checks[type].pending.completeAtMs) && value.checks[type].pending.completeAtMs >= value.checks[type].pending.startedAtMs))
+        && Number.isFinite(value.checks[type].pending.completeAtMs) && value.checks[type].pending.completeAtMs >= value.checks[type].pending.startedAtMs)
+    })
   })
 }
 
