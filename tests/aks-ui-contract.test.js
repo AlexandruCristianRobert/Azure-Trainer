@@ -40,3 +40,11 @@ it('renders and copies AKS solution step kinds without serializing resolver func
   expect(taskRow).toContain('Inspect')
   expect(taskRow).toContain('Experiments')
 })
+
+it('shows the current task explanation and resolver guidance beside its command template', async () => {
+  const taskRow = await source('components/lab/TaskRow.vue')
+  expect(taskRow).toContain('task.explanation')
+  expect(taskRow).toContain('step.resolver && step.instruction')
+  expect(taskRow).toContain('solution__instruction')
+  expect(taskRow).toContain('step.instruction')
+})

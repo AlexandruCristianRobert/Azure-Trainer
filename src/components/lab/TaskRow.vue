@@ -18,7 +18,7 @@ const copied = ref(false)
 const nextHint = computed(() => props.hintsRevealed + 1)
 const steps = computed(() => typeof props.task.solution === 'string' ? null : props.task.solution?.steps ?? [])
 const stepText = (step) => {
-  if (step.kind === 'command') return step.line ?? step.instruction ?? (step.resolver ? 'Run the resolved command in Cloud Shell.' : '')
+  if (step.kind === 'command') return step.resolver && step.instruction ? `${step.instruction}\n${step.line ?? ''}`.trim() : step.line ?? step.instruction ?? ''
   if (step.kind === 'file') return `${step.path}\n${step.content}`
   if (step.kind === 'inspect' || step.kind === 'scenario') return step.instruction ?? step.command ?? ''
   return `Send ${step.request.method} ${step.request.path} to ${step.request.appId.split('/').at(-1)}. Expect HTTP ${step.expected?.status}.`
@@ -46,11 +46,12 @@ async function copySolution() {
     </div>
     <ExamNote v-if="state === 'done' && examNoteOpen" class="task__indent" :text="task.examNote" />
     <template v-if="state === 'current'">
+      <p v-if="task.explanation" class="task__explanation task__indent">{{ task.explanation }}</p>
       <HintBox v-for="i in hintsRevealed" :key="i" class="task__indent" :index="i" :total="task.hints.length" :text="task.hints[i - 1]" />
       <div v-if="solutionRevealed" class="solution task__indent">
         <div class="solution__head"><span class="solution__label">SOLUTION</span><button type="button" class="solution__copy" @click="copySolution">{{ copied ? 'Copied' : 'Copy' }}</button></div>
         <pre v-if="!steps" class="solution__code">{{ task.solution }}</pre>
-        <ol v-else class="solution__steps"><li v-for="(step, i) in steps" :key="i"><strong>{{ stepLabel(step) }}</strong><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
+        <ol v-else class="solution__steps"><li v-for="(step, i) in steps" :key="i"><strong>{{ stepLabel(step) }}</strong><p v-if="step.kind === 'command' && step.resolver && step.instruction" class="solution__instruction">{{ step.instruction }}</p><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
       </div>
       <div class="task__actions task__indent">
         <button v-if="hintsRevealed < task.hints.length" type="button" class="task__hint-link" :disabled="helpDisabled" @click="emit('reveal-hint')">Show hint {{ nextHint }}</button>

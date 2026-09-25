@@ -209,6 +209,7 @@
 .solution__steps strong { font-size: 11px; }
 .solution__steps pre { font: 10.5px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; }
 .solution__steps p { margin: 4px 0; }
+.solution__instruction { color: var(--text-2); }
 .blade__deployment-issues { color: var(--danger); overflow-wrap: anywhere; }
 .blade__deployment-issues h3 { color: var(--text); font-size: 13px; }
 .blade__content .essentials__value { overflow-wrap: anywhere; min-width: 0; }
