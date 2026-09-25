@@ -19,7 +19,12 @@ const staleObserved = context => configurationDeploymentReady(context) && samePo
 const mountedBeforeObserved = context => configurationEnvironmentRefreshed(context) && evidence(context, 'mounted-before')?.measurements?.body?.displayName === 'Training assistant'
 const mountedAfterObserved = context => configurationEnvironmentRefreshed(context) && samePod(context, 'mounted-before', 'mounted-after')
 const learnerObjectsApplied = context => configurationDeploymentReady(context)
-  && (context.project.fileVersions?.['k8s/configmap.yaml'] ?? 0) > 0 && (context.project.fileVersions?.['k8s/secret.yaml'] ?? 0) > 0
+  && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
+const mountedBeforeApplied = context => {
+  const record = evidence(context, 'mounted-before'); const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
+  const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]; const uid = record?.measurements?.selectedPodUid
+  return mountedBeforeObserved(context) && uid && record?.measurements?.body?.displayName === 'Training assistant'
+}
 const commands = lines => ({ steps: lines.map(line => ({ kind: 'command', line })) })
 const support = (id, text, check, solution, verification, dependencies = deps) => ({ id, stageId: 'configure', text, explanation: 'This browser-local exercise uses supplied fictional dependencies and captured Kubernetes configuration.', check, hints: ['Save the edited file before using a command.', 'Inspect the current resource and Pod snapshots before changing configuration.'], solution, examNote: 'Saved source, applied manifests, and Pod snapshots are separate states.', ...(verification ? { dependencies, verification } : {}) })
 
@@ -42,7 +47,7 @@ export const aksConfigGuidedLab = {
     support('baseline', 'Verify the supplied training answer.', configurationDeploymentReady, { steps: [{ kind: 'scenario', scenarioId: 'config-baseline' }] }, { scenarioId: 'config-baseline', scenarioVersion: 1 }, historyDeps),
     support('stale-env', 'Apply APP_ENV=training-updated and observe that running environment remains captured.', staleObserved, { steps: [{ kind: 'file', path: 'k8s/configmap.yaml', content: updatedEnvironment }, { kind: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }, { kind: 'scenario', scenarioId: 'config-stale-env' }] }, { scenarioId: 'config-stale-env', scenarioVersion: 1 }, historyDeps),
     support('env-refresh', 'Restart the Deployment so replacement Pods capture training-updated; final verification follows the file projection.', configurationEnvironmentRefreshed, { steps: [{ kind: 'command', line: 'kubectl rollout restart deployment/assistant -n assistant' }] }, { scenarioId: 'config-env-refresh', scenarioVersion: 1 }),
-    support('mounted-before', 'Apply an updated display_name and record the old mounted file before projection.', mountedBeforeObserved, { steps: [{ kind: 'file', path: 'k8s/configmap.yaml', content: updatedMounted }, { kind: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }, { kind: 'scenario', scenarioId: 'config-mounted-before' }] }, { scenarioId: 'config-mounted-before', scenarioVersion: 1 }, historyDeps),
+    support('mounted-before', 'Apply an updated display_name and record the old mounted file before projection.', mountedBeforeApplied, { steps: [{ kind: 'file', path: 'k8s/configmap.yaml', content: updatedMounted }, { kind: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }, { kind: 'scenario', scenarioId: 'config-mounted-before' }] }, { scenarioId: 'config-mounted-before', scenarioVersion: 1 }, historyDeps),
     support('mounted-after', 'Advance 60 simulated seconds and run both final verifications against the projected mounted settings.', mountedAfterObserved, { steps: [{ kind: 'command', line: 'kubectl get pods -n assistant' }, { kind: 'command', resolver: 'advance-config', line: 'Advance 60 simulated seconds' }, { kind: 'scenario', scenarioId: 'config-env-refresh' }, { kind: 'scenario', scenarioId: 'config-mounted-after' }] }, { scenarioId: 'config-mounted-after', scenarioVersion: 1 }),
   ],
   solutionActionResolvers: { 'advance-config': () => ({ type: 'aks-advance', seconds: 60 }) },
