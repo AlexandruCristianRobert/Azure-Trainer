@@ -90,7 +90,7 @@ export const aksConfigTroubleshootingLab = {
   id: 'aks-config-troubleshooting', title: 'Diagnose AKS configuration incidents',
   brief: `The supplied Knowledge Assistant image is healthy, but its Pods cannot start. The cluster contains assistant-config in namespace decoy while the Deployment requests it in assistant. Inspect the Pending Pod events and the applied objects, repair the saved ConfigMap manifest, apply it, and verify the supplied training answer.\n\nAfter a passing recovery check, use Continue incident to reveal the next controlled fault. One phase removes PGDATABASE and restarts the Deployment. The final phase applies APP_ENV=training-updated without restarting Pods, so the ConfigMap and captured Pod environment disagree. Diagnose each symptom using events and request evidence, and continue only after the current phase is verified.\n\nThis is a browser-local simulation. The image, fictional credentials, PostgreSQL database, documents, vectors and model answers are supplied; no downstream service is provisioned or called.`,
   minutes: 40, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 5,
-  labMode: 'troubleshooting', skillAreaId: 'containers', service: 'aks', status: 'unavailable', manifestId: CONFIG_MANIFEST.id,
+  labMode: 'troubleshooting', skillAreaId: 'containers', service: 'aks', status: 'available', manifestId: CONFIG_MANIFEST.id,
   capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true }, initialProjectFiles: CONFIG_TROUBLESHOOTING_PROJECT_FILES,
   solutionFiles: { ...CONFIG_SOLUTION_FILES, 'k8s/deployment.yaml': deploymentSolution }, initializeSimulation: seedConfigurationTroubleshooting,
   scenarios: {

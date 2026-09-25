@@ -5,8 +5,15 @@ import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { executeAksSolution } from './helpers/aks.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 
 const act = (run, action) => applyRunAction(run, action, aksConfigIndependentLab)
+
+it('routes the configuration topic in order and ends at the current catalog boundary', () => {
+  expect(nextLabFor(labById('aks-config-guided'))?.id).toBe('aks-config-troubleshooting')
+  expect(nextLabFor(labById('aks-config-troubleshooting'))?.id).toBe('aks-config-independent')
+  expect(nextLabFor(aksConfigIndependentLab)).toBeNull()
+})
 
 it('declares five independent configuration tasks with worked Solutions', () => {
   expect(aksConfigIndependentLab.tasks.map(task => task.id)).toEqual([
