@@ -4,9 +4,14 @@ import { probeDependencies } from '../src/lib/kubernetes/probe-experiments.js'
 import { inspectProbes } from '../src/lib/kubernetes/probe-inspection.js'
 import { getServiceBackends } from '../src/lib/kubernetes/services.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { HEALTH_SOLUTION_FILES } from '../src/data/templates/aks-python/health.js'
 import { act, advanceHealth, healthContainer, seedHealthTest } from './helpers/aks.js'
 
 const stateFor = (run, clusterId) => run.runtime.kubernetes.clusters[clusterId]
+const podUidsFor = (run, clusterId) => getDeploymentPods(run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid).sort()
+const evidenceFor = (run, taskId) => run.evidence.experimentsById[run.evidence.currentEvidenceByTask[taskId]]
 
 function start(run, lab, scenarioId = 'coldStartup') {
   return act(run, lab, { type: 'aks-probe-start', scenarioId }).run
@@ -32,6 +37,7 @@ describe('AKS controlled probe experiments and evidence', () => {
     expect(stateFor(active, clusterId).health.experiment).toMatchObject({
       scenarioId: 'coldStartup', status: 'active', startedAtMs: 0, endsAtMs: 30_000,
     })
+    expect(podUidsFor(active, clusterId)).not.toEqual(podUidsFor(run, clusterId))
     expect(run).toEqual(before)
     expect(stateFor(run, clusterId).health.experiment).toBeNull()
   })
@@ -56,10 +62,12 @@ describe('AKS controlled probe experiments and evidence', () => {
     const active = start(run, lab)
     const at20 = advanceHealth(active, lab, 20)
     const inspection20 = inspectProbes(at20, { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' })
-    expect(inspection20.containers.find(item => item.podUid === podUids[0])).toMatchObject({ ready: false,
+    const activePodUids = podUidsFor(active, clusterId)
+    expect(activePodUids).not.toContain(podUids[0])
+    expect(inspection20.containers.find(item => item.podUid === activePodUids[0])).toMatchObject({ ready: false,
       checks: { startup: { failures: 5 }, readiness: null } })
     const at25 = advanceHealth(at20, lab, 5)
-    expect(healthContainer(at25, clusterId, podUids[0])).toMatchObject({ startupPassed: true, ready: true,
+    expect(healthContainer(at25, clusterId, activePodUids[0])).toMatchObject({ startupPassed: true, ready: true,
       checks: { startup: { successes: 1 } } })
     expect(getServiceBackends(at25, lab.scenarios.coldStartup.target).readyEndpoints).toHaveLength(2)
   })
@@ -68,22 +76,34 @@ describe('AKS controlled probe experiments and evidence', () => {
     const seeded = seedHealthTest({ startupSeconds: 0 })
     const warm = advanceHealth(seeded.run, seeded.lab, 1)
     const active = start(warm, seeded.lab, 'temporaryAdmissionClosure')
+    const activePodUids = podUidsFor(active, seeded.clusterId)
+    expect(activePodUids).not.toEqual(seeded.podUids)
     const duringFault = advanceHealth(active, seeded.lab, 9)
-    expect(healthContainer(duringFault, seeded.clusterId, seeded.podUids[0])).toMatchObject({ ready: false, restartCount: 0 })
+    expect(healthContainer(duringFault, seeded.clusterId, activePodUids[0])).toMatchObject({ ready: false, restartCount: 0 })
     expect(getServiceBackends(duringFault, seeded.target).readyEndpoints).toHaveLength(1)
     const recovered = advanceHealth(duringFault, seeded.lab, 16)
-    expect(healthContainer(recovered, seeded.clusterId, seeded.podUids[0])).toMatchObject({ ready: true, restartCount: 0 })
+    expect(healthContainer(recovered, seeded.clusterId, activePodUids[0])).toMatchObject({ ready: true, restartCount: 0 })
     expect(getServiceBackends(recovered, seeded.target).readyEndpoints).toHaveLength(2)
+    const complete = advanceHealth(recovered, seeded.lab, 5)
+    const evidence = evidenceFor(complete, 'probe-temporaryAdmissionClosure')
+    expect(evidence.measurements.samples.map(item => item.second)).toEqual([9, 25])
+    expect(evidence.measurements.samples).toMatchObject([{ readyEndpoints: 1 }, { readyEndpoints: 2 }])
   })
 
   it('runs the process-hang window through liveness timeout and container restart', () => {
     const seeded = seedHealthTest({ startupSeconds: 0 })
     const warm = advanceHealth(seeded.run, seeded.lab, 1)
-    const oldIds = Object.fromEntries(seeded.podUids.map(uid => [uid, healthContainer(warm, seeded.clusterId, uid).containerId]))
+    const oldPodUids = podUidsFor(warm, seeded.clusterId)
     const active = start(warm, seeded.lab, 'processHang')
-    const restarted = advanceHealth(active, seeded.lab, 18)
-    expect(seeded.podUids.some(uid => healthContainer(restarted, seeded.clusterId, uid).restartCount > 0)).toBe(true)
-    expect(seeded.podUids.some(uid => healthContainer(restarted, seeded.clusterId, uid).containerId !== oldIds[uid])).toBe(true)
+    const activePodUids = podUidsFor(active, seeded.clusterId)
+    expect(activePodUids).not.toEqual(oldPodUids)
+    const activeIds = Object.fromEntries(activePodUids.map(uid => [uid, healthContainer(active, seeded.clusterId, uid).containerId]))
+    const persistedAtFaultBoundary = JSON.parse(JSON.stringify(advanceHealth(active, seeded.lab, 6)))
+    expect(persistedAtFaultBoundary.runtime.kubernetes.clusters[seeded.clusterId].health.experiment.status).toBe('active')
+    expect(validateBehavioralRun(persistedAtFaultBoundary, seeded.lab)).toBe(persistedAtFaultBoundary)
+    const restarted = advanceHealth(persistedAtFaultBoundary, seeded.lab, 24)
+    expect(activePodUids.some(uid => healthContainer(restarted, seeded.clusterId, uid).restartCount > 0)).toBe(true)
+    expect(activePodUids.some(uid => healthContainer(restarted, seeded.clusterId, uid).containerId !== activeIds[uid])).toBe(true)
     expect(stateFor(restarted, seeded.clusterId).health.experiment.status).toBe('active')
   })
 
@@ -93,6 +113,7 @@ describe('AKS controlled probe experiments and evidence', () => {
     const complete = advanceHealth(active, seeded.lab, 30)
     expect(stateFor(complete, seeded.clusterId).health.experiment).toBeNull()
     expect(stateFor(complete, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ scenarioId: 'coldStartup', status: 'completed', endedAtMs: 30_000 })
+    expect(evidenceFor(complete, 'probe-coldStartup').outcome).toBe('passed')
     const reloaded = JSON.parse(JSON.stringify(complete))
     expect(inspectProbes(reloaded, seeded.target).receipts.at(-1)).toMatchObject({ status: 'completed', scenarioId: 'coldStartup' })
 
@@ -102,7 +123,7 @@ describe('AKS controlled probe experiments and evidence', () => {
     const before = select(context(reloaded))
     const edited = structuredClone(reloaded)
     const deployment = edited.runtime.kubernetes.clusters[seeded.clusterId].resources['Deployment/assistant/assistant']
-    deployment.spec.template.spec.containers[0].image = 'acraksprobesguided.azurecr.io/assistant:health-v2'
+    deployment.spec.template.spec.containers[0].readinessProbe.httpGet.path = '/health/renamed-ready'
     expect(select(context(edited))).not.toEqual(before)
     expect(reloaded.runtime.kubernetes.clusters[seeded.clusterId].resources['Deployment/assistant/assistant'].spec.template.spec.containers[0].image)
       .toBe('acraksprobesguided.azurecr.io/assistant:health-v1')
@@ -130,6 +151,44 @@ describe('AKS controlled probe experiments and evidence', () => {
     view.timeline[0].kind = 'forged'
     expect(JSON.stringify(during)).toBe(before)
     expect(inspectProbes(during, seeded.target).timeline[0].kind).not.toBe('forged')
+  })
+
+  it('cancels a running experiment when the saved or applied Deployment changes', () => {
+    const seeded = seedHealthTest()
+    const active = start(seeded.run, seeded.lab)
+    const deploymentText = active.project.savedFiles['k8s/deployment.yaml'].replace('/health/ready', '/health/new-ready')
+    const saved = act(active, seeded.lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: deploymentText }).run
+    expect(stateFor(saved, seeded.clusterId).health.experiment).toBeNull()
+    expect(stateFor(saved, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ status: 'cancelled', scenarioId: 'coldStartup' })
+    const second = start(seeded.run, seeded.lab, 'coldStartup')
+    const edited = second.project.savedFiles['k8s/deployment.yaml'].replace('/health/ready', '/health/applied-ready')
+    const draft = act(second, seeded.lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: edited }).run
+    const applied = act(draft, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+    expect(stateFor(applied, seeded.clusterId).health.experiment).toBeNull()
+    expect(stateFor(applied, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('records a completed cold-start experiment as failed when startup never becomes healthy', () => {
+    const files = structuredClone(HEALTH_SOLUTION_FILES)
+    files['app.py'] = files['app.py'].replace('200 if initialized() else 503', '503')
+    const seeded = seedHealthTest({ startupSeconds: 0, files })
+    const complete = advanceHealth(start(seeded.run, seeded.lab), seeded.lab, 30)
+    expect(stateFor(complete, seeded.clusterId).health.receipts.at(-1).status).toBe('completed')
+    expect(evidenceFor(complete, 'probe-coldStartup').outcome).toBe('failed')
+  })
+
+  it('does not pass a completed probe experiment when readiness or liveness probes are missing', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0,
+      probeOverrides: { readinessProbe: null, livenessProbe: null } })
+    const complete = advanceHealth(start(seeded.run, seeded.lab), seeded.lab, 30)
+    expect(evidenceFor(complete, 'probe-coldStartup').outcome).toBe('failed')
+  })
+
+  it('does not pass the hang scenario when liveness never reaches its restart threshold', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0,
+      probeOverrides: { livenessProbe: { periodSeconds: 5, timeoutSeconds: 1, failureThreshold: 30 } } })
+    const complete = advanceHealth(start(seeded.run, seeded.lab, 'processHang'), seeded.lab, 100)
+    expect(evidenceFor(complete, 'probe-processHang').outcome).toBe('failed')
   })
 })
 
