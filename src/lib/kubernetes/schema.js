@@ -1,8 +1,10 @@
 const allowedKinds = new Set(['Namespace', 'Deployment', 'Service'])
 const namePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+const labelNamePattern = /^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/
+const validDnsName = value => typeof value === 'string' && value.length <= 63 && namePattern.test(value)
 
 function diag(code, value, object, message = undefined) {
-  const source = object?.__sourceLocation
+  const source = object?.sourceLocation
   return { code, message: message ?? `${value ?? 'Kubernetes object'} is not supported.`, path: source?.path ?? '', line: source?.line ?? 1, column: source?.column ?? 1 }
 }
 
@@ -16,20 +18,33 @@ function allowed(value, fields, root) {
 }
 
 function named(value, root, field = 'name') {
-  return typeof value === 'string' && namePattern.test(value)
+  return validDnsName(value)
     ? null : diag('INVALID_NAME', field, root, `${field} must be a lowercase Kubernetes name.`)
 }
 
-function metadata(value, root, namespaced, namespace) {
+function validLabelKey(value) {
+  if (typeof value !== 'string') return false
+  const slash = value.indexOf('/')
+  const prefix = slash < 0 ? null : value.slice(0, slash)
+  const name = slash < 0 ? value : value.slice(slash + 1)
+  if (slash >= 0 && (!prefix || value.indexOf('/', slash + 1) >= 0 || prefix.length > 253)) return false
+  if (prefix && prefix.split('.').some(part => !namePattern.test(part) || part.length > 63)) return false
+  return name.length <= 63 && labelNamePattern.test(name)
+}
+
+function validLabelValue(value) { return typeof value === 'string' && (value === '' || (value.length <= 63 && labelNamePattern.test(value))) }
+function validLabels(labels) { return object(labels) && Object.entries(labels).every(([key, value]) => validLabelKey(key) && validLabelValue(value)) }
+
+function metadata(value, root, namespaced, selectedNamespace) {
   const issue = allowed(value, new Set(['name', 'namespace', 'labels']), root)
   if (issue) return issue
   const nameIssue = named(value?.name, root)
   if (nameIssue) return nameIssue
-  if (value.labels !== undefined && (!object(value.labels) || Object.entries(value.labels).some(([key, label]) => typeof key !== 'string' || typeof label !== 'string'))) {
+  if (value.labels !== undefined && !validLabels(value.labels)) {
     return diag('INVALID_LABELS', 'metadata.labels', root, 'Metadata labels must be string key/value pairs.')
   }
   if (!namespaced && value.namespace !== undefined) return diag('KUBE_CLUSTER_SCOPED', value.name, root, 'Cluster-scoped resources cannot declare metadata.namespace.')
-  if (namespaced && value.namespace !== undefined && value.namespace !== namespace) return diag('KUBE_NAMESPACE_MISMATCH', value.namespace, root, 'Manifest namespace does not match the selected namespace.')
+  if (namespaced && selectedNamespace !== undefined && value.namespace !== undefined && value.namespace !== selectedNamespace) return diag('KUBE_NAMESPACE_MISMATCH', value.namespace, root, 'Manifest namespace does not match the selected namespace.')
   return null
 }
 
@@ -44,8 +59,10 @@ function validateContainer(container, root) {
   const port = container.ports[0]
   issue = allowed(port, new Set(['name', 'containerPort']), root)
   if (issue) return issue
-  issue = named(port?.name, root, 'port name')
-  if (issue) return issue
+  if (port.name !== undefined) {
+    issue = named(port.name, root, 'port name')
+    if (issue) return issue
+  }
   if (!Number.isInteger(port.containerPort) || port.containerPort < 1 || port.containerPort > 65535) return diag('INVALID_CONTAINER_PORT', port?.containerPort, root)
   if (container.env !== undefined) {
     if (!Array.isArray(container.env)) return diag('INVALID_ENV', 'env', root)
@@ -64,11 +81,11 @@ function validateDeployment(value, root) {
   if (issue) return issue
   if (!Number.isInteger(value.spec?.replicas) || value.spec.replicas < 1 || value.spec.replicas > 3) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
   issue = allowed(value.spec.selector, new Set(['matchLabels']), root)
-  if (issue || !object(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_SELECTOR', 'matchLabels', root)
+  if (issue || !validLabels(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_LABELS', 'matchLabels', root)
   issue = allowed(value.spec.template, new Set(['metadata', 'spec']), root)
   if (issue) return issue
   issue = allowed(value.spec.template.metadata, new Set(['labels']), root)
-  if (issue || !object(value.spec.template.metadata?.labels)) return issue ?? diag('INVALID_LABELS', 'template labels', root)
+  if (issue || !validLabels(value.spec.template.metadata?.labels)) return issue ?? diag('INVALID_LABELS', 'template labels', root)
   for (const [key, label] of Object.entries(value.spec.selector.matchLabels)) {
     if (typeof label !== 'string' || value.spec.template.metadata.labels[key] !== label) return diag('KUBE_SELECTOR_MISMATCH', key, root, 'Deployment selector labels must match Pod-template labels.')
   }
@@ -87,7 +104,7 @@ function validateService(value, root, capabilities) {
   let issue = allowed(value.spec, new Set(['type', 'selector', 'ports']), root)
   if (issue) return issue
   if (!['ClusterIP', 'LoadBalancer'].includes(value.spec?.type)) return diag('INVALID_SERVICE_TYPE', value.spec?.type, root)
-  if (!object(value.spec.selector) || !Object.keys(value.spec.selector).length || Object.values(value.spec.selector).some(item => typeof item !== 'string')) return diag('INVALID_SELECTOR', 'selector', root)
+  if (!validLabels(value.spec.selector) || !Object.keys(value.spec.selector).length) return diag('INVALID_LABELS', 'selector', root)
   if (!Array.isArray(value.spec.ports) || value.spec.ports.length !== 1) return diag('INVALID_SERVICE_PORTS', 'ports', root, 'Exactly one Service port is required.')
   const port = value.spec.ports[0]
   issue = allowed(port, new Set(['port', 'targetPort', 'protocol']), root)
@@ -103,18 +120,18 @@ function validateService(value, root, capabilities) {
   return null
 }
 
-export function validateKubernetesObject(input, { namespace, capabilities = {} } = {}) {
-  const root = input
+export function validateKubernetesObject(input, { namespace, capabilities = {}, sourceLocation } = {}) {
+  const root = { sourceLocation }
   if (!object(input)) return { object: null, diagnostics: [diag('INVALID_OBJECT', 'A Kubernetes object is required.', root)] }
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec']), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
   const namespaced = input.kind !== 'Namespace'
-  const resolvedNamespace = namespaced ? namespace : undefined
-  if (namespaced && (typeof resolvedNamespace !== 'string' || !namePattern.test(resolvedNamespace))) return { object: null, diagnostics: [diag('INVALID_NAMESPACE', resolvedNamespace, root)] }
+  const resolvedNamespace = namespaced ? namespace ?? input.metadata?.namespace : undefined
+  if (namespaced && !validDnsName(resolvedNamespace)) return { object: null, diagnostics: [diag('INVALID_NAMESPACE', resolvedNamespace, root)] }
   const expectedVersion = input.kind === 'Deployment' ? 'apps/v1' : 'v1'
   if (input.apiVersion !== expectedVersion) return { object: null, diagnostics: [diag('INVALID_API_VERSION', input.apiVersion, root)] }
-  issue = metadata(input.metadata, root, namespaced, resolvedNamespace)
+  issue = metadata(input.metadata, root, namespaced, namespace)
   if (issue) return { object: null, diagnostics: [issue] }
   if (input.kind === 'Namespace') {
     if (input.spec !== undefined) return { object: null, diagnostics: [diag('UNSUPPORTED_FIELD', 'spec', root)] }

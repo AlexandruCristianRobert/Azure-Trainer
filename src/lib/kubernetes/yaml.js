@@ -57,35 +57,35 @@ function convert(node) {
 }
 
 export function parseKubernetesYaml(text, path) {
-  if (typeof text !== 'string') return { documents: [], diagnostics: [diagnostic('YAML_PARSE', 'Kubernetes YAML must be text.', path)], locations: new Map() }
+  if (typeof text !== 'string') return { documents: [], diagnostics: [diagnostic('YAML_PARSE', 'Kubernetes YAML must be text.', path)], locations: [] }
   const counter = new LineCounter()
   let parsed
   try {
     parsed = parseAllDocuments(text, { lineCounter: counter, uniqueKeys: true, version: '1.2' })
   } catch (error) {
-    return { documents: [], diagnostics: [diagnostic('YAML_PARSE', error.message, path)], locations: new Map() }
+    return { documents: [], diagnostics: [diagnostic('YAML_PARSE', error.message, path)], locations: [] }
   }
-  if (parsed.length > MAX_DOCUMENTS) return { documents: [], diagnostics: [diagnostic('YAML_DOCUMENT_LIMIT', `A YAML file may contain at most ${MAX_DOCUMENTS} documents.`, path)], locations: new Map() }
+  if (parsed.length > MAX_DOCUMENTS) return { documents: [], diagnostics: [diagnostic('YAML_DOCUMENT_LIMIT', `A YAML file may contain at most ${MAX_DOCUMENTS} documents.`, path)], locations: [] }
   const documents = []
-  const locations = new Map()
+  const locations = []
   for (const document of parsed) {
     if (document.errors.length) {
       const error = document.errors[0]
       const point = position(counter, error.pos?.[0])
-      return { documents: [], diagnostics: [diagnostic('YAML_PARSE', error.message, path, point.line, point.column)], locations: new Map() }
+      return { documents: [], diagnostics: [diagnostic('YAML_PARSE', error.message, path, point.line, point.column)], locations: [] }
     }
     if (document.contents == null) continue
     const issue = inspect(document.contents, path, counter)
-    if (issue) return { documents: [], diagnostics: [issue], locations: new Map() }
+    if (issue) return { documents: [], diagnostics: [issue], locations: [] }
     try {
       const value = convert(document.contents)
       if (value === null) continue
       documents.push(value)
       const point = position(counter, document.contents.range?.[0])
-      locations.set(value, { path, line: point.line, column: point.column })
+      locations.push({ path, line: point.line, column: point.column })
     } catch (error) {
       const point = position(counter, document.contents.range?.[0])
-      return { documents: [], diagnostics: [diagnostic('YAML_UNSUPPORTED', error.message, path, point.line, point.column)], locations: new Map() }
+      return { documents: [], diagnostics: [diagnostic('YAML_UNSUPPORTED', error.message, path, point.line, point.column)], locations: [] }
     }
   }
   if (!documents.length) return { documents: [], diagnostics: [diagnostic('NO_MANIFESTS', 'The YAML input contains no Kubernetes manifests.', path)], locations }
