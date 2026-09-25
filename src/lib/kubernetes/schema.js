@@ -139,7 +139,9 @@ function validateDeployment(value, root, configuration) {
         }
       }
     }
+    if ((value.spec.template.spec.containers[0].volumeMounts ?? []).some(mount => !names.has(mount.name))) return diag('INVALID_VOLUME', 'volumeMounts', root, 'Every volumeMount must name a declared volume.')
   }
+  if (value.spec.template.spec.containers[0].volumeMounts?.length && value.spec.template.spec.volumes === undefined) return diag('INVALID_VOLUME', 'volumeMounts', root, 'Every volumeMount must name a declared volume.')
   return null
 }
 
@@ -149,6 +151,10 @@ function validateConfigMap(value, root) {
 }
 
 function validBase64(value) { return typeof value === 'string' && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) }
+function encodeBase64(value) {
+  const bytes = new TextEncoder().encode(value)
+  return btoa(String.fromCharCode(...bytes))
+}
 function validateSecret(value, root) {
   if (value.type !== undefined && value.type !== 'Opaque') return diag('INVALID_SECRET_TYPE', value.type, root, 'Only Opaque Secrets are supported.')
   if (value.data !== undefined && (!object(value.data) || !Object.values(value.data).every(validBase64))) return diag('INVALID_SECRET_DATA', 'data', root, 'Secret data must use valid base64 values.')
@@ -191,6 +197,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
+  if (!['ConfigMap', 'Secret'].includes(input.kind) && ['data', 'type', 'stringData'].some(key => input[key] !== undefined)) return { object: null, diagnostics: [diag('UNSUPPORTED_FIELD', 'data', root)] }
   const namespaced = input.kind !== 'Namespace'
   const resolvedNamespace = namespaced ? namespace ?? input.metadata?.namespace : undefined
   if (namespaced && !validDnsName(resolvedNamespace)) return { object: null, diagnostics: [diag('INVALID_NAMESPACE', resolvedNamespace, root)] }
@@ -207,7 +214,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   else issue = validateService(input, root, capabilities)
   if (issue) return { object: null, diagnostics: [issue] }
   const output = clone(input)
-  if (output.kind === 'Secret') { output.type ??= 'Opaque'; output.data = { ...(output.data ?? {}), ...(output.stringData ? Object.fromEntries(Object.entries(output.stringData).map(([key, value]) => [key, btoa(value)])) : {}) }; delete output.stringData }
+  if (output.kind === 'Secret') { output.type ??= 'Opaque'; output.data = { ...(output.data ?? {}), ...(output.stringData ? Object.fromEntries(Object.entries(output.stringData).map(([key, value]) => [key, encodeBase64(value)])) : {}) }; delete output.stringData }
   if (namespaced && output.metadata.namespace === undefined) output.metadata.namespace = resolvedNamespace
   return { object: output, diagnostics: [] }
 }

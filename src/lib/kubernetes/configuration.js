@@ -3,6 +3,7 @@ import { kubeObjectKey } from './objects.js'
 const clone = value => structuredClone(value)
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const base64 = value => typeof value === 'string' && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+const decodeBase64 = value => new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(value), char => char.charCodeAt(0)))
 
 function diagnostic(code, kind, name, key, mount = false) {
   const label = key ? `${kind} '${name}' key '${key}'` : `${kind} '${name}'`
@@ -16,7 +17,7 @@ function value(resources, namespace, kind, name, key, optional, mount) {
   const raw = resource.data[key]
   if (kind === 'Secret') {
     if (!base64(raw)) return { diagnostic: { code: 'KUBE_SECRET_INVALID_BASE64', kind, name, key, mount, message: `Secret '${name}' has invalid encoded data for key '${key}'.` } }
-    try { return { value: atob(raw), resource } } catch { return { diagnostic: { code: 'KUBE_SECRET_INVALID_BASE64', kind, name, key, mount, message: `Secret '${name}' has invalid encoded data for key '${key}'.` } } }
+    try { return { value: decodeBase64(raw), resource } } catch { return { diagnostic: { code: 'KUBE_SECRET_INVALID_BASE64', kind, name, key, mount, message: `Secret '${name}' has invalid encoded data for key '${key}'.` } } }
   }
   return { value: raw, resource }
 }
@@ -41,7 +42,9 @@ export function resolvePodConfiguration(resources, namespace, podSpec) {
     const volume = volumes.get(mount.name); const source = volume?.configMap ?? volume?.secret
     if (!source) continue
     const kind = volume.configMap ? 'ConfigMap' : 'Secret'
-    const keys = source.items ?? Object.keys(resources[kubeObjectKey(kind, namespace, source.name)]?.data ?? {}).map(key => ({ key, path: key }))
+    const resource = resources[kubeObjectKey(kind, namespace, source.name)]
+    if (!resource) { diagnostics.push(diagnostic(`KUBE_${kind.toUpperCase()}_MISSING`, kind, source.name, undefined, true)); continue }
+    const keys = source.items ?? Object.keys(resource.data ?? {}).map(key => ({ key, path: key }))
     for (const item of keys) {
       const found = value(resources, namespace, kind, source.name, item.key, false, true)
       if (found.diagnostic) { diagnostics.push(found.diagnostic); continue }

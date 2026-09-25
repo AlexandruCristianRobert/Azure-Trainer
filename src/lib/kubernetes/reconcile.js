@@ -21,11 +21,10 @@ function capturePod(run, pod, artifactId) {
   if (!artifactId) return
   const artifact = run.artifacts.buildsById[artifactId]
   if (!artifact) return
-  const c = pod.spec.containers[0]
   const source = run.artifacts.sourceSnapshotsByHash[artifact.sourceHash]
   if (!source) return
   run.runtime.kubernetes.clusters[pod.clusterId].podSnapshots[pod.metadata.uid] = {
-    artifactId, templateHash: hash(pod.template), environment: { ...Object.fromEntries((c.env ?? []).map(x => [x.name, x.value])), ...pod.configuration.environment }, files: { ...clone(source.files), ...pod.configuration.files }, configRefs: pod.configuration.configRefs,
+    artifactId, templateHash: hash(pod.template), environment: { ...pod.configuration.environment }, files: { ...clone(source.files), ...pod.configuration.files }, configRefs: pod.configuration.configRefs,
   }
 }
 
@@ -68,9 +67,12 @@ function retryPendingPod(run, cluster, deployment, pod) {
   const previous = pod.status.containerStatuses?.[0]?.state?.waiting?.reason
   if (reason === previous) return
   if (reason) {
-    pod.status = { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] }
-    addEvent(run.runtime.kubernetes.clusters[cluster.id], reason,
-      `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
+    if (configuration.diagnostics.length && hasKubeletPull(run.sandbox, cluster, container.image) && artifactId) waitingConfiguration(run.runtime.kubernetes.clusters[cluster.id], pod, configuration.diagnostics)
+    else {
+      pod.status = { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] }
+      addEvent(run.runtime.kubernetes.clusters[cluster.id], reason,
+        `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
+    }
   } else {
     pod.status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] }
     capturePod(run, { ...pod, clusterId: cluster.id, template: deployment.spec.template, configuration }, artifactId)
