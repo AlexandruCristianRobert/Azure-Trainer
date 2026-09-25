@@ -18,3 +18,15 @@ it('executes the guided source, build, configuration object and baseline verific
   for (const task of aksConfigGuidedLab.tasks.slice(0, 5)) run = executeAksSolution(run, aksConfigGuidedLab, task)
   expect(evaluateLab(aksConfigGuidedLab, run).tasks.slice(0, 5).every(task => task.done)).toBe(true)
 })
+
+it('requires the stale environment observation even when later configuration is correct', () => {
+  let run = createBehavioralRun(aksConfigGuidedLab, { attemptId: 'skip-observation' })
+  for (const task of aksConfigGuidedLab.tasks.filter(task => task.id !== 'stale-env')) run = executeAksSolution(run, aksConfigGuidedLab, task)
+  expect(evaluateLab(aksConfigGuidedLab, run).isComplete).toBe(false)
+})
+
+it('executes every guided configuration Solution in sequence', () => {
+  let run = createBehavioralRun(aksConfigGuidedLab, { attemptId: 'full-solution' })
+  for (const task of aksConfigGuidedLab.tasks) run = executeAksSolution(run, aksConfigGuidedLab, task)
+  expect(evaluateLab(aksConfigGuidedLab, run).isComplete).toBe(true)
+})

@@ -24,7 +24,7 @@ export function configurationDeploymentReady(context) {
   const artifactId = context.artifacts.publishedTags?.[CONFIG_IMAGE]
   const pods = cluster ? getDeploymentPods({ runtime: context.runtime }, cluster.id, 'assistant', 'assistant') : []
   return !!deployment && !!service && !!config && !!secret && image === CONFIG_IMAGE && !!artifactId && pods.length === 2
-    && pods.every(pod => state.podSnapshots[pod.metadata.uid]?.environment?.APP_ENV === 'training')
+    && pods.every(pod => pod.status?.phase === 'Running' && !!state.podSnapshots[pod.metadata.uid])
 }
 
 export const configurationSolutionFiles = CONFIG_SOLUTION_FILES
