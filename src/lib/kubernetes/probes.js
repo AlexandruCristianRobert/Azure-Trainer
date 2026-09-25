@@ -62,6 +62,13 @@ function syncPodReadiness(pod, container) {
   const conditions = (pod.status.conditions ?? []).filter(item => item.type !== 'Ready' && item.type !== 'ContainersReady')
   const status = container.ready ? 'True' : 'False'
   pod.status.conditions = [...conditions, { type: 'Ready', status }, { type: 'ContainersReady', status }]
+  const state = container.terminatedAtMs !== null
+    ? { terminated: { reason: container.restartReason ?? 'ProbeFailed' } }
+    : container.restartAtMs !== null
+      ? { waiting: { reason: 'CrashLoopBackOff' } }
+      : { running: { startedAtMs: container.startedAtMs } }
+  pod.status.containerStatuses = [{ name: pod.spec.containers[0].name, ready: container.ready, started: container.terminatedAtMs === null && container.restartAtMs === null,
+    restartCount: container.restartCount, state, ...(container.previous ? { lastState: { terminated: { reason: container.previous.reason } } } : {}) }]
 }
 
 export function reconcileHealth(input, lab) {
