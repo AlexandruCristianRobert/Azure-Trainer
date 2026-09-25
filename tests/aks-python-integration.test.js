@@ -22,7 +22,7 @@ describe('explicit Python assistant integration compiler', () => {
 
   it('rejects an active call to an unsupported helper with a source location', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES,
-      'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('embeddings.embed', 'literal_vector') }
+      'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('embedding_client.embed', 'literal_vector') }
     const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py', line: expect.any(Number) }))
   })
@@ -40,6 +40,21 @@ describe('explicit Python assistant integration compiler', () => {
     const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
     expect(result.diagnostics).toEqual([])
     expect(result.appSpec.integration.graph.nodes.filter(node => node.op === 'invoke' && node.method === 'embed')).toHaveLength(2)
+  })
+
+  it('keeps authored deployment bindings and hardcoded sources distinguishable', () => {
+    const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': INTEGRATION_SOLUTION_FILES['app.py']
+      .replace('cfg["answer_deployment"]', 'cfg["embedding_deployment"]')
+      .replace('[row["id"] for row in rows]', '["hardcoded"]') }
+    const graph = parsePythonIntegration(files, INTEGRATION_MANIFEST).appSpec.integration.graph
+    expect(graph.nodes.some(node => node.op === 'config' && node.key === 'embedding_deployment')).toBe(true)
+    expect(graph.nodes.some(node => node.op === 'source-ids')).toBe(false)
+    expect(graph.nodes.some(node => node.op === 'literal' && Array.isArray(node.value) && node.value[0] === 'hardcoded')).toBe(true)
+  })
+
+  it('links the dependency exception path and settings environment descriptors', () => {
+    const graph = parsePythonIntegration(INTEGRATION_SOLUTION_FILES, INTEGRATION_MANIFEST).appSpec.integration.graph
+    expect(graph.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'catch', attempt: expect.any(Array), body: expect.any(Array) }), expect.objectContaining({ op: 'config', environment: 'ANSWER_DEPLOYMENT' })]))
   })
 
   it('includes saved retrieval SQL in the immutable image snapshot', () => {
