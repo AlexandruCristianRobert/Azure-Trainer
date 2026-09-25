@@ -268,6 +268,12 @@ function validHistoricalConnectivityLog(log, request, run, state) {
   if (!isPlainObject(request) || !isPlainObject(request.route) || !['aks-connectivity-guided', CONNECTIVITY_TROUBLESHOOTING_LAB_ID, 'aks-connectivity-independent'].includes(run.labId)
     || request.route?.podUid !== log.podUid || request.route?.podName !== log.podName
     || request.route?.namespace !== log.namespace || request.route?.artifactId !== log.artifactId) return false
+  if (request.scenarioId === null) {
+    const origin = request.origin
+    const diagnostic = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === origin?.podUid)
+    return origin?.kind === 'pod' && typeof origin.clusterId === 'string' && state.connectivity?.diagnosticPodUids.includes(origin.podUid)
+      && validDiagnosticPod(diagnostic, origin.clusterId) && request.status === log.status
+  }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence
     && evidence.measurements?.route?.podUid === log.podUid && evidence.measurements?.artifactId === log.artifactId

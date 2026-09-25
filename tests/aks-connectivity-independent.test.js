@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { aksConnectivityIndependentLab } from '../src/data/labs/aks-journey/connectivity-independent.lab.js'
-import { createBehavioralRun } from '../src/lib/labEngine/run.js'
+import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { executeAksSolution, act } from './helpers/aks.js'
@@ -127,5 +127,17 @@ describe('independent AKS connectivity Lab', () => {
     expect(resolveServiceDns(twoClusters, { clusterId: firstId, clientNamespace: 'primary', hostname: 'assistant-internal' }).serviceKey).toBe('Service/primary/assistant-internal')
     expect(resolveServiceDns(twoClusters, { clusterId: secondId, clientNamespace: 'primary', hostname: 'assistant-internal' }).serviceKey).toBe('Service/primary/assistant-internal')
     expect(twoClusters.runtime.kubernetes.clusters[firstId].resources['Service/primary/assistant-internal'].metadata.uid).not.toBe('second-service')
+  })
+
+  it('retains a real diagnostic CLI request through replacement but rejects a missing correlated request', () => {
+    let run = createBehavioralRun(aksConnectivityIndependentLab, { attemptId: 'cli-history' })
+    run = act(run, aksConnectivityIndependentLab, { type: 'command', line: 'kubectl exec diagnostics -n diagnostics -- curl -sS http://assistant-internal.primary:8080/api/info' }).run
+    const clusterId = run.sandbox.aksClusters[0].id
+    const log = run.runtime.kubernetes.clusters[clusterId].connectivity.applicationLogs[0]
+    run = act(run, aksConnectivityIndependentLab, { type: 'command', line: 'kubectl rollout restart deployment/assistant -n primary' }).run
+    expect(validateBehavioralRun(run, aksConnectivityIndependentLab)).toBe(run)
+    const forged = structuredClone(run)
+    forged.runtime.kubernetes.requests = forged.runtime.kubernetes.requests.filter(request => request.id !== log.requestId)
+    expect(() => validateBehavioralRun(forged, aksConnectivityIndependentLab)).toThrow()
   })
 })
