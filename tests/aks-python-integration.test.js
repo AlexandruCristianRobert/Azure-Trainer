@@ -57,6 +57,15 @@ describe('explicit Python assistant integration compiler', () => {
     expect(graph.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'catch', attempt: expect.any(Array), body: expect.any(Array) }), expect.objectContaining({ op: 'config', environment: 'ANSWER_DEPLOYMENT' })]))
   })
 
+  it('preserves incorrect context and source row selectors in the graph', () => {
+    const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': INTEGRATION_SOLUTION_FILES['app.py']
+      .replace('"content": row["content"]', '"content": row["id"]')
+      .replace('[row["id"] for row in rows]', '[row["content"] for row in rows]') }
+    const graph = parsePythonIntegration(files, INTEGRATION_MANIFEST).appSpec.integration.graph
+    expect(graph.nodes).toContainEqual(expect.objectContaining({ op: 'context-rows', fields: { id: 'id', content: 'id' } }))
+    expect(graph.nodes).toContainEqual(expect.objectContaining({ op: 'source-ids', field: 'content' }))
+  })
+
   it('includes saved retrieval SQL in the immutable image snapshot', () => {
     const run = { nextSequence: 1, project: { manifestId: INTEGRATION_MANIFEST.id, savedFiles: INTEGRATION_SOLUTION_FILES }, artifacts: {} }
     const first = buildImage(run, { registryId: 'acr', loginServer: 'aksintegration.azurecr.io', image: 'assistant:v1' })
