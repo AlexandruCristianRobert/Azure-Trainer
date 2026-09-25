@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { aksAiTroubleshootingLab } from '../src/data/labs/aks-journey/ai-troubleshooting.lab.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { executeAksSolution } from './helpers/aks.js'
 
 describe('AKS AI troubleshooting Lab', () => {
+  it('registers after the guided assistant Lab', () => {
+    expect(labById('aks-ai-troubleshooting')).toBe(aksAiTroubleshootingLab)
+    expect(nextLabFor(labById('aks-ai-guided'))).toBe(aksAiTroubleshootingLab)
+  })
+
   it('cannot skip the embedding-deployment observation by advancing the incident', () => {
     const run = createBehavioralRun(aksAiTroubleshootingLab, { attemptId: 'ai-incident' })
     const result = applyRunAction(run, { type: 'aks-integration-next-incident' }, aksAiTroubleshootingLab)
