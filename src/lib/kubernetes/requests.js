@@ -104,6 +104,11 @@ export function simulateKubernetesRequest(run, scenario) {
     requiredReplicas: scenario.requireTwoReplicas ? 2 : 1, replacementProven, replacementReceipts,
     diagnosticCode: issue?.code ?? null, request: { ...scenario.request }, dependencyTrace: scenario.dependencyTrace ?? [], simulated: true }
   const snapshot = selected[0] && cluster.podSnapshots[selected[0].metadata.uid]
+  const mountedConfigMismatch = !!snapshot?.configRefs?.some(item => item.mode === 'file' && item.kind === 'ConfigMap'
+    && resources[`ConfigMap/${item.namespace}/${item.name}`]?.data?.[item.key] !== snapshot.files?.[item.target])
+  measurement.projectionPending = !!selected[0] && Number.isFinite(cluster.projectionDue?.[selected[0].metadata.uid])
+    && cluster.projectionDue[selected[0].metadata.uid] > run.runtime.simTimeMs
+  measurement.mountedConfigMismatch = mountedConfigMismatch
   const currentConfig = Object.fromEntries((snapshot?.configRefs ?? []).filter(item => item.mode === 'env').flatMap(item => {
     const resource = resources[`${item.kind}/${item.namespace}/${item.name}`]
     const raw = resource?.data?.[item.key]

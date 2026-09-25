@@ -58,3 +58,14 @@ it('requires the published image to match current source and all configuration r
   run = act(run, aksConfigGuidedLab, { type: 'save-file', path: 'app.py', text: `${run.project.savedFiles['app.py']}\n# changed source\n` }).run
   expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'image').done).toBe(false)
 })
+
+it('requires an actual pending file projection for the mounted-before observation', () => {
+  let run = createBehavioralRun(aksConfigGuidedLab, { attemptId: 'projection-required' })
+  for (const task of aksConfigGuidedLab.tasks.slice(0, 7)) run = executeAksSolution(run, aksConfigGuidedLab, task)
+  run = act(run, aksConfigGuidedLab, { type: 'aks-request', scenarioId: 'config-mounted-before' }).run
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'mounted-before').done).toBe(false)
+  run = executeAksSolution(run, aksConfigGuidedLab, aksConfigGuidedLab.tasks.find(task => task.id === 'mounted-before'))
+  const record = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['mounted-before']]
+  expect(record.measurements).toMatchObject({ projectionPending: true, mountedConfigMismatch: true })
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'mounted-before').done).toBe(true)
+})

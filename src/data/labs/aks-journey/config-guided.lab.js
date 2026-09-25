@@ -55,9 +55,9 @@ const learnerObjectsApplied = context => {
     && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
 }
 const mountedBeforeApplied = context => {
-  const record = evidence(context, 'mounted-before'); const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
-  const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]; const uid = record?.measurements?.selectedPodUid
-  return mountedBeforeObserved(context) && uid && record?.measurements?.body?.displayName === 'Training assistant'
+  const record = evidence(context, 'mounted-before')
+  return mountedBeforeObserved(context) && !!record?.measurements?.selectedPodUid
+    && record.measurements.projectionPending === true && record.measurements.mountedConfigMismatch === true
 }
 const commands = lines => ({ steps: lines.map(line => ({ kind: 'command', line })) })
 const teaching = {
