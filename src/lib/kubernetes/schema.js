@@ -114,8 +114,10 @@ function validateService(value, root, capabilities) {
   if (!(Number.isInteger(port.targetPort) && port.targetPort >= 1 && port.targetPort <= 65535) && typeof port.targetPort !== 'string') return diag('INVALID_TARGET_PORT', port.targetPort, root)
   if (typeof port.targetPort === 'string' && Array.isArray(capabilities?.deployments)) {
     const deployment = matchingDeployment(capabilities.deployments, value)
-    const ports = deployment?.spec?.template?.spec?.containers?.[0]?.ports ?? []
-    if (!ports.some(item => item.name === port.targetPort)) return diag('KUBE_TARGET_PORT_NOT_FOUND', port.targetPort, root, 'Service targetPort does not match a selected named container port.')
+    if (deployment) {
+      const ports = deployment.spec?.template?.spec?.containers?.[0]?.ports ?? []
+      if (!ports.some(item => item.name === port.targetPort)) return diag('KUBE_TARGET_PORT_NOT_FOUND', port.targetPort, root, 'Service targetPort does not match a selected named container port.')
+    }
   }
   return null
 }

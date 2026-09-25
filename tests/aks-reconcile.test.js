@@ -156,3 +156,14 @@ it('allows an effective Deployment update when immutable selector keys are reord
   expect(cluster(reordered.run, clusterId).resources['Deployment/assistant/assistant'].spec.replicas).toBe(1)
   expect(cluster(reordered.run, clusterId).resources['Deployment/assistant/assistant'].metadata.generation).toBe(beforeGeneration + 1)
 })
+
+it('allows a named Service targetPort when no matching Deployment exists', () => {
+  const { run, lab, clusterId } = seedFoundation()
+  const result = applyKubernetesObjects(run, [{
+    apiVersion: 'v1', kind: 'Service',
+    metadata: { name: 'standalone', namespace: 'assistant' },
+    spec: { type: 'ClusterIP', selector: { app: 'unmatched' }, ports: [{ port: 80, targetPort: 'http', protocol: 'TCP' }] },
+  }], { clusterId }, lab)
+  expect(result.diagnostics).toEqual([])
+  expect(result.run.runtime.kubernetes.clusters[clusterId].resources['Service/assistant/standalone']).toBeTruthy()
+})

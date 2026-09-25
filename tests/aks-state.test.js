@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { migrateBehavioralRun } from '../src/lib/labEngine/migrations.js'
 import { emptyKubernetesRuntime } from '../src/lib/kubernetes/state.js'
-import { createAksTestRun, act } from './helpers/aks.js'
+import { createAksTestRun, seedFoundation, act } from './helpers/aks.js'
 
 it('initializes versioned Kubernetes state only for Kubernetes Labs', () => {
   const { lab, run } = createAksTestRun()
@@ -79,4 +79,13 @@ it('rejects persisted Kubernetes resources with unknown kinds or missing namespa
     apiVersion: 'v1', kind: 'Service', metadata: { name: 'example', namespace: 'absent', uid: 'forged-2', resourceVersion: '1' }, spec: {},
   }
   expect(() => validateBehavioralRun(missingNamespace, lab)).toThrow(/Kubernetes/)
+})
+
+it('accepts a structurally valid Service after its Deployment is deleted', () => {
+  let { lab, run, clusterId } = seedFoundation()
+  run = act(run, lab, { type: 'command', line: 'kubectl delete deployment assistant -n assistant' }).run
+  const resources = run.runtime.kubernetes.clusters[clusterId].resources
+  expect(resources['Service/assistant/assistant']).toBeTruthy()
+  expect(resources['Deployment/assistant/assistant']).toBeUndefined()
+  expect(validateBehavioralRun(run, lab)).toBe(run)
 })
