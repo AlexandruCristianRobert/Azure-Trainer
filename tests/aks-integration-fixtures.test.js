@@ -13,4 +13,14 @@ describe('AKS integration fixture catalogue', () => {
     expect(INTEGRATION_FIXTURES.questions['How long are backups kept?'].answers['training-backups']).toBe('Training backups are kept for 30 days.')
     expect(Object.isFrozen(INTEGRATION_FIXTURES.documents['00-review-employee'].embedding)).toBe(true)
   })
+
+  it('declares immutable request-local stage scripts for all dependency scenarios', () => {
+    const scripts = INTEGRATION_FIXTURES.scenarioProfiles
+    expect(Object.keys(scripts)).toEqual(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
+    expect(scripts['embedding-throttle-once'].stages.embedding).toEqual([
+      { latencyMs: 40, code: 'THROTTLED', retryAfterMs: 150 }, { latencyMs: 40, result: 'success' },
+    ])
+    expect(scripts['answer-unavailable-always'].stages.answer).toEqual(Array(3).fill({ latencyMs: 50, code: 'UNAVAILABLE' }))
+    expect(Object.isFrozen(scripts['healthy'].stages.embedding[0])).toBe(true)
+  })
 })
