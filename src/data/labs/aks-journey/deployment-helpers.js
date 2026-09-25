@@ -148,13 +148,13 @@ export function troubleshootingContextReady(context) {
 }
 
 export function troubleshootingPublishedImageReady(context) {
-  const cluster = troubleshootingCluster(context)
   const registry = context.sandbox.containerRegistries?.find(item => troubleshootingSame(item.name, TROUBLESHOOTING_REGISTRY)
     && troubleshootingSame(item.resourceGroup, TROUBLESHOOTING_GROUP))
   const artifactId = context.artifacts.publishedTags?.[TROUBLESHOOTING_IMAGE.toLowerCase()]
-  const deployment = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]?.resources['Deployment/assistant/assistant']
+  const parsed = parseKubernetesYaml(context.project.savedFiles['k8s/deployment.yaml'] ?? '', 'k8s/deployment.yaml')
+  const image = parsed.documents?.[0]?.spec?.template?.spec?.containers?.[0]?.image
   return !!registry && !!artifactId && context.artifacts.buildsById?.[artifactId]?.image?.registryId === registry.id
-    && deployment?.spec?.template?.spec?.containers?.[0]?.image?.toLowerCase() === TROUBLESHOOTING_IMAGE.toLowerCase()
+    && !parsed.diagnostics.length && image?.toLowerCase() === TROUBLESHOOTING_IMAGE.toLowerCase()
 }
 
 export function troubleshootingRegistryAccessReady(context) {

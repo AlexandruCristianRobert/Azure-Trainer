@@ -18,7 +18,7 @@ const file = path => ({ kind: 'file', path, content: troubleshootingSolutionFile
 export const aksDeployTroubleshootingLab = {
   id: 'aks-deploy-troubleshooting', title: 'Recover an AKS deployment incident', status: 'draft',
   skillAreaId: 'containers', service: 'aks', minutes: 30,
-  brief: 'The assistant was applied in the staging namespace, cannot pull its image, and names a tag that was never published. Inspect the context, manifests and events, then recover the intended assistant deployment without leaving the accidental staging workload behind.',
+  brief: 'The assistant does not respond at its expected endpoint, and its Pods show image-related events. Inspect the current context, manifests, events and registry artifacts, then recover the intended deployment and remove the unintended workload.',
   engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 2, labMode: 'troubleshooting',
   manifestId: FOUNDATION_MANIFEST.id, capabilities: { acrBuild: true, kubernetes: true },
   initialProjectFiles: troubleshootingInitialFiles, solutionFiles: troubleshootingSolutionFiles, initializeSimulation: seedDeploymentTroubleshooting,
@@ -55,6 +55,6 @@ export const aksDeployTroubleshootingLab = {
       hints: ['Remove the staging Deployment and Service explicitly, then inspect Pods and Service endpoints in assistant.', 'Use the declared troubleshooting recovery request after both assistant Pods are running.'],
       solution: { steps: [...[
         'kubectl delete deployment assistant -n staging', 'kubectl delete service assistant -n staging',
-      ].map(line => ({ kind: 'command', line })), { kind: 'scenario', scenarioId: 'troubleshooting-recovery' }] }, examNote: 'A recovery request must prove the intended cluster, namespace, Service and current Pods; an unrelated successful endpoint is not evidence.' },
+      ].map(line => ({ kind: 'command', line })), { kind: 'scenario', scenarioId: 'troubleshooting-recovery', instruction: 'Send the troubleshooting recovery request and confirm the two-Pod assistant response.' }] }, examNote: 'A recovery request must prove the intended cluster, namespace, Service and current Pods; an unrelated successful endpoint is not evidence.' },
   ],
 }

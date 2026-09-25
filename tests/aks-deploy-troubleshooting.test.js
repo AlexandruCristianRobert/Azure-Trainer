@@ -12,6 +12,13 @@ function executeAll(run, { skip = [] } = {}) {
 }
 
 describe('AKS deployment troubleshooting Lab', () => {
+  it('describes observable symptoms without giving away the diagnosis and labels its recovery request', () => {
+    expect(aksDeployTroubleshootingLab.brief).not.toMatch(/staging|missing tag|pull failure/i)
+    const recovery = aksDeployTroubleshootingLab.tasks.find(task => task.id === 'recovery')
+    expect(recovery.solution.steps.at(-1)).toMatchObject({ kind: 'scenario', scenarioId: 'troubleshooting-recovery' })
+    expect(recovery.solution.steps.at(-1).instruction).toMatch(/recovery|request|response/i)
+  })
+
   it('seeds the staging-context incident without learner credit', () => {
     const run = createBehavioralRun(aksDeployTroubleshootingLab, { attemptId: 'incident' })
     const cluster = run.sandbox.aksClusters.find(item => item.name === 'aks-troubleshooting')
@@ -32,6 +39,15 @@ describe('AKS deployment troubleshooting Lab', () => {
     expect(evaluateLab(aksDeployTroubleshootingLab, run).isComplete).toBe(false)
     expect(Object.values(run.runtime.kubernetes.clusters).flatMap(cluster => cluster.events)
       .some(event => ['RegistryAccessDenied', 'ImageNotFound'].includes(event.reason))).toBe(true)
+  })
+
+  it('records the selected published image in saved YAML before the target Deployment is applied', () => {
+    let run = createBehavioralRun(aksDeployTroubleshootingLab, { attemptId: 'published-image' })
+    const task = aksDeployTroubleshootingLab.tasks.find(item => item.id === 'published-image')
+    run = executeAksSolution(run, aksDeployTroubleshootingLab, task)
+    expect(evaluateLab(aksDeployTroubleshootingLab, run).tasks.find(item => item.id === 'published-image').done).toBe(true)
+    const cluster = run.sandbox.aksClusters.find(item => item.name === 'aks-troubleshooting')
+    expect(run.runtime.kubernetes.clusters[cluster.id].resources['Deployment/assistant/assistant']).toBeUndefined()
   })
 
   it('completes the authored recovery after all independent repairs and an observed request', () => {
