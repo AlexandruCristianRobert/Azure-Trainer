@@ -123,7 +123,7 @@ export function routeServiceRequest(input, probe, lab) {
       backends = getServiceBackends(run, { clusterId: probe.origin.clusterId, namespace: service.metadata.namespace, serviceName: service.metadata.name })
       const selectedCount = backends.selectedPods.length
       const withUnresolvedPort = selectedCount > backends.endpoints.length
-      outcome.route = { serviceName: service.metadata.name, serviceUid: service.metadata.uid, clusterIP: service.spec.clusterIP, externalIP: service.status?.loadBalancer?.ingress?.[0]?.ip ?? null,
+      outcome.route = { serviceName: service.metadata.name, namespace: service.metadata.namespace, serviceUid: service.metadata.uid, clusterIP: service.spec.clusterIP, externalIP: service.status?.loadBalancer?.ingress?.[0]?.ip ?? null,
         selectedCount, endpointUids: backends.endpoints.map(item => item.podUid), readyEndpointUids: backends.readyEndpoints.map(item => item.podUid) }
       if (withUnresolvedPort && !backends.readyEndpoints.length) outcome.transport.reason = 'NAMED_PORT_UNRESOLVED'
       else if (!backends.readyEndpoints.length) outcome.transport.reason = 'NO_READY_ENDPOINTS'

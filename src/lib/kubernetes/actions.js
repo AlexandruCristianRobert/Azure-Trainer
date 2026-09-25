@@ -4,6 +4,17 @@ import { refreshKubernetesDependencies } from './evidence.js'
 import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
 
+function validConnectivityExpected(expected) {
+  if (!expected || Object.keys(expected).some(key => !['status', 'body', 'transport', 'route'].includes(key))
+    || !Object.hasOwn(expected, 'status') || !Object.hasOwn(expected, 'body') || !isJsonValue(expected.body)
+    || !(Number.isInteger(expected.status) || expected.status === null)) return false
+  if (expected.status === null && (!expected.transport || expected.transport.ok !== false)) return false
+  if (expected.transport && (!isJsonValue(expected.transport) || Object.keys(expected.transport).sort().join(',') !== 'ok,reason'
+    || typeof expected.transport.ok !== 'boolean' || (expected.transport.reason !== null && typeof expected.transport.reason !== 'string'))) return false
+  return !expected.route || isJsonValue(expected.route) && Object.keys(expected.route).every(key => key === 'selectedCount')
+    && Number.isInteger(expected.route.selectedCount) && expected.route.selectedCount >= 0
+}
+
 export function applyAksAction(run, action, lab) {
   if (action.type === 'aks-advance') {
     if (Object.keys(action).some(key => !['type', 'seconds'].includes(key)) || lab?.capabilities?.kubernetesConfiguration !== true || !Number.isInteger(action.seconds) || action.seconds < 1 || action.seconds > 300) {
@@ -22,8 +33,9 @@ export function applyAksAction(run, action, lab) {
     || [target.clusterId, target.deploymentName, target.namespace, target.serviceName].some(value => typeof value !== 'string' || !value)
     || !request || !['GET', 'POST'].includes(request.method) || (request.method === 'GET' && (Object.keys(request).sort().join(',') !== 'method,path' || request.path !== '/api/info'))
     || (request.method === 'POST' && (request.path !== '/api/ask' || !isJsonValue(request.body) || Object.keys(request).some(key => !['method', 'path', 'body'].includes(key))))
-    || !expected || !Number.isInteger(expected.status)
-    || !isJsonValue(expected.body) || scenario.requireReplacement !== undefined && typeof scenario.requireReplacement !== 'boolean'
+    || !expected || (scenario.connectivity !== undefined ? !validConnectivityExpected(expected)
+      : Object.keys(expected).sort().join(',') !== 'body,status' || !Number.isInteger(expected.status) || !isJsonValue(expected.body))
+    || scenario.requireReplacement !== undefined && typeof scenario.requireReplacement !== 'boolean'
     || scenario.requireTwoReplicas !== undefined && typeof scenario.requireTwoReplicas !== 'boolean')
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'The declared AKS request scenario is invalid.' }] }
   if (lab?.capabilities?.kubernetesConnectivity === true && scenario.connectivity !== undefined) {

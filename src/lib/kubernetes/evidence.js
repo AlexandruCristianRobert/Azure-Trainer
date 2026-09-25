@@ -1,5 +1,6 @@
 import { canonicalize } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
+import { parseKubernetesYaml } from './yaml.js'
 
 export function kubernetesDependencies(clusterId, namespace, deploymentName, serviceName, { sourceSensitive = false } = {}) {
   const base = context => {
@@ -54,9 +55,11 @@ export function connectivityDependencies(target, { historical = false } = {}) {
   if (historical) return {
     [`aks-connectivity-history:${clusterId}:${namespace}:${serviceName}`]: context => {
       const state = context.runtime.kubernetes?.clusters?.[clusterId]
-      const service = state?.resources?.[`Service/${namespace}/${serviceName}`]
       const deployment = Object.values(state?.resources ?? {}).find(item => item.kind === 'Deployment' && item.metadata.namespace === namespace && item.metadata.name === 'assistant')
-      return { clusterId, serviceUid: service?.metadata?.uid ?? null, deploymentUid: deployment?.metadata?.uid ?? null }
+      const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
+      const artifactId = image ? context.artifacts.publishedTags[image] ?? null : null
+      return { clusterId, deploymentUid: deployment?.metadata?.uid ?? null, artifactId,
+        sourceHash: artifactId ? context.artifacts.buildsById[artifactId]?.sourceHash ?? null : null }
     },
   }
   return {
@@ -69,8 +72,12 @@ export function connectivityDependencies(target, { historical = false } = {}) {
           ready: !!pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'),
           podIP: pod.status?.podIP ?? null, snapshot: state?.podSnapshots?.[pod.metadata.uid] ?? null }))
         .sort((a, b) => a.uid.localeCompare(b.uid))
-      const savedServiceFiles = Object.fromEntries(Object.entries(context.project.savedFiles).filter(([path, text]) =>
-        /^k8s\/service[^/]*\.ya?ml$/i.test(path) && typeof text === 'string' && text.includes(`name: ${serviceName}`)))
+      const savedServiceFiles = Object.fromEntries(Object.entries(context.project.savedFiles).flatMap(([path, text]) => {
+        if (!/^k8s\/service[^/]*\.ya?ml$/i.test(path)) return []
+        const parsed = parseKubernetesYaml(text, path)
+        return parsed.diagnostics.length === 0 && parsed.documents.some(document => document?.kind === 'Service'
+          && document.metadata?.name === serviceName && (document.metadata?.namespace ?? namespace) === namespace) ? [[path, text]] : []
+      }))
       const diagnostic = clientPodUid ? Object.values(resources).find(item => item.kind === 'Pod' && item.metadata.uid === clientPodUid) ?? null : null
       const result = { clusterId, service, pods, diagnostic, savedServiceFiles,
         configuration: Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata.namespace === namespace)

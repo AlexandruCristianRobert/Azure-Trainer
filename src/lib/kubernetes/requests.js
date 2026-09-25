@@ -189,8 +189,19 @@ function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
   }
   const outcome = routed.outcome
   const expectedTransport = scenario.expected.transport ?? { ok: true, reason: null }
+  const intended = state.resources[`Service/${scenario.target.namespace}/${scenario.target.serviceName}`]
+  const declaredRoute = !!intended && outcome.route.serviceUid === intended.metadata.uid
+    && outcome.route.serviceName === scenario.target.serviceName && outcome.route.namespace === scenario.target.namespace
+  const failurePattern = expectedTransport.ok ? true
+    : expectedTransport.reason === 'NO_READY_ENDPOINTS' ? outcome.route.selectedCount === 0
+      : expectedTransport.reason === 'CONNECTION_REFUSED' ? (outcome.route.readyEndpointUids?.length ?? 0) > 0
+        : true
+  const dependencyPattern = outcome.status !== 503 ? true : !!outcome.route.podUid
+    && outcome.dependencyTrace[0]?.operation === 'embedding' && outcome.dependencyTrace[0]?.status === 'succeeded'
+    && outcome.dependencyTrace.some(item => item.operation === 'postgres-query' && item.status === 'failed')
   const matches = outcome.status === scenario.expected.status && canonicalize(outcome.body) === canonicalize(scenario.expected.body)
-    && canonicalize(outcome.transport) === canonicalize(expectedTransport) && (!scenario.expected.route || Object.entries(scenario.expected.route).every(([key, value]) => canonicalize(outcome.route[key]) === canonicalize(value)))
+    && canonicalize(outcome.transport) === canonicalize(expectedTransport) && declaredRoute && failurePattern && dependencyPattern
+    && (!scenario.expected.route || Object.entries(scenario.expected.route).every(([key, value]) => canonicalize(outcome.route[key]) === canonicalize(value)))
   const clusterId = scenario.target.clusterId
   const measurements = { status: outcome.status, body: outcome.body, requestSequence: run.nextSequence, clusterId,
     namespace: outcome.route.namespace ?? scenario.target.namespace, serviceName: outcome.route.serviceName ?? scenario.target.serviceName,
