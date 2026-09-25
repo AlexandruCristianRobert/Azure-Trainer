@@ -6,6 +6,7 @@ import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
 import { inspectIntegrationRequests } from '../../lib/kubernetes/integration-inspection.js'
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
+import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
@@ -44,6 +45,9 @@ const configurationEvents = computed(() => configCapable.value
   : [])
 const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIntegration === true
   ? inspectIntegrationRequests(run.behavioralRun, run.lab, cluster.value?.id) : [])
+const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === true && cluster.value
+  ? inspectProbes(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value,
+    deploymentName: 'assistant', serviceName: 'assistant-internal' }) : null)
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -83,6 +87,14 @@ const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIn
       <p>Read-only summaries show the latest request for each declared scenario. Request timing is separate from simulated cluster time.</p>
       <EntityTable :columns="[{ key: 'question', label: 'Declared question', grow: 2 }, { key: 'profile', label: 'Fixture profile' }, { key: 'status', label: 'HTTP' }, { key: 'elapsedMs', label: 'Request ms' }, { key: 'operations', label: 'Reached operations', grow: 2 }]" :rows="integrationRequests" empty-text="No assistant integration requests have been recorded" />
     </section>
+    <section v-if="probeView" class="aks-probe-inspection" aria-label="Read-only health probe inspection">
+      <h3 class="blade__section-title">Health probe state</h3>
+      <p>Read-only container state and scheduled checks. A Pod can be Running and still be unready for Service traffic.</p>
+      <p v-if="probeView.experiment">Experiment {{ probeView.experiment.scenarioId }}: {{ probeView.experiment.phase ?? probeView.experiment.status ?? 'active' }}</p>
+      <div class="aks-probe-inspection__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Container</th><th scope="col">Ready</th><th scope="col">Restarts</th><th scope="col">Startup</th><th scope="col">Readiness</th><th scope="col">Liveness</th></tr></thead><tbody>
+        <tr v-for="item in probeView.containers.filter(item => namespacePods.some(pod => pod.metadata.uid === item.podUid))" :key="item.podUid"><th scope="row">{{ item.podName }}</th><td>{{ item.containerId }}</td><td>{{ item.ready ? 'Ready' : 'Not ready' }}</td><td>{{ item.restartCount }}</td><td v-for="type in ['startup', 'readiness', 'liveness']" :key="type">{{ item.checks[type] ? `${item.checks[type].successes} successes / ${item.checks[type].failures} failures` : 'Not configured' }}</td></tr>
+      </tbody></table></div>
+    </section>
     </div>
     <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">
       <h3 class="blade__section-title">Services and selected backends</h3>
@@ -103,6 +115,10 @@ const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIn
 </div></section></template>
 
 <style scoped>
+.aks-probe-inspection { margin: 22px 0; }
+.aks-probe-inspection__table { overflow-x: auto; }
+.aks-probe-inspection__table table { width: 100%; min-width: 700px; border-collapse: collapse; text-align: left; }
+.aks-probe-inspection__table th, .aks-probe-inspection__table td { padding: 8px; border-bottom: 1px solid var(--border); }
 .aks-config-inspection { margin: 22px 0; padding: 16px; border-left: 3px solid var(--accent); background: var(--surface-subtle, var(--surface)); }
 .aks-ai-inspection { margin: 22px 0; }
 .aks-ai-inspection > p { max-width: 70ch; color: var(--text-2); line-height: 1.5; }

@@ -5,6 +5,7 @@ import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
 import { configIncidentEvidenceForPhase, isConfigIncidentFileDraftClean, CONFIG_INCIDENT_PHASES } from '../../lib/kubernetes/config-incidents.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
 import { inspectIntegration, INTEGRATION_PROFILE_LABELS } from '../../lib/kubernetes/integration-inspection.js'
+import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
@@ -13,6 +14,11 @@ const run = useLabRunStore()
 const choice = ref('')
 const error = ref('')
 const scenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-request'))
+const probeScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-probe'))
+const probeCapable = computed(() => run.lab?.capabilities?.kubernetesProbes === true)
+const probeChoice = ref('')
+const probeTarget = computed(() => probeScenarios.value.find(([id]) => id === probeChoice.value)?.[1]?.target ?? probeScenarios.value[0]?.[1]?.target ?? null)
+const probeInspection = computed(() => probeCapable.value && probeTarget.value && run.behavioralRun ? inspectProbes(run.behavioralRun, probeTarget.value) : null)
 const integrationCapable = computed(() => run.lab?.capabilities?.kubernetesAiIntegration === true)
 const configCapable = computed(() => !integrationCapable.value && run.lab?.capabilities?.kubernetesConfiguration === true && run.lab?.id !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID)
 const configIncident = computed(() => run.behavioralRun?.runtime?.kubernetes?.configIncident ?? null)
@@ -75,8 +81,26 @@ const diagnosticCommands = computed(() => {
 const statusMessage = ref('')
 watch(() => `${run.labId}:${run.behavioralRun?.attemptId ?? ''}`, () => {
   choice.value = integrationCapable.value ? integrationChoices.value[0]?.[0] ?? '' : scenarios.value[0]?.[0] ?? ''
+  probeChoice.value = probeScenarios.value[0]?.[0] ?? ''
   error.value = ''; statusMessage.value = ''
 }, { immediate: true })
+async function startProbe() {
+  if (!probeScenarios.value.some(([id]) => id === probeChoice.value)) return
+  error.value = ''; statusMessage.value = 'Starting the controlled probe experiment and recreating its Pods.'
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-probe-start', scenarioId: probeChoice.value })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'The experiment could not start.' : 'Experiment started. Advance simulated time to observe the probes.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'The experiment could not start.' }
+}
+async function advanceProbe(seconds) {
+  error.value = ''; statusMessage.value = `Advancing simulated time by ${seconds} seconds.`
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-advance', seconds })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'Time advance failed.' : `Advanced ${seconds} simulated seconds.`
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'Time advance failed.' }
+}
 async function send(scenarioId = choice.value) {
   const allowed = integrationCapable.value ? integrationChoices.value.some(([id]) => id === scenarioId) : scenarios.value.some(([id]) => id === scenarioId)
   if (!allowed) return
@@ -137,6 +161,23 @@ async function copyLogCommand(command) {
       <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
       <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send">Send simulated request</button>
     </div>
+    <section v-if="probeCapable" class="aks-probe-controls" aria-label="AKS health probe experiments">
+      <h3>Health probe timeline</h3>
+      <p>Starting an experiment recreates the target Pods before the simulated clock advances. Their new containers begin cold. Probe schedules are deterministic teaching simulations; production timing can vary.</p>
+      <div class="experiment-tool__controls">
+        <label>Declared experiment<select v-model="probeChoice" :disabled="locked || !!probeInspection?.experiment"><option v-for="[id, scenario] in probeScenarios" :key="id" :value="id">{{ scenario.title ?? id }}</option></select></label>
+        <button type="button" class="btn btn--primary" :disabled="locked || !!probeInspection?.experiment || !probeChoice" @click="startProbe">Start experiment (recreates Pods)</button>
+      </div>
+      <p v-if="probeInspection?.experiment" role="status">{{ probeInspection.experiment.scenarioId }} is {{ probeInspection.experiment.phase ?? probeInspection.experiment.status ?? 'running' }}. Started at {{ probeInspection.experiment.startedAtMs / 1000 }}s; deadline {{ (probeInspection.experiment.deadlineAtMs ?? probeInspection.experiment.endsAtMs ?? 0) / 1000 }}s.</p>
+      <p v-else>No probe experiment is active. Select a declared scenario to begin a fresh cold start.</p>
+      <div class="experiment-tool__controls"><button v-for="seconds in [1, 5, 10]" :key="seconds" type="button" class="btn" :disabled="locked" @click="advanceProbe(seconds)">Advance {{ seconds }}s</button></div>
+      <p v-if="probeInspection?.readyBackendCount !== undefined">Ready Service backends: {{ probeInspection.readyBackendCount }}</p>
+      <div v-if="probeInspection?.containers?.length" class="aks-probe-controls__table"><table><thead><tr><th scope="col">Pod / container</th><th scope="col">Age</th><th scope="col">Initialized</th><th scope="col">Ready</th><th scope="col">Restarts</th><th scope="col">Next checks</th><th scope="col">Next start</th></tr></thead><tbody>
+        <tr v-for="item in probeInspection.containers" :key="item.podUid"><th scope="row">{{ item.podName }}<br><small>{{ item.containerId }}</small></th><td>{{ Math.max(0, Math.floor(((run.behavioralRun?.runtime?.simTimeMs ?? 0) - item.startedAtMs) / 1000)) }}s</td><td>{{ (run.behavioralRun?.runtime?.simTimeMs ?? 0) >= item.initializedAtMs ? 'Yes' : 'No' }}</td><td>{{ item.ready ? 'Yes' : 'No' }}</td><td>{{ item.restartCount }}</td><td><span v-for="(check, type) in item.checks" :key="type">{{ type }}: {{ check ? `${(check.pending?.completeAtMs ?? check.nextAtMs ?? 0) / 1000}s` : 'off' }}<br></span></td><td>{{ item.restartAtMs == null ? '—' : `${item.restartAtMs / 1000}s` }}</td></tr>
+      </tbody></table></div>
+      <p v-if="probeInspection?.sourceVersion">Captured source/version: {{ probeInspection.sourceVersion }}</p>
+      <p>Inspect current Pod names first: <code>kubectl get pods -n assistant</code>. Then use <code>kubectl describe pod POD_NAME -n assistant</code>, <code>kubectl logs POD_NAME -n assistant</code>, or <code>kubectl logs POD_NAME -n assistant --previous</code>. Previous logs exist only after a container restart.</p>
+    </section>
     <section v-if="connectivityView" class="aks-connectivity-trace" aria-labelledby="aks-connectivity-trace-title">
       <h3 id="aks-connectivity-trace-title">Request path trace</h3>
       <p v-if="connectivityTarget">Service: {{ connectivityTarget.namespace }}/{{ connectivityTarget.serviceName }} · {{ connectivityView.service?.spec?.type ?? 'not present' }} · ClusterIP {{ connectivityView.service?.spec?.clusterIP ?? 'not assigned' }}<template v-if="connectivityView.service?.status?.loadBalancer?.ingress?.[0]?.ip"> · external {{ connectivityView.service.status.loadBalancer.ingress[0].ip }}</template></p>
@@ -183,7 +224,7 @@ async function copyLogCommand(command) {
       <p>Current phase: {{ integrationIncident.phase }}. {{ integrationIncidentMessage }}</p>
       <button type="button" class="btn" :disabled="locked || integrationIncident.phase === 'retry'" @click="introduceIntegrationIncident">Introduce next assistant fault</button>
     </section>
-    <p v-if="!scenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
+    <p v-if="!scenarios.length && !probeScenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="statusMessage" role="status" aria-live="polite">{{ statusMessage }}</p>
     <section class="experiment-tool__response"><h3>Latest result</h3><p v-if="!latestEvidence">No request has been recorded for this declared verification.</p><template v-else><p v-if="latestEvidence.measurements?.transport">Transport: {{ latestEvidence.measurements.transport.ok ? 'Succeeded' : `Failed (${latestEvidence.measurements.transport.reason})` }}</p><strong v-if="latestEvidence.measurements?.status != null">HTTP {{ latestEvidence.measurements?.status }}</strong><p v-else>No HTTP response was received.</p><p v-if="latestEvidence.measurements?.diagnosticCode" role="status">Diagnostic: {{ latestEvidence.measurements.diagnosticCode }}</p><pre>{{ JSON.stringify(latestEvidence.measurements?.body, null, 2) }}</pre><p>Evidence: {{ latestEvidence.id }} · {{ latestEvidence.outcome }}</p><template v-if="latestEvidence.measurements?.dependencyTrace?.length"><h4>Redacted operation trace</h4><pre>{{ JSON.stringify(latestEvidence.measurements.dependencyTrace, null, 2) }}</pre></template></template></section>
@@ -191,6 +232,12 @@ async function copyLogCommand(command) {
 </template>
 
 <style scoped>
+.aks-probe-controls { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
+.aks-probe-controls > p { max-width: 78ch; line-height: 1.5; }
+.aks-probe-controls__table { max-width: 100%; overflow-x: auto; }
+.aks-probe-controls__table table { width: 100%; min-width: 700px; border-collapse: collapse; text-align: left; }
+.aks-probe-controls__table th, .aks-probe-controls__table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.aks-probe-controls__table small { color: var(--text-2); font-weight: 400; }
 .aks-config-controls { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
 .aks-config-controls h3 { margin: 0 0 10px; font-size: 15px; }
 .aks-config-controls h3:not(:first-child) { margin-top: 18px; }
