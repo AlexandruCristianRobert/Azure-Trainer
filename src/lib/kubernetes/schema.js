@@ -184,7 +184,7 @@ function validateService(value, root, capabilities) {
   issue = allowed(port, new Set(['port', 'targetPort', 'protocol']), root)
   if (issue) return issue
   if (!Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return diag('INVALID_SERVICE_PORT', port.port, root)
-  if (port.protocol !== 'TCP') return diag('INVALID_SERVICE_PROTOCOL', port.protocol, root)
+  if (port.protocol !== undefined && port.protocol !== 'TCP') return diag('INVALID_SERVICE_PROTOCOL', port.protocol, root)
   if (port.targetPort !== undefined && !(Number.isInteger(port.targetPort) && port.targetPort >= 1 && port.targetPort <= 65535) && typeof port.targetPort !== 'string') return diag('INVALID_TARGET_PORT', port.targetPort, root)
   return null
 }
@@ -224,6 +224,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   if (output.kind === 'Service') {
     output.spec.type ??= 'ClusterIP'
     output.spec.ports[0].targetPort ??= output.spec.ports[0].port
+    output.spec.ports[0].protocol ??= 'TCP'
   }
   if (output.kind === 'Secret') { output.type ??= 'Opaque'; output.data = { ...(output.data ?? {}), ...(output.stringData ? Object.fromEntries(Object.entries(output.stringData).map(([key, value]) => [key, encodeBase64(value)])) : {}) }; delete output.stringData }
   if (namespaced && output.metadata.namespace === undefined) output.metadata.namespace = resolvedNamespace

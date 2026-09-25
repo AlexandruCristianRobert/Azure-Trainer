@@ -248,7 +248,10 @@ function commandAction(run, action, lab) {
     const currentContext = contexts[next.runtime.kubernetes.currentContext] ? next.runtime.kubernetes.currentContext : null
     const clusters = Object.fromEntries((next.sandbox.aksClusters ?? []).map(cluster => [cluster.id,
       next.runtime.kubernetes.clusters[cluster.id] ?? emptyClusterState(cluster.id)]))
-    next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext, clusters } } }
+    const probeClusters = lab.capabilities?.kubernetesProbes === true
+      ? Object.fromEntries(Object.entries(clusters).map(([id, state]) => [id, { ...state, health: state.health ?? { version: 1, containers: {}, experiment: null, receipts: [] } }]))
+      : clusters
+    next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext, clusters: probeClusters } } }
     if (lab.capabilities?.kubernetesConnectivity === true) {
       for (const cluster of next.sandbox.aksClusters ?? []) next = initializeConnectivity(next, cluster.id)
     }

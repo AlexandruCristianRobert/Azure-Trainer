@@ -107,7 +107,6 @@ function recordReplacement(state, deleted, replacement, cause = 'template') {
 export function reconcileKubernetesResult(input, lab) {
   const original = input
   let run = clone(input)
-  run = reconcileHealth(run, lab)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
@@ -155,6 +154,7 @@ export function reconcileKubernetesResult(input, lab) {
       }
     }
   }
+  run = reconcileHealth(run, lab)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const result = reconcileServicesResult(run, cluster.id)
     if (result.diagnostics.length) return { run: original, diagnostics: result.diagnostics }
