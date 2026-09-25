@@ -14,5 +14,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        if self.path != "/api/ask":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            request = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            request = None
+        if not isinstance(request, dict) or not isinstance(request.get("question"), str) or not request["question"].strip():
+            response = {"status": 400, "body": {"error": "A question string is required."}}
+        else:
+            response = app.answer(request["question"])
+        body = json.dumps(response["body"]).encode("utf-8")
+        self.send_response(response["status"])
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 HTTPServer(("0.0.0.0", app.PORT), Handler).serve_forever()
 `

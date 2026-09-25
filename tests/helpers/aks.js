@@ -3,6 +3,19 @@ import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 
+export function makeTrainingSnapshot() {
+  return {
+    artifactId: 'build-fixture', templateHash: 'template-fixture',
+    environment: {
+      APP_ENV: 'training',
+      AI_ENDPOINT: 'https://ai-training.example', ANSWER_DEPLOYMENT: 'answers-v1', EMBEDDING_DEPLOYMENT: 'embeddings-v1',
+      PGHOST: 'pg-training.example', PGDATABASE: 'knowledge', PGUSER: 'assistant_training', PGPASSWORD: 'training-only-password', COLLECTION: 'training',
+    },
+    files: { '/etc/assistant/settings.json': '{"display_name":"Training assistant","response_prefix":""}' },
+    configRefs: [],
+  }
+}
+
 export function makeAksLab(overrides = {}) {
   return {
     id: 'aks-test', engineVersion: 2, contentVersion: 1,
