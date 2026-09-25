@@ -40,7 +40,7 @@ const support = (id, stageId, text, explanation, hints, examNote, check, solutio
 
 export const aksConnectivityGuidedLab = {
   id: 'aks-connectivity-guided', title: 'Trace AKS Service connectivity', brief: 'Create private and public Services for a supplied assistant, then trace internal and external requests through ready endpoints to the configured dependency fixtures.',
-  minutes: 40, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 7, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'unavailable',
+  minutes: 40, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 7, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'available',
   manifestId: CONNECTIVITY_MANIFEST.id, capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true },
   initialProjectFiles: CONNECTIVITY_FILES, solutionFiles: CONNECTIVITY_SOLUTION_FILES, initializeSimulation: seedConnectivityGuided,
   stages: [

@@ -12,7 +12,7 @@ const act = (run, action) => applyRunAction(run, action, aksConfigIndependentLab
 it('routes the configuration topic in order and ends at the current catalog boundary', () => {
   expect(nextLabFor(labById('aks-config-guided'))?.id).toBe('aks-config-troubleshooting')
   expect(nextLabFor(labById('aks-config-troubleshooting'))?.id).toBe('aks-config-independent')
-  expect(nextLabFor(aksConfigIndependentLab)).toBeNull()
+  expect(nextLabFor(aksConfigIndependentLab)?.id).toBe('aks-connectivity-guided')
 })
 
 it('declares five independent configuration tasks with worked Solutions', () => {
