@@ -88,4 +88,21 @@ export function inspectIntegration(run, lab, scenarioId) {
   }
 }
 
+/** Latest read-only integration summary per declared scenario on one cluster. */
+export function inspectIntegrationRequests(run, lab, clusterId) {
+  const seen = new Set()
+  const summaries = []
+  for (const request of [...(run?.runtime?.kubernetes?.requests ?? [])].reverse()) {
+    const requestClusterId = request.clusterId ?? request.origin?.clusterId ?? request.route?.clusterId ?? request.route?.origin?.clusterId
+    if (requestClusterId !== clusterId || !request.integrationTrace || seen.has(request.scenarioId)) continue
+    const view = inspectIntegration(run, lab, request.scenarioId)
+    if (!view.available) continue
+    seen.add(request.scenarioId)
+    summaries.push({ id: request.id, scenarioId: request.scenarioId, question: view.question, profile: view.profile.label,
+      status: request.status, elapsedMs: view.elapsedMs,
+      operations: view.operations.filter(operation => operation.status !== 'not-reached').map(operation => `${operation.name}: ${operation.status}`) })
+  }
+  return summaries
+}
+
 export { PROFILE_LABELS as INTEGRATION_PROFILE_LABELS }

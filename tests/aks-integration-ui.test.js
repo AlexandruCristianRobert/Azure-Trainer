@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import { inspectIntegration } from '../src/lib/kubernetes/integration-inspection.js'
+import { inspectIntegrationRequests } from '../src/lib/kubernetes/integration-inspection.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { act, seedIntegrationTest } from './helpers/aks.js'
 
 describe('AKS integration inspection', () => {
@@ -53,5 +56,30 @@ describe('AKS integration inspection', () => {
     const mismatched = structuredClone(observed)
     mismatched.runtime.kubernetes.requests.at(-1).integrationTrace.rankedDistances[0].id = 'foreign-document'
     expect(() => validateBehavioralRun(mismatched, lab)).toThrow()
+  })
+
+  it('finds latest service-routed request summaries using the origin cluster ID', () => {
+    const { run, lab, clusterId } = seedIntegrationTest()
+    const service = run.runtime.kubernetes.clusters[clusterId].resources['Service/assistant/assistant-public']
+    const routed = routeServiceRequest(run, { origin: { kind: 'external', clusterId }, hostname: service.status.loadBalancer.ingress[0].ip,
+      port: 80, method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' }, integrationProfile: 'healthy' }, lab)
+    routed.run.runtime.kubernetes.requests.at(-1).scenarioId = 'ai-healthy'
+    expect(routed.run.runtime.kubernetes.requests.at(-1).clusterId).toBeUndefined()
+    expect(inspectIntegrationRequests(routed.run, lab, clusterId)).toMatchObject([
+      { scenarioId: 'ai-healthy', profile: 'Healthy', status: 200, question: 'How long are backups kept?' },
+    ])
+  })
+
+  it('initializes and sends only a declared question/profile choice and hides legacy config controls', async () => {
+    const { lab } = seedIntegrationTest()
+    lab.scenarios = { info: { kind: 'aks-request', request: { method: 'GET', path: '/api/info' } }, ...lab.scenarios }
+    const panel = await readFile(new URL('../src/components/lab/AksExperimentPanel.vue', import.meta.url), 'utf8')
+    expect(panel).toContain("integrationCapable.value ? integrationChoices.value[0]?.[0]")
+    expect(panel).toContain('const canSend = computed')
+    expect(panel).toContain(':disabled="locked || !canSend"')
+    expect(panel).toMatch(/configCapable = computed\(\(\) => !integrationCapable\.value/)
+    const blade = await readFile(new URL('../src/components/blade/AksClusterBlade.vue', import.meta.url), 'utf8')
+    expect(blade).toContain('inspectIntegrationRequests(run.behavioralRun, run.lab, cluster.value?.id)')
+    expect(Object.keys(lab.scenarios).filter(id => id !== 'info')).toContain('ai-healthy')
   })
 })

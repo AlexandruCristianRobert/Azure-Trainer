@@ -4,7 +4,7 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
-import { inspectIntegration } from '../../lib/kubernetes/integration-inspection.js'
+import { inspectIntegrationRequests } from '../../lib/kubernetes/integration-inspection.js'
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
@@ -43,12 +43,7 @@ const configurationEvents = computed(() => configCapable.value
     .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message }))
   : [])
 const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIntegration === true
-  ? [...new Map((run.behavioralRun?.runtime?.kubernetes?.requests ?? []).filter(item => item.clusterId === cluster.value?.id && item.integrationTrace)
-    .slice().reverse().map(item => [item.scenarioId, item])).values()].flatMap(item => {
-      const view = inspectIntegration(run.behavioralRun, run.lab, item.scenarioId)
-      return view.available ? [{ id: item.id, question: view.question, profile: view.profile.label, status: item.status,
-        elapsedMs: view.elapsedMs, operations: view.operations.filter(operation => operation.status !== 'not-reached').map(operation => `${operation.name}: ${operation.status}`) }] : []
-    }) : [])
+  ? inspectIntegrationRequests(run.behavioralRun, run.lab, cluster.value?.id) : [])
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
