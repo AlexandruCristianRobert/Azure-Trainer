@@ -46,6 +46,21 @@ describe('guided AKS AI integration Lab', () => {
     expect(taskDone(run, 'retrieve-documents')).toBe(true)
   })
 
+  it('accepts a renamed retrieval local when context and sources retain its graph provenance', () => {
+    let run = createBehavioralRun(aksAiGuidedLab, { attemptId: 'guided-ai-renamed-local' })
+    const app = aksAiGuidedLab.solutionFiles['app.py'].replaceAll('rows', 'retrieved')
+    run = applyRunAction(run, { type: 'save-file', path: 'app.py', text: app }, aksAiGuidedLab).run
+    expect(taskDone(run, 'construct-context')).toBe(true)
+  })
+
+  it('rejects descending vector ranking even when filters and bindings are present', () => {
+    let run = createBehavioralRun(aksAiGuidedLab, { attemptId: 'guided-ai-descending-rank' })
+    const sql = aksAiGuidedLab.solutionFiles['retrieval.sql'].replace('::vector ASC, id ASC', '::vector DESC, id DESC')
+    run = applyRunAction(run, { type: 'save-file', path: 'app.py', text: aksAiGuidedLab.solutionFiles['app.py'] }, aksAiGuidedLab).run
+    run = applyRunAction(run, { type: 'save-file', path: 'retrieval.sql', text: sql }, aksAiGuidedLab).run
+    expect(taskDone(run, 'retrieve-documents')).toBe(false)
+  })
+
   it('rejects a hardcoded answer or source list despite a generate call', () => {
     let run = createBehavioralRun(aksAiGuidedLab, { attemptId: 'guided-ai-hardcoded-return' })
     const forged = aksAiGuidedLab.solutionFiles['app.py']

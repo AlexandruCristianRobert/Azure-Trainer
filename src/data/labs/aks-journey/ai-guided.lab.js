@@ -66,6 +66,7 @@ const retrievalReady = context => {
   const vectorInput = origin(context, vector?.input)
   return sourceReady(context) && filters.collection && filters.audience && filters.published && query?.distance?.parameter === query.order?.vectorParameter
     && query?.distance?.cutoffParameter && query?.limitParameter
+    && query.order?.direction === 'ASC' && query.order.idDirection === 'ASC'
     && collection?.op === 'config' && collection.key === 'collection' && audience?.op === 'config' && audience.key === 'audience'
     && literal(context, params?.entries?.[filters.published], true) && vector?.op === 'vector-format' && vectorInput?.id === embedding?.id
     && literal(context, params?.entries?.[query.distance.cutoffParameter], 0.2) && literal(context, params?.entries?.[query.limitParameter], 1)
@@ -75,7 +76,7 @@ const contextReady = context => {
   const generate = invoke(context, 'generate')
   const contextRows = origin(context, generate?.args?.keywords?.context)
   const source = graph(context)?.nodes?.find(item => item.op === 'source-ids')
-  const rows = graph(context)?.nodes?.find(item => item.op === 'binding' && item.name === 'rows')
+  const rows = graph(context)?.nodes?.find(item => item.op === 'binding' && origin(context, item.value)?.id === execute?.id)
   const answer = graph(context)?.nodes?.find(item => item.op === 'config' && item.key === 'answer' && origin(context, item.object)?.id === generate?.id)
   const responseBody = graph(context)?.nodes?.find(item => item.op === 'dictionary' && item.entries?.answer === answer?.id && item.entries?.sources === source?.id)
   return sourceReady(context) && origin(context, rows?.value)?.id === execute?.id
@@ -97,7 +98,7 @@ const task = (id, stageId, text, explanation, hints, examNote, check, solution, 
 export const aksAiGuidedLab = {
   id: 'aks-ai-guided', title: 'Build an AKS knowledge assistant',
   brief: 'Implement the supplied question-to-answer flow with deterministic training fixtures. The PostgreSQL fixture has vector(3) embeddings: [1,0,0] finds backups, [0,1,0] finds support, and [0,0,1] has no match. Retrieve only published training documents for employees; metadata filters make retrieval correct, they are not authorization controls.',
-  minutes: 50, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 10, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'draft',
+  minutes: 50, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 10, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'available',
   manifestId: INTEGRATION_MANIFEST.id, capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true },
   initialProjectFiles: initialFiles, solutionFiles, initializeSimulation: seedIntegrationGuided,
   stages: [
