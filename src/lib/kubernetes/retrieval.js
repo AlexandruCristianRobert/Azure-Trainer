@@ -8,17 +8,27 @@ function vectorValue(value, parameter) {
   }
   const vector = value.slice(1, -1).split(',').map(item => Number(item.trim()))
   if (!vector.length || vector.some(number => !Number.isFinite(number))) return { error: `${parameter} must contain only finite numbers.` }
+  if (vector.length !== 3) return { error: `${parameter} must contain exactly three components.` }
   if (vector.every(number => number === 0)) return { error: `${parameter} must not be a zero vector.` }
   return { vector }
 }
 
+function normalized(vector) {
+  const scale = Math.max(...vector.map(value => Math.abs(value)))
+  if (!Number.isFinite(scale) || scale === 0) return null
+  const scaled = vector.map(value => value / scale)
+  const magnitude = Math.sqrt(scaled.reduce((sum, value) => sum + value * value, 0))
+  return magnitude === 0 ? null : scaled.map(value => value / magnitude)
+}
+
 function cosineDistance(left, right) {
-  if (!Array.isArray(right) || left.length !== right.length) return null
-  if (right.some(value => !Number.isFinite(value)) || right.every(value => value === 0)) return null
-  const dot = left.reduce((sum, value, index) => sum + value * right[index], 0)
-  const leftLength = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0))
-  const rightLength = Math.sqrt(right.reduce((sum, value) => sum + value * value, 0))
-  return 1 - dot / (leftLength * rightLength)
+  if (!Array.isArray(right) || left.length !== 3 || right.length !== 3 || right.some(value => !Number.isFinite(value))) return null
+  const normalizedLeft = normalized(left)
+  const normalizedRight = normalized(right)
+  if (!normalizedLeft || !normalizedRight) return null
+  const similarity = normalizedLeft.reduce((sum, value, index) => sum + value * normalizedRight[index], 0)
+  const boundedSimilarity = Math.max(-1, Math.min(1, similarity))
+  return Math.max(0, Math.min(2, 1 - boundedSimilarity))
 }
 
 function compareParameters(querySpec, parameters) {
@@ -33,12 +43,12 @@ function compareParameters(querySpec, parameters) {
   }
   if (!Object.hasOwn(parameters, querySpec.limitParameter)) return { code: 'SQL_PARAMETER_MISSING', message: `Missing bound parameter '${querySpec.limitParameter}'.` }
   const limit = parameters[querySpec.limitParameter]
-  if (!Number.isInteger(limit) || limit < 0 || limit > 100) return { code: 'SQL_PARAMETER_TYPE', message: `Parameter '${querySpec.limitParameter}' must be an integer from 0 to 100.` }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 3) return { code: 'SQL_PARAMETER_TYPE', message: `Parameter '${querySpec.limitParameter}' must be an integer from 1 to 3.` }
   if (querySpec.distance) {
     const name = querySpec.distance.cutoffParameter
     if (!Object.hasOwn(parameters, name)) return { code: 'SQL_PARAMETER_MISSING', message: `Missing bound parameter '${name}'.` }
     const cutoff = parameters[name]
-    if (typeof cutoff !== 'number' || !Number.isFinite(cutoff)) return { code: 'SQL_PARAMETER_TYPE', message: `Parameter '${name}' must be a finite number.` }
+    if (typeof cutoff !== 'number' || !Number.isFinite(cutoff) || cutoff < 0 || cutoff > 2) return { code: 'SQL_PARAMETER_TYPE', message: `Parameter '${name}' must be a finite cosine distance from 0 to 2.` }
   }
   return null
 }
@@ -64,7 +74,7 @@ export function retrieveFixtureRows(querySpec, parameters, documents) {
     if (!row || typeof row.id !== 'string' || typeof row.content !== 'string' || key !== row.id || typeof row.collection !== 'string' || typeof row.audience !== 'string' || typeof row.published !== 'boolean' || !Array.isArray(row.embedding)) {
       return failure('SQL_FIXTURE_INVALID', 'A document fixture does not match the supplied document schema.')
     }
-    if (row.embedding.length !== orderingVector.vector.length || row.embedding.some(value => !Number.isFinite(value)) || row.embedding.every(value => value === 0)) {
+    if (row.embedding.length !== 3 || row.embedding.some(value => !Number.isFinite(value)) || row.embedding.every(value => value === 0)) {
       return failure('SQL_VECTOR_INVALID', `Document '${row.id}' has an invalid or incompatible embedding.`)
     }
   }

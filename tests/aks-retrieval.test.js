@@ -46,21 +46,39 @@ describe('fixture retrieval', () => {
     expect(retrieveFixtureRows(query, params({ limit: '1' }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
     expect(retrieveFixtureRows(query, params({ collection: "training' OR true --" }), data).rows).toEqual([])
     expect(retrieveFixtureRows(query, params({ max_distance: '0.2' }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
-    expect(retrieveFixtureRows(query, params({ limit: 0 }), data).selectedIds).toEqual([])
+    expect(retrieveFixtureRows(query, params({ limit: 0 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
     expect(retrieveFixtureRows(query, params({ limit: -1 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
-    expect(retrieveFixtureRows(query, params({ limit: 101 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
+    expect(retrieveFixtureRows(query, params({ limit: 4 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
+    expect(retrieveFixtureRows(query, params({ max_distance: -0.0001 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
+    expect(retrieveFixtureRows(query, params({ max_distance: 2.0001 }), data).diagnostic).toMatchObject({ code: 'SQL_PARAMETER_TYPE' })
   })
 
   it.each([
-    ['zero vector', '[0,0,0]'], ['dimension mismatch', '[1,0]'], ['non-finite', '[1,NaN,0]'],
+    ['zero vector', '[0,0,0]'], ['short vector', '[1,0]'], ['long vector', '[1,0,0,0]'], ['non-finite', '[1,NaN,0]'],
   ])('rejects %s before computing distance', (_label, embedding) => {
     expect(retrieveFixtureRows(query, params({ embedding }), INTEGRATION_FIXTURES.documents).diagnostic).toMatchObject({ code: 'SQL_VECTOR_INVALID' })
   })
 
   it('includes a row exactly at the cosine-distance cutoff', () => {
     const descending = { ...query, order: { ...query.order, direction: 'DESC' } }
-    const result = retrieveFixtureRows(descending, params({ embedding: '[1,0,0]', max_distance: 1, limit: 20 }), INTEGRATION_FIXTURES.documents)
+    const result = retrieveFixtureRows(descending, params({ embedding: '[1,0,0]', max_distance: 1, limit: 3 }), INTEGRATION_FIXTURES.documents)
     expect(result.selectedIds).toContain('review-support')
     expect(result.distances.find(item => item.id === 'review-support').distance).toBe(1)
+  })
+
+  it('keeps cosine distance finite for very large finite vector components', () => {
+    const result = retrieveFixtureRows(query, params({ embedding: '[1e308,0,0]' }), INTEGRATION_FIXTURES.documents)
+    expect(result.diagnostic).toBeNull()
+    expect(result.distances[0].distance).toBe(0)
+  })
+
+  it('clamps cosine roundoff to the valid distance interval', () => {
+    const documents = {
+      'negative-diagonal': { ...INTEGRATION_FIXTURES.documents['training-backups'], id: 'negative-diagonal', embedding: [-1, -1, -1] },
+    }
+    const result = retrieveFixtureRows(query, params({ collection: 'training', audience: 'employee', embedding: '[-1,-1,-1]', max_distance: 0 }), documents)
+    expect(result.distances[0].distance).toBeGreaterThanOrEqual(0)
+    expect(result.distances[0].distance).toBeLessThanOrEqual(2)
+    expect(result.distances[0].distance).toBe(0)
   })
 })
