@@ -18,8 +18,14 @@ const samePod = (context, first, second) => {
 const staleObserved = context => configurationDeploymentReady(context) && samePod(context, 'baseline', 'stale-env')
 const mountedBeforeObserved = context => configurationEnvironmentRefreshed(context) && evidence(context, 'mounted-before')?.measurements?.body?.displayName === 'Training assistant'
 const mountedAfterObserved = context => configurationEnvironmentRefreshed(context) && samePod(context, 'mounted-before', 'mounted-after')
-const learnerObjectsApplied = context => configurationDeploymentReady(context)
-  && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
+const learnerObjectsApplied = context => {
+  const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
+  const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]
+  const config = state?.resources['ConfigMap/assistant/assistant-config']; const secret = state?.resources['Secret/assistant/assistant-credentials']
+  return config?.data?.APP_ENV === 'training' && config.data?.PGHOST === 'pg-training.example' && config.data?.['settings.json']?.includes('Training assistant')
+    && secret?.type === 'Opaque' && Object.hasOwn(secret.data ?? {}, 'PGPASSWORD')
+    && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
+}
 const mountedBeforeApplied = context => {
   const record = evidence(context, 'mounted-before'); const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
   const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]; const uid = record?.measurements?.selectedPodUid
