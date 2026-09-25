@@ -26,6 +26,13 @@ it('executes every independent configuration Solution in order', () => {
   expect(evaluateLab(aksConfigIndependentLab, run).isComplete).toBe(true)
 })
 
+it('keeps immutable fixture metadata out of mutable Kubernetes runtime state', () => {
+  const run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'immutable-fixture' })
+  expect(run.runtime.kubernetes.configurationIndependent).toBeUndefined()
+  const shared = Object.values(run.artifacts.buildsById).filter(build => build.image.tag === 'shared')
+  expect(shared).toHaveLength(1)
+})
+
 it('keeps primary evidence current after a review-only configuration change', () => {
   let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'two-instances' })
   run = act(run, { type: 'aks-request', scenarioId: 'independent-config-primary' }).run
@@ -36,12 +43,14 @@ it('keeps primary evidence current after a review-only configuration change', ()
   expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'primary-intact').done).toBe(true)
 })
 
-it('accepts equivalent Secret data syntax and key ordering', () => {
-  const files = { ...CONFIG_INDEPENDENT_SOLUTION_FILES,
-    'k8s/review-secret.yaml': `apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: review\n  name: review-credentials\ntype: Opaque\ndata:\n  PGPASSWORD: cmV2aWV3LW9ubHktcGFzc3dvcmQ=\n`,
-  }
-  expect(CONFIG_INDEPENDENT_MANIFEST.kubernetesFiles).toContain('k8s/review-secret.yaml')
-  expect(files['k8s/review-configmap.yaml']).toContain('Review assistant')
+it('accepts an equivalent base64 Secret after saving and applying it', () => {
+  let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'secret-data' })
+  run = executeAksSolution(run, aksConfigIndependentLab, aksConfigIndependentLab.tasks.find(task => task.id === 'review-config'))
+  const secret = `apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: review\n  name: review-credentials\ntype: Opaque\ndata:\n  PGPASSWORD: cmV2aWV3LW9ubHktcGFzc3dvcmQ=\n`
+  run = act(run, { type: 'save-file', path: 'k8s/review-secret.yaml', text: secret }).run
+  for (const path of ['k8s/review-namespace.yaml', 'k8s/review-configmap.yaml', 'k8s/review-secret.yaml']) run = act(run, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  expect(run.runtime.kubernetes.clusters[Object.keys(run.runtime.kubernetes.clusters)[0]].resources['Secret/review/review-credentials'].data.PGPASSWORD).toBe('cmV2aWV3LW9ubHktcGFzc3dvcmQ=')
+  expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'review-config').done).toBe(true)
 })
 
 it('does not complete when review credentials are missing or copied from primary settings', () => {
@@ -49,6 +58,14 @@ it('does not complete when review credentials are missing or copied from primary
   run = executeAksSolution(run, aksConfigIndependentLab, aksConfigIndependentLab.tasks.find(task => task.id === 'review-config'))
   const withoutSecret = { ...run.project.savedFiles, 'k8s/review-secret.yaml': run.project.savedFiles['k8s/review-secret.yaml'].replace('PGPASSWORD: review-only-password', '') }
   run = act(run, { type: 'save-file', path: 'k8s/review-secret.yaml', text: withoutSecret['k8s/review-secret.yaml'] }).run
+  expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'review-config').done).toBe(false)
+})
+
+it('rejects primary credentials in the review Secret', () => {
+  let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'wrong-credentials' })
+  run = executeAksSolution(run, aksConfigIndependentLab, aksConfigIndependentLab.tasks.find(task => task.id === 'review-config'))
+  const wrong = run.project.savedFiles['k8s/review-secret.yaml'].replace('review-only-password', 'training-only-password')
+  run = act(run, { type: 'save-file', path: 'k8s/review-secret.yaml', text: wrong }).run
   expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'review-config').done).toBe(false)
 })
 
@@ -67,4 +84,26 @@ it('requires a fresh primary verification after its configuration is changed and
   run = act(run, { type: 'save-file', path: 'k8s/primary-configmap.yaml', text: `${primary}\n# changed` }).run
   run = act(run, { type: 'save-file', path: 'k8s/primary-configmap.yaml', text: primary }).run
   expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'primary-intact').done).toBe(false)
+})
+
+it('does not allow a copied primary response to prove the review instance', () => {
+  let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'copied-proof' })
+  run = act(run, { type: 'aks-request', scenarioId: 'independent-config-primary' }).run
+  for (const task of aksConfigIndependentLab.tasks.slice(0, 3)) run = executeAksSolution(run, aksConfigIndependentLab, task)
+  expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'review-answer').done).toBe(false)
+})
+
+it('rejects a newly built shared tag because review Pods must reuse the seeded artifact', () => {
+  let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'rebuilt-tag' })
+  for (const task of aksConfigIndependentLab.tasks.slice(0, 2)) run = executeAksSolution(run, aksConfigIndependentLab, task)
+  run = act(run, { type: 'command', line: 'az acr build -r acraksconfigindependent -t assistant:shared .' }).run
+  run = executeAksSolution(run, aksConfigIndependentLab, aksConfigIndependentLab.tasks.find(task => task.id === 'shared-image'))
+  expect(evaluateLab(aksConfigIndependentLab, run).tasks.find(task => task.id === 'shared-image').done).toBe(false)
+})
+
+it('does not complete if Python hardcodes a copied assistant answer', () => {
+  let run = createBehavioralRun(aksConfigIndependentLab, { attemptId: 'hardcoded-answer' })
+  const hardcoded = run.project.savedFiles['app.py'].replace('return training_runtime.answer(question, settings())', 'return {"answer": "Training backups are kept for 30 days."}')
+  run = act(run, { type: 'save-file', path: 'app.py', text: hardcoded }).run
+  expect(evaluateLab(aksConfigIndependentLab, run).isComplete).toBe(false)
 })

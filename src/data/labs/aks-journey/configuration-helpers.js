@@ -53,6 +53,9 @@ const same = (a, b) => canonicalize(a) === canonicalize(b)
 const keyRef = (env, name, kind, object, key) => env?.find(item => item.name === name)?.valueFrom?.[kind]?.name === object
   && env.find(item => item.name === name).valueFrom[kind].key === key
 const expectedReview = { APP_ENV: 'review', AI_ENDPOINT: 'https://ai-review.example', ANSWER_DEPLOYMENT: 'answers-v1', EMBEDDING_DEPLOYMENT: 'embeddings-v1', PGHOST: 'pg-review.example', PGDATABASE: 'knowledge', PGUSER: 'assistant_review', COLLECTION: 'review' }
+const seededSharedArtifactId = context => Object.values(context.artifacts.buildsById ?? {})
+  .filter(build => build.image?.loginServer === `${CONFIG_INDEPENDENT_REGISTRY}.azurecr.io` && build.image.repository === 'assistant' && build.image.tag === 'shared')
+  .sort((left, right) => Number(left.id?.slice(6)) - Number(right.id?.slice(6)))[0]?.id ?? null
 
 export function configurationIndependentReviewConfigReady(context) {
   const namespace = doc(context, 'k8s/review-namespace.yaml')
@@ -87,18 +90,18 @@ export function configurationIndependentReviewManifestsReady(context) {
 
 export function configurationIndependentSharedArtifactReady(context) {
   if (!configurationIndependentReviewManifestsReady(context)) return false
-  const state = context.runtime.kubernetes?.clusters?.[independentId]; const fixture = context.runtime.kubernetes?.configurationIndependent
+  const state = context.runtime.kubernetes?.clusters?.[independentId]; const artifactId = seededSharedArtifactId(context)
   const deployment = state?.resources['Deployment/review/review-assistant']; const service = state?.resources['Service/review/review-assistant']
   const expectedDeployment = doc(context, 'k8s/review-deployment.yaml'); const expectedService = doc(context, 'k8s/review-service.yaml')
   const pods = getDeploymentPods({ runtime: context.runtime }, independentId, 'review', 'review-assistant')
-  return !!fixture?.artifactId && same(deployment?.spec, expectedDeployment?.spec) && same(service?.spec, expectedService?.spec)
+  return !!artifactId && same(deployment?.spec, expectedDeployment?.spec) && same(service?.spec, expectedService?.spec)
     && ['Namespace//review', 'ConfigMap/review/review-config', 'Secret/review/review-credentials'].every(key => !!state?.resources[key])
-    && pods.length === 2 && pods.every(pod => pod.status?.phase === 'Running' && state.podSnapshots[pod.metadata.uid]?.artifactId === fixture.artifactId)
+    && pods.length === 2 && pods.every(pod => pod.status?.phase === 'Running' && state.podSnapshots[pod.metadata.uid]?.artifactId === artifactId)
 }
 
 export function configurationIndependentPrimaryReady(context) {
-  const state = context.runtime.kubernetes?.clusters?.[independentId]; const fixture = context.runtime.kubernetes?.configurationIndependent
-  if (!fixture?.artifactId || !['app.py', 'Dockerfile', 'k8s/primary-namespace.yaml', 'k8s/primary-configmap.yaml', 'k8s/primary-secret.yaml', 'k8s/primary-deployment.yaml', 'k8s/primary-service.yaml']
+  const state = context.runtime.kubernetes?.clusters?.[independentId]; const artifactId = seededSharedArtifactId(context)
+  if (!artifactId || !['app.py', 'Dockerfile', 'k8s/primary-namespace.yaml', 'k8s/primary-configmap.yaml', 'k8s/primary-secret.yaml', 'k8s/primary-deployment.yaml', 'k8s/primary-service.yaml']
     .every(path => context.project.savedFiles[path] === CONFIG_INDEPENDENT_FILES[path])) return false
   const expected = Object.fromEntries(['primary-configmap', 'primary-secret', 'primary-deployment', 'primary-service'].map(name => [name, doc({ project: { savedFiles: CONFIG_INDEPENDENT_FILES } }, `k8s/${name}.yaml`)]))
   const pods = getDeploymentPods({ runtime: context.runtime }, independentId, 'primary', 'assistant')
@@ -106,7 +109,7 @@ export function configurationIndependentPrimaryReady(context) {
     && state.resources['Secret/primary/assistant-credentials']?.data?.PGPASSWORD === 'dHJhaW5pbmctb25seS1wYXNzd29yZA=='
     && same(state.resources['Deployment/primary/assistant']?.spec, expected['primary-deployment']?.spec)
     && same(state.resources['Service/primary/assistant']?.spec, expected['primary-service']?.spec)
-    && pods.length === 2 && pods.every(pod => state.podSnapshots[pod.metadata.uid]?.artifactId === fixture.artifactId)
+    && pods.length === 2 && pods.every(pod => state.podSnapshots[pod.metadata.uid]?.artifactId === artifactId)
 }
 
 export function configurationIndependentPrimaryDependencies(clusterId = independentId) {
