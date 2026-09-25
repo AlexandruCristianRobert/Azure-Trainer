@@ -8,7 +8,7 @@ export const USER_NAME = 'sam.learner@sandbox.onmicrosoft.com'
 export const USER_OBJECT_ID = 'a37a00c7-d689-4b5d-a8c8-1d75f307d5ef'
 
 export function createSandbox() {
-  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], keyVaults: [], eventGridTopics: [], defaults: { group: null, location: null } }
+  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
 }
 
 function object(value) {
@@ -150,6 +150,24 @@ function validAcaPrerequisites(sb) {
     && new Set(assignments.map((assignment) => `${assignment.scope}/${assignment.principalId}/${assignment.roleDefinitionId}`.toLowerCase())).size === assignments.length
 }
 
+function validAksClusters(sb) {
+  if (!Object.hasOwn(sb, 'aksClusters')) return true
+  const clusters = sb.aksClusters
+  const groups = new Set(sb.resourceGroups.map(group => String(group?.name).toLowerCase()))
+  if (!Array.isArray(clusters) || new Set(clusters.map(cluster => `${cluster?.resourceGroup}/${cluster?.name}`.toLowerCase())).size !== clusters.length) return false
+  return clusters.every(cluster => object(cluster) && typeof cluster.name === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(cluster.name)
+    && typeof cluster.resourceGroup === 'string' && groups.has(cluster.resourceGroup.toLowerCase())
+    && typeof cluster.location === 'string' && cluster.location === normalizeLocation(cluster.location)
+    && cluster.id === `${ARM_ROOT}${cluster.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${cluster.name}`
+    && typeof cluster.nodeResourceGroup === 'string' && Number.isInteger(cluster.nodeCount) && cluster.nodeCount >= 1 && cluster.nodeCount <= 3
+    && cluster.nodeVmSize === 'Standard_D2s_v5' && cluster.provisioningState === 'Succeeded'
+    && object(cluster.identity) && cluster.identity.type === 'SystemAssigned' && UUID_RE.test(cluster.identity.principalId)
+    && object(cluster.identityProfile) && object(cluster.identityProfile.kubeletidentity)
+    && typeof cluster.identityProfile.kubeletidentity.resourceId === 'string' && typeof cluster.identityProfile.kubeletidentity.clientId === 'string' && typeof cluster.identityProfile.kubeletidentity.objectId === 'string'
+    && sb.managedIdentities.some(identity => identity.id === cluster.identityProfile.kubeletidentity.resourceId
+      && identity.clientId === cluster.identityProfile.kubeletidentity.clientId && identity.principalId === cluster.identityProfile.kubeletidentity.objectId
+      && identity.clusterOwner === cluster.id))
+}
 function validAppIdentities(sb) {
   return (sb.containerApps ?? []).every((app) => {
     if (!object(app)) return false
@@ -289,6 +307,7 @@ export function isSandboxShape(sb) {
   return !!sb && typeof sb === 'object'
     && Array.isArray(sb.resourceGroups)
     && Array.isArray(sb.namespaces)
+    && (!Object.hasOwn(sb, 'aksClusters') || Array.isArray(sb.aksClusters))
     && (!Object.hasOwn(sb, 'storageAccounts') || Array.isArray(sb.storageAccounts))
     && (!Object.hasOwn(sb, 'functionApps') || Array.isArray(sb.functionApps))
     && (!Object.hasOwn(sb, 'containerAppEnvironments') || Array.isArray(sb.containerAppEnvironments))
@@ -298,6 +317,7 @@ export function isSandboxShape(sb) {
     && validFoundryAccounts(sb)
     && (!Object.hasOwn(sb, 'eventGridTopics') || validEventGridTopics(sb.eventGridTopics, sb.resourceGroups))
     && validAcaPrerequisites(sb)
+    && validAksClusters(sb)
     && validAppIdentities(sb)
     && !!sb.defaults && typeof sb.defaults === 'object'
     && (!Object.hasOwn(sb, 'storageAccounts') && !Object.hasOwn(sb, 'functionApps') || validFunctionResources({ ...sb, storageAccounts: sb.storageAccounts ?? [], functionApps: sb.functionApps ?? [] }))
@@ -316,6 +336,7 @@ export function normalizeSandbox(sb) {
   if (!Object.hasOwn(next, 'cosmosAccounts')) next.cosmosAccounts = []
   if (!Object.hasOwn(next, 'keyVaults')) next.keyVaults = []
   if (!Object.hasOwn(next, 'eventGridTopics')) next.eventGridTopics = []
+  if (!Object.hasOwn(next, 'aksClusters')) next.aksClusters = []
   if (!Object.hasOwn(next, 'containerRegistries')) next.containerRegistries = []
   if (!Object.hasOwn(next, 'managedIdentities')) next.managedIdentities = []
   if (!Object.hasOwn(next, 'roleAssignments')) next.roleAssignments = []

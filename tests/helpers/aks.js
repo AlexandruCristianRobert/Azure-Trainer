@@ -1,4 +1,5 @@
-﻿import { applyRunAction } from '../../src/lib/labEngine/actions.js'
+import { applyRunAction } from '../../src/lib/labEngine/actions.js'
+import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
 
 export function makeAksLab(overrides = {}) {
@@ -17,4 +18,9 @@ export function act(run, lab, action) {
   const errors = (result.lines ?? []).filter(line => /^\s*(ERROR|Error:)/.test(String(line)))
   if (result.diagnostics?.length || errors.length) throw new Error([...result.diagnostics.map(item => item.message), ...errors].join('\n'))
   return result
+}
+
+export function createAksTestRun(overrides = {}) {
+  const lab = makeAksLab(overrides)
+  return { lab, run: createBehavioralRun(lab, { attemptId: 'test-aks' }) }
 }

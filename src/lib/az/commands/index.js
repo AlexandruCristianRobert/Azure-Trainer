@@ -16,6 +16,7 @@ import { acrGroup } from './acr.js'
 import { identityGroup } from './identity.js'
 import { cognitiveservicesGroup } from './cognitiveservices.js'
 import { deploymentGroup } from './deployment.js'
+import { aksGroup } from './aks.js'
 
 let AZ_TREE = null
 
@@ -23,6 +24,7 @@ export function buildTree() {
   if (AZ_TREE) return AZ_TREE
   AZ_TREE = defineGroup([], 'Azure CLI (Sandbox)', {
     account: accountGroup,
+    aks: aksGroup,
     acr: acrGroup,
     configure: configureCommand,
     containerapp: containerappGroup,

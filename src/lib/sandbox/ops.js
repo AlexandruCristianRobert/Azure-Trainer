@@ -9,6 +9,7 @@ import { deleteEventGridTopicsInGroup } from './eventgrid.js'
 import { deleteRegistriesInGroup } from './registry.js'
 import { deleteIdentitiesInGroup } from './identity.js'
 import { deleteFoundryAccountsInGroup } from './foundry.js'
+import { deleteAksClustersInGroup } from './aks.js'
 
 const SKUS = ['Basic', 'Standard', 'Premium']
 const RG_NAME_RE = /^[-\w.()]{1,90}$/
@@ -98,7 +99,8 @@ export function createResourceGroup(sb, { name, location, tags = null }) {
 
 export function deleteResourceGroup(sb, { name }) {
   getResourceGroup(sb, name)
-  let next = deleteContainerAppResourcesInGroup(sb, name)
+  let next = deleteAksClustersInGroup(sb, name)
+  next = deleteContainerAppResourcesInGroup(next, name)
   next = deleteCosmosAccountsInGroup(next, name)
   next = deleteKeyVaultsInGroup(next, name)
   next = deleteFunctionResourcesInGroup(next, name)

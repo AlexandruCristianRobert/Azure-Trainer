@@ -20,6 +20,7 @@ import { capstoneStages, cleanupReady, createStageSeal, recoveryCheckpoint, stag
 import { injectCapstoneIncident } from './incident.js'
 import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
+import { emptyClusterState } from '../kubernetes/state.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -77,7 +78,15 @@ export function applyCommandEffects(run, effects, lab) {
   const events = []
   const diagnostics = []
   for (const effect of effects) {
-    if (effect.type === 'publish-build') {
+    if (effect.type === 'aks-context') {
+      if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'name', 'clusterId', 'overwrite'].includes(key)) || typeof effect.name !== 'string' || typeof effect.clusterId !== 'string' || typeof effect.overwrite !== 'boolean') fail('INVALID_EFFECT', 'AKS context effect is malformed or unavailable in this Lab.')
+      const cluster = next.sandbox.aksClusters?.find(item => item.id.toLowerCase() === effect.clusterId.toLowerCase())
+      if (!cluster) fail('INVALID_EFFECT', 'AKS context references an unavailable cluster.')
+      const current = next.runtime.kubernetes?.contexts?.[effect.name]
+      if (current && current.clusterId.toLowerCase() !== cluster.id.toLowerCase() && !effect.overwrite) { diagnostics.push(diagnostic('CONTEXT_CONFLICT', 'A context with this name points to a different cluster.')); continue }
+      const contexts = { ...next.runtime.kubernetes.contexts, [effect.name]: { clusterId: cluster.id, namespace: current?.namespace ?? 'default' } }
+      next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext: effect.name } } }
+    } else if (effect.type === 'publish-build') {
       if (!effect.artifacts || !Number.isInteger(effect.nextSequence) || effect.nextSequence <= next.nextSequence
         || typeof effect.artifacts.buildsById !== 'object' || typeof effect.artifacts.publishedTags !== 'object'
         || typeof effect.artifacts.sourceSnapshotsByHash !== 'object') fail('INVALID_EFFECT', 'Build publication effect is malformed.')
@@ -221,6 +230,14 @@ function commandAction(run, action, lab) {
   }
   const appliedEffects = applyCommandEffects(next, result.effects ?? [], lab)
   next = appliedEffects.run
+  if (lab.capabilities?.kubernetes === true && next.runtime.kubernetes) {
+    const ids = new Set((next.sandbox.aksClusters ?? []).map(cluster => cluster.id.toLowerCase()))
+    const contexts = Object.fromEntries(Object.entries(next.runtime.kubernetes.contexts).filter(([, context]) => ids.has(context.clusterId.toLowerCase())))
+    const currentContext = contexts[next.runtime.kubernetes.currentContext] ? next.runtime.kubernetes.currentContext : null
+    const clusters = Object.fromEntries((next.sandbox.aksClusters ?? []).map(cluster => [cluster.id,
+      next.runtime.kubernetes.clusters[cluster.id] ?? emptyClusterState(cluster.id)]))
+    next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext, clusters } } }
+  }
   if (lab.capabilities?.foundryInference === true) {
     const generations = { ...next.dependencyGenerations }
     for (const [appId, deployment] of Object.entries(run.runtime.deploymentsByApp)) {
