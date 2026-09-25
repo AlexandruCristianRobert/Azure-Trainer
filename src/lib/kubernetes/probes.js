@@ -148,6 +148,11 @@ export function processProbeTimestamp(input, atMs, lab) {
       ? (atMs - experiment.baselineReadyAtMs) / 1000 : -1
     const activeFault = script && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
       && (script.endAfterStartSeconds === undefined || elapsedSeconds < script.endAfterStartSeconds)
+    const kind = String(script?.kind ?? '').toLowerCase()
+    const dependencySignals = {
+      ai_available: !(activeFault && (kind.includes('aioutage') || kind.includes('aicoupling'))),
+      postgres_available: !(activeFault && (kind.includes('postgres') || kind.includes('database') || kind.includes('dboutage'))),
+    }
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
     for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
@@ -171,7 +176,7 @@ export function processProbeTimestamp(input, atMs, lab) {
       const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) {
         if ((type === 'readiness' || type === 'liveness') && !container.startupPassed) continue
-        start(state, container, pod, appSpec, type, atMs, {})
+        start(state, container, pod, appSpec, type, atMs, dependencySignals)
       }
     }
     for (const pod of pods) {
@@ -188,7 +193,7 @@ export function processProbeTimestamp(input, atMs, lab) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       const appSpec = healthAppSpec(run, state, pod)
-      for (const type of ['readiness', 'liveness']) if (container.startupPassed) start(state, container, pod, appSpec, type, atMs, {})
+      for (const type of ['readiness', 'liveness']) if (container.startupPassed) start(state, container, pod, appSpec, type, atMs, dependencySignals)
       for (const type of ['readiness', 'liveness']) complete(state, container, pod, appSpec, type, atMs)
       syncPodReadiness(pod, container)
     }

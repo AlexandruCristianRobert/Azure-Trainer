@@ -5,7 +5,7 @@ const clone = value => structuredClone(value)
 function digest(value) {
   let hash = 2166136261
   for (const char of JSON.stringify(value)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
-  return `sha256:${(hash >>> 0).toString(16)}`
+  return `fnv1a32:${(hash >>> 0).toString(16)}`
 }
 
 function desiredObject(value) {
@@ -31,7 +31,7 @@ function fingerprint(context, target) {
   const artifactId = image ? context.artifacts?.publishedTags?.[image] ?? null : null
   const artifact = artifactId ? context.artifacts?.buildsById?.[artifactId] ?? null : null
   const manifest = getProjectManifest(context.project.manifestId)
-  const savedBuildFiles = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, context.project.savedFiles[path] ?? null]))
+  const savedBuildFiles = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, digest(context.project.savedFiles[path] ?? null)]))
   const savedKubernetesFiles = Object.fromEntries(Object.entries(context.project.savedFiles ?? {})
     .filter(([path]) => /^k8s\/(?:deployment|configmap|secret|service).*\.ya?ml$/i.test(path))
     .sort(([a], [b]) => a.localeCompare(b)).map(([path, text]) => [path, /secret/i.test(path) ? { digest: digest(text) } : text]))
@@ -70,15 +70,22 @@ function captureSample(state, experiment, nowMs) {
   experiment.summary.restartReceipts = state.health.receipts.filter(item => item.cause === 'probe' && experiment.podUids.includes(item.podUid)).slice(-40)
 }
 
+function scenarioType(receipt) {
+  if (receipt.script?.initializationSeconds !== undefined) return 'cold'
+  if (receipt.script?.endOnContainerTermination === true) return 'hang'
+  if (receipt.script?.sampleAtSeconds?.length === 2 && receipt.script?.endAfterStartSeconds === 20) return 'readiness'
+  return 'outage'
+}
+
 function assess(state, receipt) {
   const containers = receipt.podUids.map(uid => state.health.containers[uid]).filter(Boolean)
   const allReady = containers.length === receipt.podUids.length && containers.every(item => item.ready)
   const completeProbes = containers.length > 0 && containers.every(item => ['startup', 'readiness', 'liveness'].every(kind => item.checks?.[kind]))
   const healthyChecks = completeProbes && containers.every(item => item.checks.startup.successes > 0 && item.checks.readiness.successes > 0 && item.checks.liveness.successes > 0)
-  if (receipt.scenarioId === 'coldStartup') return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
-  if (receipt.scenarioId === 'temporaryAdmissionClosure') return allReady && receipt.samples.length >= 2
+  if (scenarioType(receipt) === 'cold') return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
+  if (scenarioType(receipt) === 'readiness') return allReady && receipt.samples.length >= 2
     && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length) && containers.every(item => item.restartCount === 0)
-  if (receipt.scenarioId === 'processHang') return allReady && receipt.summary.restartReceipts.length > 0
+  if (scenarioType(receipt) === 'hang') return allReady && receipt.summary.restartReceipts.length > 0
   return allReady && receipt.samples.length > 0
 }
 
@@ -141,7 +148,7 @@ export function finishProbeExperiment(input, lab) {
     run = recordVerification(run, lab, task.id, { scenarioId: receipt.scenarioId, scenarioVersion: 1, outcome: receipt.outcome, completed: receipt.outcome === 'passed',
       startedAtMs: receipt.startedAtMs, endedAtMs: receipt.endedAtMs,
       measurements: { clusterId: receipt.clusterId, samples: receipt.samples, summary: receipt.summary, probeReceipt: receipt } })
-    state.health.receipts.at(-1).evidenceId = run.evidence.currentEvidenceByTask[task.id]
+    run.runtime.kubernetes.clusters[receipt.clusterId].health.receipts.at(-1).evidenceId = run.evidence.currentEvidenceByTask[task.id]
   }
   return run
 }
@@ -159,7 +166,10 @@ export function cancelChangedProbeExperiments(input) {
   let run = input
   for (const [clusterId, state] of Object.entries(run.runtime.kubernetes?.clusters ?? {})) {
     const experiment = state.health?.experiment
-    if (!experiment || JSON.stringify(experiment.fingerprint) === JSON.stringify(fingerprint(run, experiment.target))) continue
+    const podUids = Object.values(state.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === experiment?.target?.namespace
+      && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet')).map(item => item.metadata.uid).sort()
+    if (!experiment || JSON.stringify(experiment.fingerprint) === JSON.stringify(fingerprint(run, experiment.target))
+      && JSON.stringify(podUids) === JSON.stringify(experiment.podUids)) continue
     run = cancelProbeExperiment(run, clusterId).run
     const receipt = run.runtime.kubernetes.clusters[clusterId].health.receipts.at(-1)
     receipt.reason = 'Captured experiment inputs changed.'
