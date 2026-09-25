@@ -144,6 +144,17 @@ export function processProbeTimestamp(input, atMs, lab) {
       for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
       syncPodReadiness(pod, container)
     }
+    // A startup completion can enable zero-delay readiness/liveness at this
+    // same timestamp. Start and settle that newly eligible work before moving
+    // to the next event boundary.
+    for (const pod of pods) {
+      const container = state.health?.containers?.[pod.metadata.uid]
+      if (!container || pod.status?.phase !== 'Running') continue
+      const appSpec = healthAppSpec(run, state, pod)
+      for (const type of ['readiness', 'liveness']) if (container.startupPassed) start(container, pod, appSpec, type, atMs, {})
+      for (const type of ['readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
+      syncPodReadiness(pod, container)
+    }
   }
   return run
 }
