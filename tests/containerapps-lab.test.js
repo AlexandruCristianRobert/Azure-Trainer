@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { createSandbox } from '../src/lib/sandbox/model.js'
 import { runLine } from '../src/lib/az/shell.js'
-import { labById } from '../src/data/labs/index.js'
+import { LABS, labById } from '../src/data/labs/index.js'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { useProgressStore } from '../src/stores/progress.js'
 import { fakeLocalStorage } from './helpers/fakeLocalStorage.js'
@@ -116,7 +116,7 @@ describe('Container Apps Lab', () => {
     const progress = useProgressStore()
     expect(progress.results).toHaveLength(1)
     expect(progress.results[0]).toMatchObject({ labId: LAB, tasksDone: 5, total: 5, hintsUsed: 1, solutionsUsed: 1, durationMs: 5000 })
-    expect(progress.skillAreaProgress('containers')).toEqual({ total: 17, completed: 1, inProgress: 0 })
+    expect(progress.skillAreaProgress('containers')).toEqual({ total: LABS.filter((lab) => lab.skillAreaId === 'containers').length, completed: 1, inProgress: 0 })
     await run.execute('az containerapp show -g rg-containerapps -n ca-contoso-api', opts)
     expect(progress.results).toHaveLength(1)
     run.load(LAB)

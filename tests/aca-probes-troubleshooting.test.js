@@ -59,7 +59,7 @@ describe('probe troubleshooting incident', () => {
     expect(JSON.parse(run.project.savedFiles['containerapp.yaml']).properties.template.containers[0].probes[0].failureThreshold).toBe(2)
     expect(run.sandbox.containerApps[0]).toMatchObject({ name: 'api-probes-incident', cpu: 0.5, memory: '1Gi', minReplicas: 2, maxReplicas: 2 })
     expect(run.sandbox.resourceGroups[0].createdAt).toBe('2026-09-22T00:00:00.000Z')
-    expect(LABS).toHaveLength(22)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(labById('aca-probes-guided'))).toBe(probesTroubleshootingLab)
   })
 

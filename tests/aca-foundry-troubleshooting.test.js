@@ -30,7 +30,7 @@ describe('Foundry troubleshooting Lab', () => {
     const run = fresh()
     expect(lab).toMatchObject({ id: 'aca-foundry-troubleshooting', contentVersion: 1,
       journeyOrder: 11, labMode: 'troubleshooting' })
-    expect(LABS).toHaveLength(22)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(labById('aca-foundry-guided'))).toBe(lab)
     expect(nextLabFor(lab)).toBe(labById('aca-foundry-independent'))
     expect(run.sandbox.foundryAccounts).toHaveLength(1)

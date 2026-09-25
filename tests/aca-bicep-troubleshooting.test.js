@@ -5,7 +5,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { applyCommandEffects } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { migrateBehavioralRun } from '../src/lib/labEngine/migrations.js'
-import { LABS, nextLabFor } from '../src/data/labs/index.js'
+import { LABS, labById, nextLabFor } from '../src/data/labs/index.js'
 import { createPinia, setActivePinia } from 'pinia'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { behavioralRepository } from './helpers/behavioralRepository.js'
@@ -48,7 +48,7 @@ describe('Bicep troubleshooting Lab', () => {
     expect(run.project.savedFiles['infra/main.bicep']).toContain('identity.outputs.decoyPrincipalId')
     expect(run.project.savedFiles['infra/first.bicepparam']).toContain("environmentName = 'env-bicep-test'")
     expect(bicepTroubleshootingLab).toMatchObject({ journeyOrder: 14, labMode: 'troubleshooting', contentVersion: 1 })
-    expect(nextLabFor(LABS.at(-4))).toBe(bicepTroubleshootingLab)
+    expect(nextLabFor(labById('aca-bicep-guided'))).toBe(bicepTroubleshootingLab)
     expect(nextLabFor(bicepTroubleshootingLab)?.id).toBe('aca-bicep-independent')
   })
 

@@ -3,7 +3,7 @@ import { bicepGuidedLab } from '../src/data/labs/containerapps-journey/bicep-gui
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
-import { LABS, nextLabFor } from '../src/data/labs/index.js'
+import { LABS, labById, nextLabFor } from '../src/data/labs/index.js'
 import { createPinia, setActivePinia } from 'pinia'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { behavioralRepository } from './helpers/behavioralRepository.js'
@@ -41,8 +41,8 @@ describe('guided Bicep Lab', () => {
     expect(run.evidence.experimentsById).toEqual({})
     expect(evaluateLab(bicepGuidedLab, run).doneCount).toBe(0)
     expect(bicepGuidedLab).toMatchObject({ contentVersion: 1, journeyOrder: 13, labMode: 'guided' })
-    expect(LABS).toHaveLength(22)
-    expect(nextLabFor(LABS.at(-5))).toBe(bicepGuidedLab)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
+    expect(nextLabFor(labById('aca-foundry-independent'))).toBe(bicepGuidedLab)
     expect(nextLabFor(bicepGuidedLab)?.id).toBe('aca-bicep-troubleshooting')
   })
 

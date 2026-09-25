@@ -58,7 +58,7 @@ describe('independent CPU capacity Lab', () => {
     expect(cpuIndependentLab.scenarios.quiet).toMatchObject({ kind: 'cpu', version: 1, durationSeconds: 90, demandCpuSecondsPerSecond: 0 })
     expect(Object.isFrozen(cpuIndependentLab.scenarios)).toBe(true)
     expect(Object.values(cpuIndependentLab.scenarios).every(Object.isFrozen)).toBe(true)
-    expect(LABS.filter((item) => item.skillAreaId === 'containers')).toHaveLength(17)
+    expect(LABS.filter((item) => item.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(labById('aca-cpu-troubleshooting'))).toBe(cpuIndependentLab)
     expect(nextLabFor(cpuIndependentLab)).toBe(labById('aca-probes-guided'))
   })

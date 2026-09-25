@@ -28,7 +28,7 @@ describe('independent Foundry Lab', () => {
   it('seeds a private API with distinct attached pull and unattached inference identities, without Foundry or proof', () => {
     const run = fresh()
     expect(lab).toMatchObject({ engineVersion: 2, contentVersion: 1, journeyOrder: 12, labMode: 'independent' })
-    expect(LABS).toHaveLength(22)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(labById('aca-foundry-troubleshooting'))).toBe(lab)
     expect(nextLabFor(lab)).toBe(labById('aca-bicep-guided'))
     expect(run.sandbox.foundryAccounts).toEqual([])

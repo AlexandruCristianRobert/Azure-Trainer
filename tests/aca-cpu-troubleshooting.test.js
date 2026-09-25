@@ -54,7 +54,7 @@ describe('CPU troubleshooting Lab', () => {
     expect(evaluateLab(cpuTroubleshootingLab, run).doneCount).toBe(0)
     expect(cpuTroubleshootingLab.tasks.every((task) => task.hints.length === 2 && task.solution.steps.length > 0 && task.examNote)).toBe(true)
     expect(run.hintsRevealed).toEqual({})
-    expect(LABS.filter((lab) => lab.skillAreaId === 'containers')).toHaveLength(17)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(LABS.find((lab) => lab.id === 'aca-cpu-guided'))).toBe(cpuTroubleshootingLab)
     expect(nextLabFor(cpuTroubleshootingLab)).toBe(LABS.find((lab) => lab.id === 'aca-cpu-independent'))
   })

@@ -29,7 +29,7 @@ describe('guided Foundry integration Lab', () => {
     expect(run.evidence.experimentsById).toEqual({})
     expect(run.runtime.deploymentsByApp[foundryGuidedLab.scenarios.valid.appId].active).toBeTruthy()
     expect(evaluateLab(foundryGuidedLab, run).doneCount).toBe(0)
-    expect(LABS).toHaveLength(22)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(labById('aca-probes-independent'))).toBe(foundryGuidedLab)
     expect(nextLabFor(foundryGuidedLab)).toBe(labById('aca-foundry-troubleshooting'))
   })

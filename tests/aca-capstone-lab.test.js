@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { capstoneLab } from '../src/data/labs/containerapps-journey/capstone.lab.js'
-import { LABS, nextLabFor } from '../src/data/labs/index.js'
+import { LABS, labById, nextLabFor } from '../src/data/labs/index.js'
 import { createBehavioralRun, contextFor, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { migrateBehavioralRun } from '../src/lib/labEngine/migrations.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
@@ -31,8 +31,8 @@ function scenario(run, id) {
 describe('Container Apps Capstone Lab', () => {
   it('is the final seven-stage Lab and starts with an empty Sandbox and incomplete saved source', () => {
     const run = createBehavioralRun(capstoneLab, { attemptId: 'capstone-fixture' })
-    expect(LABS.at(-1).id).toBe('aca-capstone')
-    expect(nextLabFor(LABS.at(-2))?.id).toBe('aca-capstone')
+    expect(labById('aca-capstone')).toBeTruthy()
+    expect(nextLabFor(labById('aca-bicep-independent'))?.id).toBe('aca-capstone')
     expect(nextLabFor(capstoneLab)).toBeNull()
     expect(capstoneLab.stages.map(stage => stage.id)).toEqual([
       'prepare', 'publish', 'deploy', 'healthy', 'incident', 'recovery', 'cleanup',

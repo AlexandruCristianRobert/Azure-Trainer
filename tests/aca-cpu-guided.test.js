@@ -35,7 +35,7 @@ describe('guided CPU scaling Lab', () => {
     expect(run.evidence.experimentsById).toEqual({})
     expect(run.hintsRevealed).toEqual({})
     expect(run.solutionsRevealed).toEqual({})
-    expect(LABS.filter((lab) => lab.skillAreaId === 'containers')).toHaveLength(17)
+    expect(LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end')).toHaveLength(16)
     expect(nextLabFor(LABS.find((lab) => lab.id === 'aca-deploy-independent'))).toBe(cpuGuidedLab)
     expect(nextLabFor(cpuGuidedLab)).toBe(labById('aca-cpu-troubleshooting'))
   })
