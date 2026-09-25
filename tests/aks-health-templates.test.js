@@ -12,6 +12,7 @@ describe('AKS health teaching templates', () => {
     expect(HEALTH_MANIFEST.files).toContain('training_health.py')
     expect(HEALTH_MANIFEST.buildFiles).toContain('training_health.py')
     expect(HEALTH_MANIFEST.fixedFiles['training_health.py']).toBe(HEALTH_SOLUTION_FILES['training_health.py'])
+    expect(HEALTH_SOLUTION_FILES['training_health.py']).toMatch(/Training-only adapter[\s\S]*performs no network calls/)
     expect(HEALTH_SOLUTION_FILES['app.py']).toContain('def answer(question):')
     expect(HEALTH_SOLUTION_FILES.Dockerfile).toContain('COPY app.py server.py training_clients.py training_health.py retrieval.sql ./')
     expect(parsePythonDockerfile(HEALTH_SOLUTION_FILES.Dockerfile, { buildFiles: HEALTH_MANIFEST.buildFiles }).diagnostics).toEqual([])
@@ -37,10 +38,19 @@ describe('AKS health teaching templates', () => {
     expect(container.startupProbe.httpGet.path).toBe('/health/startup')
     expect(container.readinessProbe.httpGet.path).toBe('/health/ready')
     expect(container.livenessProbe.httpGet.path).toBe('/health/live')
+    expect(container.imagePullPolicy).toBe('Always')
+    expect(validated.object.spec.template.spec.terminationGracePeriodSeconds).toBe(1)
   })
 
   it('declares fixed, source-independent initialization and outage fixture facts', () => {
     expect(HEALTH_FIXTURES).toMatchObject({ version: 1, initializationSeconds: 24 })
     expect(HEALTH_FIXTURES.signalNames).toEqual(['initialized', 'accepting_requests', 'postgres_available', 'ai_available'])
+    expect(HEALTH_FIXTURES.scenarios).toMatchObject({
+      temporaryAdmissionClosure: { startAfterStartSeconds: 5, endAfterStartSeconds: 20, sampleAtSeconds: [9, 25], finishAfterStartSeconds: 30 },
+      processHang: { startAfterStartSeconds: 5, endOnContainerTermination: true, firstSampleAfterStartSeconds: 9, sampleIntervalSeconds: 5, maxSamples: 20, finishAfterStartSeconds: 100 },
+      optionalAiOutage: { startAfterStartSeconds: 5, endAfterStartSeconds: 35, sampleAtSeconds: [10, 12, 40], finishAfterStartSeconds: 45 },
+      requiredPostgresOutage: { startAfterStartSeconds: 5, endAfterStartSeconds: 25, sampleAtSeconds: [10, 30], finishAfterStartSeconds: 35 },
+      optionalAiCoupling: { startAfterStartSeconds: 5, endAfterStartSeconds: 35, sampleAtSeconds: [6], finishAfterStartSeconds: 45 },
+    })
   })
 })

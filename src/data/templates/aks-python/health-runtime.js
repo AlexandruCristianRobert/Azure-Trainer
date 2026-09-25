@@ -1,4 +1,4 @@
-export const HEALTH_RUNTIME_SOURCE = `"""Cached fixture signals supplied by the AKS health simulator."""
+export const HEALTH_RUNTIME_SOURCE = `"""Training-only adapter for cached fixture signals. It performs no network calls."""
 _state = {"initialized": True, "accepting_requests": True, "postgres_available": True, "ai_available": True}
 
 def initialized():

@@ -43,6 +43,10 @@ export function parsePythonHealth(files, manifest = {}) {
   const fail = (node, message) => { unsupported ??= diagnostic(text, node, message); return null }
   const expression = node => {
     if (!node || unsupported) return null
+    if (node.name === 'ParenthesizedExpression') {
+      const values = parts(node)
+      return values.length === 1 ? expression(values[0]) : fail(node, 'Parentheses must contain one supported health expression.')
+    }
     if (node.name === 'Boolean') return { kind: 'constant', value: raw(node, text) === 'True' }
     if (node.name === 'CallExpression') {
       const callee = kids(node).find(child => child.name === 'VariableName')
@@ -93,11 +97,14 @@ export function parsePythonHealth(files, manifest = {}) {
     if (!fn) { diagnostics.push(diagnostic(text, null, `Define ${name}() for the fixed health adapter.`)); continue }
     const fnParts = kids(fn); const parameters = fnParts.find(child => child.name === 'ParamList')
     if (parts(parameters).length) diagnostics.push(diagnostic(text, parameters, `${name}() must not accept parameters.`))
-    const body = fnParts.find(child => child.name === 'Body'); const returns = kids(body).filter(child => child.name === 'ReturnStatement')
-    if (returns.length !== 1) { diagnostics.push(diagnostic(text, body, `${name}() must return one status and body mapping.`)); continue }
-    const dictionary = kids(returns[0]).find(child => child.name === 'DictionaryExpression'); const entries = parts(dictionary)
+    const body = fnParts.find(child => child.name === 'Body')
+    const statements = kids(body).filter(child => ![':', '\n', 'Comment'].includes(child.name))
+    if (statements.length !== 1 || statements[0].name !== 'ReturnStatement') {
+      diagnostics.push(diagnostic(text, statements[0] ?? body, `${name}() must contain only one direct return mapping.`)); continue
+    }
+    const dictionary = kids(statements[0]).find(child => child.name === 'DictionaryExpression'); const entries = parts(dictionary)
     const statusKey = entries.findIndex(child => literal(child, text) === 'status'); const bodyKey = entries.findIndex(child => literal(child, text) === 'body')
-    if (entries.length !== 4 || statusKey < 0 || bodyKey < 0) { diagnostics.push(diagnostic(text, dictionary, `${name}() must return exactly status and body.`)); continue }
+    if (entries.length !== 4 || statusKey < 0 || bodyKey < 0) { diagnostics.push(diagnostic(text, dictionary ?? statements[0], `${name}() must return exactly status and body.`)); continue }
     const statusExpression = expression(entries[statusKey + 1]); const responseBody = bodyValue(entries[bodyKey + 1])
     if (unsupported) { diagnostics.push(unsupported); unsupported = null; continue }
     if (statusExpression?.kind === 'constant' && (!Number.isInteger(statusExpression.value) || statusExpression.value < 100 || statusExpression.value > 599)) {
