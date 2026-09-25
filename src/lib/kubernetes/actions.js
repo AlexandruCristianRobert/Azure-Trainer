@@ -3,7 +3,7 @@ import { simulateKubernetesRequest } from './requests.js'
 import { refreshKubernetesDependencies } from './evidence.js'
 import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
-import { advanceKubernetesTime } from './time.js'
+import { advanceKubernetesTimeResult } from './time.js'
 import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 import { advanceIntegrationIncident } from './integration-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
@@ -32,9 +32,9 @@ export function applyAksAction(run, action, lab) {
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS time advance requires an integer seconds value from 1 through 300.' }] }
     }
     const advanced = lab?.capabilities?.kubernetesProbes === true
-      ? advanceKubernetesTime(run, action.seconds, lab)
-      : advanceConfigurationProjection(run, action.seconds)
-    return { run: advanced, lines: [{ kind: 'out', text: `Advanced AKS simulation by ${action.seconds} seconds.` }], portalEvents: [], diagnostics: [] }
+      ? advanceKubernetesTimeResult(run, action.seconds, lab)
+      : { run: advanceConfigurationProjection(run, action.seconds), diagnostics: [] }
+    return { run: advanced.run, lines: advanced.diagnostics.length ? [] : [{ kind: 'out', text: `Advanced AKS simulation by ${action.seconds} seconds.` }], portalEvents: [], diagnostics: advanced.diagnostics }
   }
   if (action.type !== 'aks-request' || Object.keys(action).some(key => !['type', 'scenarioId'].includes(key))
     || lab?.capabilities?.kubernetes !== true || typeof action.scenarioId !== 'string')
