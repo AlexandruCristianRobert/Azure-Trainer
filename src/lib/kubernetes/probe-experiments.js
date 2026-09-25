@@ -88,7 +88,7 @@ function captureSample(run, clusterId, experiment, nowMs, final = false) {
       port: service.spec.ports?.[0]?.port ?? 80, ...request, integrationProfile }, null)
     run = routed.run; state = run.runtime.kubernetes.clusters[clusterId]
     sample.request = request
-    sample.response = { status: routed.outcome.status, body: routed.outcome.body, transport: routed.outcome.transport,
+    sample.response = { requestId: routed.outcome.requestId, status: routed.outcome.status, body: routed.outcome.body, transport: routed.outcome.transport,
       route: routed.outcome.route, dependencyTrace: routed.outcome.dependencyTrace, integrationTrace: routed.outcome.integrationTrace ?? null }
   }
   const current = state.health.experiment
@@ -111,15 +111,28 @@ function assess(state, receipt) {
   const allReady = containers.length === receipt.podUids.length && containers.every(item => item.ready)
   const completeProbes = containers.length > 0 && containers.every(item => ['startup', 'readiness', 'liveness'].every(kind => item.checks?.[kind]))
   const healthyChecks = completeProbes && containers.every(item => item.checks.startup.successes > 0 && item.checks.readiness.successes > 0 && item.checks.liveness.successes > 0)
-  if (scenarioType(receipt) === 'cold') return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
+  if (scenarioType(receipt) === 'cold') {
+    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const firstStartupSuccess = Math.min(...events.filter(item => item.type === 'probe-result' && item.probeType === 'startup' && item.success).map(item => item.atMs))
+    const initializedAt = receipt.startedAtMs + (receipt.initializationSeconds ?? receipt.script.initializationSeconds ?? 0) * 1000
+    const earlyGatedCheck = events.some(item => item.type === 'probe-start' && ['readiness', 'liveness'].includes(item.probeType)
+      && (!Number.isFinite(firstStartupSuccess) || item.atMs < firstStartupSuccess))
+    return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
+      && Number.isFinite(firstStartupSuccess) && firstStartupSuccess >= initializedAt && !earlyGatedCheck
+  }
   if (scenarioType(receipt) === 'readiness') return allReady && receipt.samples.length >= 2
     && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length && item.response?.route?.podUid !== receipt.podUids[0])
     && receipt.samples.some(item => item.second === 25 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
     && containers.every(item => item.restartCount === 0)
-  if (scenarioType(receipt) === 'hang') return receipt.summary.restartReceipts.length > 0
+  if (scenarioType(receipt) === 'hang') return receipt.summary.restartReceipts.some(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
+    && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
+    && receipt.podUids.some(uid => state.health.containers[uid]?.containerId !== receipt.containerIds[uid])
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.body?.sources?.includes('training-backups'))
   const kind = String(receipt.script?.kind ?? '').toLowerCase()
+  if (kind.includes('aicoupling')) return receipt.summary.restartReceipts.some(item => item.cause === 'probe'
+    && item.probeType === 'LivenessProbeFailed' && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)
+    && receipt.samples.some(item => item.second === 6 && item.response?.status === 200)
   if (kind.includes('aioutage') || kind.includes('aicoupling')) return allReady && containers.every(item => item.restartCount === 0)
     && receipt.samples.some(item => item.second === 10 && item.response?.status === 200)
     && receipt.samples.some(item => item.second === 12 && item.response?.status === 503)
@@ -151,6 +164,7 @@ export function startProbeExperiment(input, scenarioId, lab) {
     deploymentUid: state.resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.uid ?? null,
     fingerprint: fingerprint(run, scenario.target), podUids,
     containerIds: Object.fromEntries(podUids.map(uid => [uid, state.health.containers[uid]?.containerId ?? null])),
+    initializationSeconds: lab?.healthFixture?.initializationSeconds ?? scenario.script?.initializationSeconds ?? 0,
     baselineReadyAtMs: null, startedAtMs: run.runtime.simTimeMs, endsAtMs: run.runtime.simTimeMs + durationSeconds * 1000,
     status: 'active', phase: 'warming', samples: [], summary: { readinessIntervals: [], restartReceipts: [], sampleCount: 0 },
     script: { ...clone(scenario.script), kind: scenarioId } }
@@ -169,6 +183,10 @@ export function observeProbeExperiment(input, atMs, lab) {
       && pods.every(pod => pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True'))) {
       experiment.baselineReadyAtMs = run.runtime.simTimeMs
       experiment.phase = 'running'
+      const relativeFinishSeconds = scenarioType({ script: experiment.script }) === 'cold' ? 1
+        : experiment.script.finishAfterStartSeconds
+      if (experiment.scenarioId !== 'coldStartup' && Number.isInteger(relativeFinishSeconds)) experiment.endsAtMs = Math.min(experiment.endsAtMs,
+        experiment.baselineReadyAtMs + relativeFinishSeconds * 1000)
     }
     run = captureSample(run, clusterId, experiment, run.runtime.simTimeMs)
     state = run.runtime.kubernetes.clusters[clusterId]

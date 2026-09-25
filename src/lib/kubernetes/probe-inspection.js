@@ -1,3 +1,4 @@
+import { getServiceBackends } from './services.js'
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 const experimentView = value => value ? {
   scenarioId: value.scenarioId, scenarioVersion: value.scenarioVersion ?? 1, status: value.status,
@@ -10,8 +11,15 @@ export function inspectProbes(run, target) {
   const state = run.runtime.kubernetes.clusters?.[clusterId]
   if (!state?.health) return { clusterId, containers: [], experiment: null }
   const pods = new Map(Object.values(state.resources).filter(item => item.kind === 'Pod').map(pod => [pod.metadata.uid, pod]))
+  const deployment = typeof target === 'object' ? state.resources[`Deployment/${target.namespace}/${target.deploymentName}`] : null
+  const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
+  const artifactId = image ? run.artifacts?.publishedTags?.[image] ?? null : null
+  const artifact = artifactId ? run.artifacts?.buildsById?.[artifactId] : null
+  const backends = typeof target === 'object' && target.serviceName ? getServiceBackends(run, target) : null
   return {
     clusterId,
+    sourceVersion: image ? { image, artifactId, sourceHash: artifact?.sourceHash ?? null, version: artifact?.appSpec?.version ?? null } : null,
+    readyBackendCount: backends?.readyEndpoints?.length ?? 0,
     experiment: experimentView(state.health.experiment),
     receipts: state.health.receipts.map(experimentView),
     timeline: [...(state.health.events ?? []).map(clone), ...Object.entries(state.health.containers).flatMap(([podUid, health]) => Object.entries(health.checks ?? {}).flatMap(([kind, check]) => {
