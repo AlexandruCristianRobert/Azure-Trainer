@@ -22,6 +22,23 @@ it('preserves restart annotation and Pod identities on unchanged saved Deploymen
   expect(applied.run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].spec.template.metadata.annotations).toEqual(annotation)
 })
 
+it('keeps a mounted update pending across reads and a saved-run reload until 60 simulated seconds', () => {
+  let { run, lab, clusterId } = seedConfiguredAssistant()
+  const pod = getDeploymentPods(run, clusterId, 'assistant', 'assistant')[0]
+  const changed = run.project.savedFiles['k8s/configmap.yaml'].replace('Training assistant', 'Updated assistant')
+  run = act(run, lab, { type: 'save-file', path: 'k8s/configmap.yaml', text: changed }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }).run
+  const due = run.runtime.kubernetes.clusters[clusterId].projectionDue[pod.metadata.uid]
+  run = act(run, lab, { type: 'command', line: 'kubectl get configmaps -n assistant' }).run
+  expect(run.runtime.kubernetes.clusters[clusterId].projectionDue[pod.metadata.uid]).toBe(due)
+  run = act(run, lab, { type: 'aks-advance', seconds: 59 }).run
+  run = structuredClone(JSON.parse(JSON.stringify(run)))
+  expect(run.runtime.kubernetes.clusters[clusterId].podSnapshots[pod.metadata.uid].files['/etc/assistant/settings.json']).toContain('Training assistant')
+  run = act(run, lab, { type: 'aks-advance', seconds: 1 }).run
+  expect(run.runtime.kubernetes.clusters[clusterId].podSnapshots[pod.metadata.uid].files['/etc/assistant/settings.json']).toContain('Updated assistant')
+  expect(run.runtime.kubernetes.clusters[clusterId].projectionDue[pod.metadata.uid]).toBeUndefined()
+})
+
 it('keeps environment old but refreshes mounted files after explicit simulated time', () => {
   let { run, lab, clusterId } = seedConfiguredAssistant()
   const pod = getDeploymentPods(run, clusterId, 'assistant', 'assistant')[0]
