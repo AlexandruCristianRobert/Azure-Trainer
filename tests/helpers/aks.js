@@ -1,6 +1,7 @@
 import { applyRunAction } from '../../src/lib/labEngine/actions.js'
 import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
+import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../src/data/templates/aks-python/configuration.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 
 export function makeTrainingSnapshot() {
@@ -83,4 +84,23 @@ export function seedFoundation({ namespace = 'assistant', version = '1.0' } = {}
     tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false },
       { id: 'replacement-task', verification: { scenarioId: 'replacement', scenarioVersion: 1 }, dependencies, check: () => false }] }
   return { lab: evidenceLab, run, clusterId }
+}
+
+export function seedConfiguredAssistant({ namespace = 'assistant', profile = 'training' } = {}) {
+  const { lab: initialLab, run: initial } = createAksTestRun({ manifestId: CONFIG_MANIFEST.id,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true }, initialProjectFiles: { ...CONFIG_FILES } })
+  let run = initial
+  const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true } }
+  run = act(run, lab, { type: 'command', line: 'az group create -n rgaksconfig -l eastus' }).run
+  run = act(run, lab, { type: 'command', line: 'az acr create -g rgaksconfig -n acraksconfig --sku Basic' }).run
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: CONFIG_SOLUTION_FILES['app.py'] }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: CONFIG_FILES['k8s/deployment.yaml'].replace('acraksconfigguided.azurecr.io/assistant:starter', 'acraksconfig.azurecr.io/assistant:v1\n          imagePullPolicy: Always') }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksconfig -t assistant:v1 .' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks create -g rgaksconfig -n aksconfig --enable-managed-identity --generate-ssh-keys --attach-acr acraksconfig' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rgaksconfig -n aksconfig' }).run
+  for (const path of CONFIG_MANIFEST.kubernetesFiles) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  const clusterId = run.sandbox.aksClusters[0].id
+  const dependencies = kubernetesDependencies(clusterId, namespace, 'assistant', 'assistant', { sourceSensitive: true })
+  const scenario = { kind: 'aks-request', version: 1, target: { clusterId, namespace, serviceName: 'assistant', deploymentName: 'assistant' }, request: { method: 'GET', path: '/api/info' }, expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: profile } }, requireReplacement: false }
+  return { lab: { ...lab, scenarios: { info: scenario }, tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false }] }, run, clusterId }
 }

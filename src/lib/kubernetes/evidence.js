@@ -27,6 +27,22 @@ export function kubernetesDependencies(clusterId, namespace, deploymentName, ser
   return deps
 }
 
+export function configurationDependencies(target, { historical = false } = {}) {
+  const { clusterId, namespace, deploymentName, serviceName } = target ?? {}
+  const dependencies = kubernetesDependencies(clusterId, namespace, deploymentName, serviceName, { sourceSensitive: true })
+  if (!historical) return dependencies
+  return {
+    [`aks-config-history:${clusterId}:${namespace}:${deploymentName}`]: context => {
+      const state = context.runtime.kubernetes?.clusters?.[clusterId]
+      const deployment = state?.resources?.[`Deployment/${namespace}/${deploymentName}`]
+      const pods = Object.values(state?.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)
+        .map(item => ({ uid: item.metadata.uid, snapshot: state.podSnapshots[item.metadata.uid] ?? null })).sort((a, b) => a.uid.localeCompare(b.uid))
+      return { clusterUid: context.sandbox.aksClusters?.find(item => item.id === clusterId)?.id ?? null,
+        deploymentUid: deployment?.metadata?.uid ?? null, sourceHash: pods[0]?.snapshot?.artifactId ? context.artifacts.buildsById[pods[0].snapshot.artifactId]?.sourceHash ?? null : null, pods }
+    },
+  }
+}
+
 export function refreshKubernetesDependencies(previous, next, lab) {
   if (lab?.capabilities?.kubernetes !== true) return next
   const counters = { ...next.dependencyGenerations }; const changed = new Set()

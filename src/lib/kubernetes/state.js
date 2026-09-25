@@ -21,7 +21,9 @@ export function validateKubernetesRuntime(runtime, run) {
       && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence < run.nextSequence
       && item.id === `aks-request-${item.sequence}`
       && typeof item.scenarioId === 'string' && Number.isInteger(item.status) && typeof item.namespace === 'string'
-      && item.request?.method === 'GET' && item.request?.path === '/api/info')
+      && ((item.request?.method === 'GET' && item.request?.path === '/api/info')
+        || (item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string'))
+      && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace)))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   const clusterIds = new Set((run.sandbox.aksClusters ?? []).map(cluster => cluster.id))

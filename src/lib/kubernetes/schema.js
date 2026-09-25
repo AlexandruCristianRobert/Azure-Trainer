@@ -110,8 +110,9 @@ function validateDeployment(value, root, configuration) {
   if (issue || !validLabels(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_LABELS', 'matchLabels', root)
   issue = allowed(value.spec.template, new Set(['metadata', 'spec']), root)
   if (issue) return issue
-  issue = allowed(value.spec.template.metadata, new Set(['labels']), root)
+  issue = allowed(value.spec.template.metadata, new Set(['labels', 'annotations']), root)
   if (issue || !validLabels(value.spec.template.metadata?.labels)) return issue ?? diag('INVALID_LABELS', 'template labels', root)
+  if (value.spec.template.metadata.annotations !== undefined && !validLabels(value.spec.template.metadata.annotations)) return diag('INVALID_ANNOTATIONS', 'template annotations', root)
   for (const [key, label] of Object.entries(value.spec.selector.matchLabels)) {
     if (typeof label !== 'string' || value.spec.template.metadata.labels[key] !== label) return diag('KUBE_SELECTOR_MISMATCH', key, root, 'Deployment selector labels must match Pod-template labels.')
   }

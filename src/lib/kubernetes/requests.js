@@ -1,6 +1,8 @@
 import { getDeploymentPods } from './reconcile.js'
 import { canonicalize } from '../labEngine/evidence.js'
 import { tokenize } from '../az/tokenize.js'
+import { simulateAssistant } from './assistant.js'
+import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
 
 const diagnostic = (code, message) => ({ code, message })
 function hasPodDeleteCommand(history, name) {
@@ -52,10 +54,16 @@ export function simulateKubernetesRequest(run, scenario) {
       if (resolved !== artifact?.appSpec?.listeningPort) issue = diagnostic('TARGET_PORT_MISMATCH', 'The Service targetPort does not reach the captured application listener.')
       else if (!snapshot || !artifact || !source || !route) issue = diagnostic('CAPTURED_APPLICATION_UNAVAILABLE', 'The selected Pod has no matching captured application route.')
       else {
-        const response = {}
-        for (const [key, expression] of Object.entries(route.response)) response[key] = expression.kind === 'config'
-          ? (snapshot.environment[expression.key] ?? expression.defaultValue) : expression.value
-        status = 200; body = response; issue = null
+        if (scenario.request.method === 'POST') {
+          const answer = simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES)
+          status = answer.status; body = answer.body; issue = answer.diagnostic
+          scenario.dependencyTrace = answer.dependencyTrace
+        } else {
+          const response = {}
+          for (const [key, expression] of Object.entries(route.response)) response[key] = expression.kind === 'config'
+            ? (snapshot.environment[expression.key] ?? expression.defaultValue) : expression.value
+          status = 200; body = response; issue = null
+        }
       }
     }
   }
@@ -63,8 +71,10 @@ export function simulateKubernetesRequest(run, scenario) {
     const snapshot = cluster.podSnapshots[pod.metadata.uid]
     const artifact = snapshot && run.artifacts.buildsById[snapshot.artifactId]
     const route = artifact?.appSpec?.routes?.find(item => item.method === scenario.request.method && item.path === scenario.request.path)
-    const podBody = route && Object.fromEntries(Object.entries(route.response).map(([key, expression]) => [key,
-      expression.kind === 'config' ? (snapshot.environment[expression.key] ?? expression.defaultValue) : expression.value]))
+    const podBody = route && (scenario.request.method === 'POST'
+      ? simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES).body
+      : Object.fromEntries(Object.entries(route.response).map(([key, expression]) => [key,
+        expression.kind === 'config' ? (snapshot.environment[expression.key] ?? expression.defaultValue) : expression.value])))
     const c = pod?.spec?.containers?.[0]
     const targetPort = service?.spec?.ports?.[0]?.targetPort
     const port = typeof targetPort === 'number' ? targetPort : c?.ports?.find(item => item.name === targetPort)?.containerPort
@@ -92,7 +102,7 @@ export function simulateKubernetesRequest(run, scenario) {
     artifactId: selectedPods[0]?.artifactId ?? null, sourceHash: selectedPods[0]?.sourceHash ?? null,
     selectedPods: selectedPods.slice(0, 3), runningReplicaCount: selected.length,
     requiredReplicas: scenario.requireTwoReplicas ? 2 : 1, replacementProven, replacementReceipts,
-    diagnosticCode: issue?.code ?? null, request: { ...scenario.request }, simulated: true }
+    diagnosticCode: issue?.code ?? null, request: { ...scenario.request }, dependencyTrace: scenario.dependencyTrace ?? [], simulated: true }
   const expectedReplicas = scenario.requireTwoReplicas ? 2 : 1
   const outcome = status === scenario.expected.status && canonicalize(body) === canonicalize(scenario.expected.body)
     && selectedPods.filter(pod => pod.matchesExpected).length >= expectedReplicas && replacementProven
