@@ -5,6 +5,7 @@ import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
 import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 import { advanceIntegrationIncident } from './integration-incidents.js'
+import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -35,6 +36,9 @@ export function applyAksAction(run, action, lab) {
     || lab?.capabilities?.kubernetes !== true || typeof action.scenarioId !== 'string')
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS requests accept only a declared scenarioId; outcomes cannot be supplied by the caller.' }] }
   const scenario = lab.scenarios?.[action.scenarioId]
+  if (lab.id === AI_TROUBLESHOOTING_LAB_ID && INTEGRATION_SCENARIO_PHASES[action.scenarioId] !== run.runtime.kubernetes?.integrationIncident?.phase) {
+    return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_INCIDENT_NOT_READY', message: 'This assistant request belongs to a later incident phase.' }] }
+  }
   const scenarioKeys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile']
   const target = scenario?.target; const request = scenario?.request; const expected = scenario?.expected
   if (!scenario || Object.keys(scenario).some(key => !scenarioKeys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1

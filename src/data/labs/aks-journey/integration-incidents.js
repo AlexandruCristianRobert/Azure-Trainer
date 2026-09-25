@@ -10,3 +10,16 @@ export const INTEGRATION_INCIDENT_PHASES = Object.freeze([
   Object.freeze({ phase: 'filter', failureTask: 'observe-filter', recoveryTask: 'repair-filter', recoveryScenario: 'trouble-ai-filter-recovered', next: 'retry' }),
   Object.freeze({ phase: 'retry', failureTask: 'observe-no-retry', recoveryTask: 'repair-policy', recoveryScenario: null, next: null }),
 ])
+export const INTEGRATION_SCENARIO_PHASES = Object.freeze({
+  'trouble-ai-deployment-failure': 'deployment',
+  'trouble-ai-deployment-recovered': 'deployment',
+  'trouble-ai-filter-empty': 'filter',
+  'trouble-ai-filter-recovered': 'filter',
+  'trouble-ai-no-retry': 'retry',
+  'trouble-ai-transient-embedding': 'retry',
+  'trouble-ai-transient-postgres': 'retry',
+  'trouble-ai-persistent-answer': 'retry',
+  'trouble-ai-persistent-timeout': 'retry',
+  'trouble-ai-deadline-bound': 'retry',
+  'trouble-ai-final-healthy': 'retry',
+})

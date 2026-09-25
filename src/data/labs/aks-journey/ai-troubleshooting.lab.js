@@ -34,7 +34,30 @@ const policyReady = context => {
 const incident = context => context.runtime.kubernetes?.integrationIncident
 const evidence = (context, taskId) => context.evidence?.experimentsById?.[context.evidence?.currentEvidenceByTask?.[taskId]]
 const passed = (context, taskId, scenario) => { const record = evidence(context, taskId); return record?.outcome === 'passed' && record.completed && record.scenarioId === scenario && record.measurements?.deploymentUid === context.runtime.kubernetes?.clusters?.[target.clusterId]?.resources?.['Deployment/assistant/assistant']?.metadata?.uid }
-const historical = (context, taskId, scenario) => Object.values(context.evidence?.experimentsById ?? {}).some(record => record.taskId === taskId && record.scenarioId === scenario && record.outcome === 'passed' && record.completed)
+const historical = (context, taskId, scenario) => {
+  const uid = context.runtime.kubernetes?.clusters?.[target.clusterId]?.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]?.metadata?.uid
+  return Object.values(context.evidence?.experimentsById ?? {}).some(record => record.taskId === taskId && record.scenarioId === scenario
+    && record.outcome === 'passed' && record.completed && record.measurements?.deploymentUid === uid)
+}
+const filterRecoveryProven = context => {
+  const record = evidence(context, 'repair-filter')
+  const artifact = context.artifacts?.buildsById?.[record?.measurements?.artifactId]
+  const integration = artifact?.appSpec?.integration
+  const filters = integration?.querySpec?.filters ?? []
+  const nodes = new Map((integration?.graph?.nodes ?? []).map(node => [node.id, node]))
+  const unwrap = id => {
+    const node = nodes.get(id)
+    return node?.op === 'binding' ? unwrap(node.value) : node
+  }
+  const execute = (integration?.graph?.nodes ?? []).find(node => node.op === 'invoke' && node.method === 'execute' && node.args?.keywords?.params)
+  const params = nodes.get(execute?.args?.keywords?.params)
+  const audience = params?.op === 'dictionary' && unwrap(params.entries?.audience)
+  const settings = audience?.op === 'config' && unwrap(audience.object)
+  const audienceConfig = settings?.op === 'constructor' && settings.class === 'settings' && unwrap(settings.args?.audience)
+  return ['collection', 'audience', 'published'].every(column => filters.some(filter => filter.column === column))
+    && audienceConfig?.op === 'config' && audienceConfig.environment === 'AUDIENCE'
+    && record?.measurements?.integrationTrace?.queryBindings?.audience === 'employee'
+}
 const phase = value => context => incident(context)?.phase === value
 const task = (id, text, check, scenarioId, steps) => ({ id, stageId: 'diagnose', text, explanation: 'Use the supplied request trace to identify the reached dependency stage. The adapter owns no implicit retries; total attempts include retries and their waits within one shared request deadline.', hints: ['Inspect /api/info and /api/ask separately.', 'Compare the selected dependency stage and attempt history before changing source.'], examNote: 'Metadata filters make retrieval correct; they do not authorize access.', check, solution: { steps }, ...(scenarioId ? { verification: { scenarioId, scenarioVersion: 1 } } : {}) })
 const ask = (id, profile, expected) => ({ kind: 'aks-request', version: 1, target, connectivity: { origin: { kind: 'external' }, service: { namespace: 'assistant', name: 'assistant-public' }, port: 80 }, request: { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, expected, integrationProfile: profile })
@@ -61,9 +84,9 @@ export const aksAiTroubleshootingLab = {
   tasks: [
     task('observe-deployment', 'Observe the permanent embedding deployment failure; no query should run.', c => historical(c, 'observe-deployment', 'trouble-ai-deployment-failure'), 'trouble-ai-deployment-failure', [{ kind: 'scenario', scenarioId: 'trouble-ai-deployment-failure' }]),
     task('repair-deployment', 'Repair EMBEDDING_DEPLOYMENT, apply it, restart Pods, and prove recovery.', c => historical(c, 'repair-deployment', 'trouble-ai-deployment-recovered'), 'trouble-ai-deployment-recovered', [file('k8s/configmap.yaml'), ...commands('kubectl apply -f k8s/configmap.yaml', 'kubectl rollout restart deployment/assistant -n assistant'), { kind: 'scenario', scenarioId: 'trouble-ai-deployment-recovered' }]),
-    task('observe-filter', 'Reveal and observe the visitor filter: embedding succeeds, query returns zero rows, and answer is unreached.', c => historical(c, 'observe-filter', 'trouble-ai-filter-empty'), 'trouble-ai-filter-empty', [{ kind: 'command', resolver: 'next-incident', line: 'Continue to the metadata filter incident' }, { kind: 'scenario', scenarioId: 'trouble-ai-filter-empty' }]),
-    task('repair-filter', 'Restore AUDIENCE=employee without weakening the bound SQL metadata predicates.', c => historical(c, 'repair-filter', 'trouble-ai-filter-recovered'), 'trouble-ai-filter-recovered', [file('k8s/configmap.yaml'), ...commands('kubectl apply -f k8s/configmap.yaml', 'kubectl rollout restart deployment/assistant -n assistant'), { kind: 'scenario', scenarioId: 'trouble-ai-filter-recovered' }]),
-    task('observe-no-retry', 'Reveal the throttled-once profile and observe one failed embedding attempt.', c => historical(c, 'observe-no-retry', 'trouble-ai-no-retry'), 'trouble-ai-no-retry', [{ kind: 'command', resolver: 'next-incident', line: 'Continue to the retry incident' }, { kind: 'scenario', scenarioId: 'trouble-ai-no-retry' }]),
+    task('observe-filter', 'Reveal and observe the visitor filter: embedding succeeds, query returns zero rows, and answer is unreached.', c => ['filter', 'retry'].includes(incident(c)?.phase) && historical(c, 'observe-filter', 'trouble-ai-filter-empty'), 'trouble-ai-filter-empty', [{ kind: 'command', resolver: 'next-incident', line: 'Continue to the metadata filter incident' }, { kind: 'scenario', scenarioId: 'trouble-ai-filter-empty' }]),
+    task('repair-filter', 'Restore AUDIENCE=employee without weakening the bound SQL metadata predicates.', c => ['filter', 'retry'].includes(incident(c)?.phase) && historical(c, 'repair-filter', 'trouble-ai-filter-recovered') && filterRecoveryProven(c), 'trouble-ai-filter-recovered', [file('k8s/configmap.yaml'), ...commands('kubectl apply -f k8s/configmap.yaml', 'kubectl rollout restart deployment/assistant -n assistant'), { kind: 'scenario', scenarioId: 'trouble-ai-filter-recovered' }]),
+    task('observe-no-retry', 'Reveal the throttled-once profile and observe one failed embedding attempt.', c => phase('retry')(c) && historical(c, 'observe-no-retry', 'trouble-ai-no-retry'), 'trouble-ai-no-retry', [{ kind: 'command', resolver: 'next-incident', line: 'Continue to the retry incident' }, { kind: 'scenario', scenarioId: 'trouble-ai-no-retry' }]),
     task('repair-policy', 'Use three bounded attempts, only THROTTLED/UNAVAILABLE/TIMEOUT, zero SDK retries, a 1000 ms budget and 200 ms attempts; build and deploy resilient-v1.', c => policyReady(c) && artifactCurrent(c), null, [file('app.py'), file('k8s/deployment.yaml'), ...commands(`az acr build -r ${AI_TROUBLESHOOTING_REGISTRY} -t assistant:resilient-v1 .`, 'kubectl apply -f k8s/deployment.yaml')]),
     task('transient-embedding', 'Verify a one-time embedding throttle recovers within the request budget.', c => artifactCurrent(c) && passed(c, 'transient-embedding', 'trouble-ai-transient-embedding'), 'trouble-ai-transient-embedding', [{ kind: 'scenario', scenarioId: 'trouble-ai-transient-embedding' }]),
     task('transient-postgres', 'Verify a one-time PostgreSQL unavailable result recovers.', c => artifactCurrent(c) && passed(c, 'transient-postgres', 'trouble-ai-transient-postgres'), 'trouble-ai-transient-postgres', [{ kind: 'scenario', scenarioId: 'trouble-ai-transient-postgres' }]),

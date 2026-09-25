@@ -2,7 +2,7 @@ import { stringify } from 'yaml'
 import { saveProjectFile } from '../project/files.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects } from './objects.js'
-import { reconcileKubernetesResult, restartDeploymentResult } from './reconcile.js'
+import { getDeploymentPods, reconcileKubernetesResult, restartDeploymentResult } from './reconcile.js'
 import { AI_TROUBLESHOOTING_CLUSTER_ID, AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_FILES, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 const diagnostic = (code, message) => ({ code, message, path: '', line: 1, column: 1 })
@@ -31,10 +31,6 @@ export function advanceIntegrationIncident(run, lab) {
   const dirty = INTEGRATION_INCIDENT_FILES.find(path => run.project.draftFiles[path] !== run.project.savedFiles[path])
   if (dirty) return { run, diagnostics: [diagnostic('AKS_UNSAVED_INCIDENT_SOURCE', `Save the draft ${dirty} before continuing the incident.`)], lines: [] }
   if (!observed(run, lab, current.phase) || !recovered(run, lab, current.phase)) return { run, diagnostics: [diagnostic('AKS_INCIDENT_NOT_READY', `Observe the active failure and verify ${current.recoveryScenario} through the current Deployment before continuing.`)], lines: [] }
-  if (current.phase === 'filter') {
-    const sequence = run.nextSequence
-    return { run: { ...run, nextSequence: sequence + 1, runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes, integrationIncident: { ...incident, phase: current.next, transitions: [...incident.transitions, { from: current.phase, to: current.next, sequence, evidenceId: recordFor(run, current.recoveryTask).id, deploymentUid: run.runtime.kubernetes.clusters[AI_TROUBLESHOOTING_CLUSTER_ID].resources['Deployment/assistant/assistant'].metadata.uid }] } } } }, diagnostics: [], lines: [{ kind: 'out', text: 'Incident advanced to retry.' }] }
-  }
   const path = 'k8s/configmap.yaml'; const parsed = parseKubernetesYaml(run.project.savedFiles[path], path)
   const resource = parsed.documents?.[0]
   if (parsed.diagnostics.length || parsed.documents.length !== 1 || resource?.kind !== 'ConfigMap' || resource.metadata?.namespace !== 'assistant') return { run, diagnostics: [diagnostic('AKS_INCIDENT_SOURCE_INVALID', 'The saved assistant ConfigMap is not valid.')], lines: [] }
@@ -42,6 +38,16 @@ export function advanceIntegrationIncident(run, lab) {
   if (!live || JSON.stringify(live.data ?? {}) !== JSON.stringify(resource.data ?? {})) return { run, diagnostics: [diagnostic('AKS_INCIDENT_SOURCE_STALE', 'Apply the saved assistant ConfigMap before continuing the incident.')], lines: [] }
   const expected = current.phase === 'deployment' ? ['EMBEDDING_DEPLOYMENT', 'embeddings-v1'] : ['AUDIENCE', 'employee']
   if (resource.data?.[expected[0]] !== expected[1]) return { run, diagnostics: [diagnostic('AKS_INCIDENT_SOURCE_INVALID', 'Repair the current ConfigMap value before continuing.')], lines: [] }
+  const cluster = run.runtime.kubernetes.clusters[AI_TROUBLESHOOTING_CLUSTER_ID]
+  const pods = getDeploymentPods(run, AI_TROUBLESHOOTING_CLUSTER_ID, 'assistant', 'assistant')
+  if (!pods.length || pods.some(pod => {
+    const snapshot = cluster.podSnapshots[pod.metadata.uid]
+    return !snapshot || Object.entries(resource.data ?? {}).some(([key, value]) => snapshot.environment?.[key] !== value)
+  })) return { run, diagnostics: [diagnostic('AKS_INCIDENT_SOURCE_STALE', 'Restart the assistant Pods so their captured ConfigMap matches the saved repair.')], lines: [] }
+  if (current.phase === 'filter') {
+    const sequence = run.nextSequence
+    return { run: { ...run, nextSequence: sequence + 1, runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes, integrationIncident: { ...incident, phase: current.next, transitions: [...incident.transitions, { from: current.phase, to: current.next, sequence, evidenceId: recordFor(run, current.recoveryTask).id, deploymentUid: cluster.resources['Deployment/assistant/assistant'].metadata.uid }] } } } }, diagnostics: [], lines: [{ kind: 'out', text: 'Incident advanced to retry.' }] }
+  }
   resource.data.AUDIENCE = 'visitor'
   const saved = saveProjectFile(run.project, path, stringify(resource)); if (saved.diagnostics.length) return { run, diagnostics: saved.diagnostics, lines: [] }
   let next = { ...run, project: saved.project, dependencyGenerations: { ...run.dependencyGenerations, [`file:${path}`]: (run.dependencyGenerations[`file:${path}`] ?? 0) + 1 } }
