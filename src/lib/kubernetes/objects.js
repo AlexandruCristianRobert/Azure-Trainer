@@ -16,6 +16,17 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
   const state = run.runtime.kubernetes.clusters[clusterId]
   let next = clone(run); const diagnostics = []; const lines = []
   if (!state) return { run, lines, diagnostics: [{ code: 'KUBE_CLUSTER_NOT_FOUND', message: 'The selected Kubernetes cluster is unavailable.' }] }
+  const connectivity = state.connectivity
+  if (connectivity) {
+    const incoming = documents.filter(item => item?.kind === 'Service').filter(item => {
+      const namespace = item.metadata?.namespace ?? options.namespace
+      return !state.resources[kubeObjectKey('Service', namespace, item.metadata?.name)]
+    })
+    const external = incoming.filter(item => (item.spec?.type ?? 'ClusterIP') === 'LoadBalancer')
+    if (connectivity.nextServiceAddress + incoming.length - 1 > 4063 || connectivity.nextExternalAddress + external.length - 1 > 254) {
+      return { run, lines, diagnostics: [{ code: 'SIMULATOR_LIMIT', message: 'The simulated Service address range is exhausted.' }] }
+    }
+  }
   for (let i = 0; i < documents.length; i++) {
     const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }

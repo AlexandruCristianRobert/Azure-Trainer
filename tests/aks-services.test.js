@@ -23,7 +23,13 @@ it('seeds a configured assistant and a trusted diagnostic Pod without requests',
   expect(state.resources[`Pod/diagnostics/diagnostics`].metadata.uid).toBe(diagnosticPodUid)
   expect(run.runtime.kubernetes.requests).toEqual([])
   expect(state.connectivity.applicationLogs).toEqual([])
+  expect(lab.scenarios['network-internal'].expected.body.environment).toBe('training')
   expect(validateBehavioralRun(run, lab)).toBe(run)
+})
+
+it('uses the requested profile in the named internal scenario', () => {
+  const { lab } = seedConnectivityTest({ profile: 'review' })
+  expect(lab.scenarios['network-internal'].expected.body.environment).toBe('review')
 })
 
 it('rejects exhausted Service address allocation before creating a Service', () => {

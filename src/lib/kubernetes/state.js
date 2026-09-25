@@ -15,7 +15,7 @@ export function emptyClusterState(clusterId) {
   return { resources: { 'Namespace//default': namespace('default'), 'Namespace//kube-system': namespace('kube-system'), 'Namespace//kube-public': namespace('kube-public') }, podSnapshots: {}, events: [], receipts: [], projectionDue: {} }
 }
 
-export function validateKubernetesRuntime(runtime, run) {
+export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (!isPlainObject(runtime) || runtime.version !== 1 || (runtime.currentContext !== null && typeof runtime.currentContext !== 'string')
     || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
     || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string'
@@ -32,7 +32,7 @@ export function validateKubernetesRuntime(runtime, run) {
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
-    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run))
+    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab?.capabilities?.kubernetesConnectivity === true, id))
 }
 
 function validConfigIncident(runtime, run) {
@@ -66,7 +66,7 @@ function validConfigIncident(runtime, run) {
   return true
 }
 
-function validClusterState(state, run) {
+function validClusterState(state, run, connectivityEnabled, clusterId) {
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
@@ -99,7 +99,7 @@ function validClusterState(state, run) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
-  if (!validConnectivity(state, resources, byUid, run)) return false
+  if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
       if (resource.kind === 'Pod' && state.connectivity?.diagnosticPodUids.includes(resource.metadata.uid)) continue
@@ -148,14 +148,15 @@ function validClusterState(state, run) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validConnectivity(state, resources, byUid, run) {
-  if (state.connectivity === undefined) return !resources.some(([, resource]) => resource.kind === 'EndpointSlice')
+function validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId) {
+  if (!connectivityEnabled) return state.connectivity === undefined && !resources.some(([, resource]) => resource.kind === 'EndpointSlice')
+  if (state.connectivity === undefined) return false
   const value = state.connectivity
   if (!isPlainObject(value) || value.version !== 1 || !Number.isInteger(value.nextServiceAddress) || value.nextServiceAddress < 1 || value.nextServiceAddress > 4064
     || !Number.isInteger(value.nextPodAddress) || value.nextPodAddress < 1 || value.nextPodAddress > 4064
     || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
     || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
-    || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid))) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
+    || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid), clusterId)) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
     || !value.applicationLogs.every(log => isPlainObject(log) && typeof log.requestId === 'string' && Number.isSafeInteger(log.sequence) && log.sequence >= 1 && log.sequence < run.nextSequence)
     || value.incident !== null) return false
   const addresses = new Set()
@@ -219,8 +220,8 @@ function kubeSliceKey(service, port) {
   return `EndpointSlice/${service.metadata.namespace}/${name}`
 }
 
-function validDiagnosticPod(pod) {
-  return pod?.kind === 'Pod' && pod.metadata?.name === 'diagnostics' && pod.metadata?.namespace === 'diagnostics'
+function validDiagnosticPod(pod, clusterId) {
+  return pod?.kind === 'Pod' && pod.metadata?.uid === `diagnostic/${clusterId}` && pod.metadata?.name === 'diagnostics' && pod.metadata?.namespace === 'diagnostics'
     && JSON.stringify(pod.metadata.labels) === JSON.stringify({ app: 'diagnostics' }) && pod.spec?.containers?.length === 1
     && pod.spec.containers[0]?.name === 'diagnostics' && pod.spec.containers[0]?.image === 'mcr.microsoft.com/aks-trainer/diagnostics:1'
     && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True')

@@ -210,7 +210,7 @@ export function validateBehavioralRun(run, lab = null) {
   }
   if (lab !== null) {
     validateBehavioralLab(lab)
-    if (lab.capabilities?.kubernetes === true && !validateKubernetesRuntime(run.runtime.kubernetes, run)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
+    if (lab.capabilities?.kubernetes === true && !validateKubernetesRuntime(run.runtime.kubernetes, run, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
     if (run.labId !== lab.id || run.contentVersion !== lab.contentVersion) {
       fail('INCOMPATIBLE_CONTENT', 'The run does not match this Lab content.', { labId: run.labId, contentVersion: run.contentVersion })
     }

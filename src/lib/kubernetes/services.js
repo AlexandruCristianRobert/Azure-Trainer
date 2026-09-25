@@ -78,9 +78,12 @@ function syncSlices(state, service, view) {
 }
 
 export function reconcileServices(input, clusterId) {
+  const original = input
   let run = clone(input)
   const state = run.runtime?.kubernetes?.clusters?.[clusterId]
   if (!state?.connectivity) return run
+  const pendingPods = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running' && !item.status?.podIP).length
+  if (state.connectivity.nextPodAddress + pendingPods - 1 > 4063) return original
   for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running')) {
     if (!pod.status.podIP) {
       const address = allocate(state, 'nextPodAddress', 4063, podAddress)

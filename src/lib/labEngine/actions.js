@@ -95,7 +95,7 @@ export function applyCommandEffects(run, effects, lab) {
     } else if (effect.type === 'kubernetes-state') {
       if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'kubernetes', 'nextSequence'].includes(key)) || !Number.isInteger(effect.nextSequence) || effect.nextSequence < next.nextSequence) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed or unavailable in this Lab.')
       const candidate = { ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence }
-      if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate)) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed.')
+      if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed.')
       next = candidate
     } else if (effect.type === 'publish-build') {
       if (!effect.artifacts || !Number.isInteger(effect.nextSequence) || effect.nextSequence <= next.nextSequence

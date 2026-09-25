@@ -108,9 +108,10 @@ export function seedConfiguredAssistant({ namespace = 'assistant', profile = 'tr
 
 export function seedConnectivityTest({ profile = 'training', namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
   let { lab, run, clusterId } = seedConfiguredAssistant({ namespace, profile })
-  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConnectivity: true }, scenarios: { networkInternal: { kind: 'aks-request', version: 1,
+  run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
+  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConnectivity: true }, scenarios: { 'network-internal': { kind: 'aks-request', version: 1,
     target: { clusterId, namespace, serviceName: 'assistant-internal', deploymentName: 'assistant' }, request: { method: 'GET', path: '/api/info' },
-    expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: 'training' } }, requireReplacement: false } } }
+    expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: profile } }, requireReplacement: false } } }
   if (listener !== 8080) {
     run = act(run, lab, { type: 'save-file', path: 'app.py', text: run.project.savedFiles['app.py'].replace('PORT = 8080', `PORT = ${listener}`) }).run
     run = act(run, lab, { type: 'save-file', path: 'Dockerfile', text: run.project.savedFiles.Dockerfile.replace('EXPOSE 8080', `EXPOSE ${listener}`) }).run
@@ -122,10 +123,9 @@ export function seedConnectivityTest({ profile = 'training', namespace = 'assist
   const service = run.project.savedFiles['k8s/service.yaml'].replace('name: assistant\n', 'name: assistant-internal\n').replace('type: LoadBalancer', `type: ${serviceType}`).replace('targetPort: http', `targetPort: ${targetPort}`)
   run = act(run, lab, { type: 'save-file', path: 'k8s/service.yaml', text: service }).run
   run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/service.yaml' }).run
-  run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
   const state = run.runtime.kubernetes.clusters[clusterId]
   state.resources['Namespace//diagnostics'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'diagnostics', uid: `fixture-${clusterId}-diagnostics-namespace`, resourceVersion: '1' } }
-  const diagnosticPodUid = `fixture-${clusterId}-diagnostics-pod`
+  const diagnosticPodUid = `diagnostic/${clusterId}`
   state.resources['Pod/diagnostics/diagnostics'] = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'diagnostics', namespace: 'diagnostics', uid: diagnosticPodUid, resourceVersion: '1', labels: { app: 'diagnostics' } },
     spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
   state.connectivity.diagnosticPodUids = [diagnosticPodUid]
