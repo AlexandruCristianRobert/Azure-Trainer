@@ -165,11 +165,12 @@ export function processProbeTimestamp(input, atMs, lab) {
       postgres_available: !(activeFault && kind === 'database'),
     }
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
+    const faultPodUid = experiment?.podUids?.[0] ?? null
     for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       if (script) {
-        const selected = pod.metadata.uid === pods[0]?.metadata.uid
+        const selected = pod.metadata.uid === faultPodUid
         const admissionClosed = selected && activeFault && kind === 'readiness'
         const hung = selected && activeFault && kind === 'hang'
         if (container.localFaults.admissionClosed !== admissionClosed || container.localFaults.hung !== hung) {
