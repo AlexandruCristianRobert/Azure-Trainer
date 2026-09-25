@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateHealthEndpoint } from '../src/lib/kubernetes/probes.js'
 import { advanceKubernetesTime } from '../src/lib/kubernetes/time.js'
+import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
+import { seedHealthTest } from './helpers/aks.js'
 
 function healthRun() {
   const probe = (path, periodSeconds, failureThreshold) => ({ httpGet: { path, port: 8080, scheme: 'HTTP' }, initialDelaySeconds: 0, periodSeconds, timeoutSeconds: 1, failureThreshold, successThreshold: 1 })
@@ -14,6 +16,16 @@ function healthRun() {
 }
 
 describe('AKS probe scheduler', () => {
+  it('seeds two health Pods through the real build and Kubernetes apply flow at time zero', () => {
+    const { lab, run, clusterId, podUids, target } = seedHealthTest()
+    expect(run.runtime.simTimeMs).toBe(0)
+    expect(target).toEqual({ clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' })
+    expect(getDeploymentPods(run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid)).toEqual(podUids)
+    expect(run.artifacts.buildsById[run.artifacts.publishedTags['acraksprobesguided.azurecr.io/assistant:health-v1']].appSpec.health.version).toBe(1)
+    expect(run.runtime.kubernetes.clusters[clusterId].health.containers).toHaveProperty(podUids[0])
+    expect(lab.healthFixture.initializationSeconds).toBe(24)
+  })
+
   it('evaluates compiled health conditions against fixture signals', () => {
     const appSpec = { listeningPort: 8080, health: { endpoints: [{ path: '/health/ready', body: { check: 'readiness' }, statusExpression: {
       kind: 'conditional', condition: { kind: 'and', operands: [{ kind: 'signal', name: 'initialized' }, { kind: 'signal', name: 'accepting_requests' }] }, then: 200, else: 503,

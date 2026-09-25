@@ -6,6 +6,9 @@ import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 import { initializeConnectivity, reconcileServices } from '../../src/lib/kubernetes/services.js'
 import { INTEGRATION_MANIFEST, INTEGRATION_SOLUTION_FILES } from '../../src/data/templates/aks-python/integration.js'
 import { integrationDependencies } from '../../src/lib/kubernetes/evidence.js'
+import { HEALTH_MANIFEST, HEALTH_SOLUTION_FILES } from '../../src/data/templates/aks-python/health.js'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { getDeploymentPods } from '../../src/lib/kubernetes/reconcile.js'
 
 export function makeTrainingSnapshot() {
   return {
@@ -142,6 +145,53 @@ export function seedIntegrationTest() {
     { id: 'transient', verification: { scenarioId: 'ai-transient', scenarioVersion: 1 }, dependencies, check: () => false },
   ] }
   return { lab, run, clusterId }
+}
+
+export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FILES, probeOverrides = {} } = {}) {
+  const projectFiles = structuredClone(files)
+  if (Object.keys(probeOverrides).length) {
+    const deployment = parseYaml(projectFiles['k8s/deployment.yaml'])
+    const container = deployment.spec.template.spec.containers[0]
+    const routeByProbe = { startupProbe: 'startup', readinessProbe: 'ready', livenessProbe: 'live' }
+    for (const [field, overrides] of Object.entries(probeOverrides)) {
+      if (overrides === null) { delete container[field]; continue }
+      container[field] ??= { httpGet: { path: `/health/${routeByProbe[field] ?? 'startup'}`, port: 'http' },
+        initialDelaySeconds: 0, periodSeconds: 5, timeoutSeconds: 1, failureThreshold: 3, successThreshold: 1 }
+      if (overrides.httpGet) container[field].httpGet = { ...container[field].httpGet, ...overrides.httpGet }
+      for (const [key, value] of Object.entries(overrides)) if (key !== 'httpGet') container[field][key] = value
+    }
+    projectFiles['k8s/deployment.yaml'] = stringifyYaml(deployment)
+  }
+  const { lab: initialLab, run: initial } = createAksTestRun({
+    manifestId: HEALTH_MANIFEST.id,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true },
+    initialProjectFiles: projectFiles,
+  })
+  const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesProbes: true },
+    healthFixture: { initializationSeconds: startupSeconds } }
+  let run = initial
+  run = act(run, lab, { type: 'command', line: 'az group create -n rgaksprobesguided -l eastus' }).run
+  run = act(run, lab, { type: 'command', line: 'az acr create -g rgaksprobesguided -n acraksprobesguided --sku Basic' }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksprobesguided -t assistant:health-v1 .' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks create -g rgaksprobesguided -n aksprobesguided --enable-managed-identity --generate-ssh-keys --attach-acr acraksprobesguided' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rgaksprobesguided -n aksprobesguided' }).run
+  for (const path of HEALTH_MANIFEST.kubernetesFiles) {
+    try { run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run }
+    catch (error) { throw new Error(`Health test seed could not apply ${path}: ${error.message}`) }
+  }
+  const clusterId = run.sandbox.aksClusters[0].id
+  const podUids = getDeploymentPods(run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid).sort()
+  const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' }
+  return { lab, run, clusterId, podUids, target }
+}
+
+export function advanceHealth(run, lab, seconds) {
+  return act(run, lab, { type: 'aks-advance', seconds }).run
+}
+
+export function healthContainer(run, clusterId, podUid) {
+  const value = run.runtime.kubernetes.clusters[clusterId]?.health?.containers?.[podUid]
+  return value === undefined ? undefined : structuredClone(value)
 }
 
 export function seedConnectivityTest({ profile = 'training', namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
