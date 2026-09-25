@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parsePythonIntegration } from '../src/lib/project/python-integration.js'
 import { INTEGRATION_MANIFEST, INTEGRATION_SOLUTION_FILES } from '../src/data/templates/aks-python/integration.js'
 import { buildImage } from '../src/lib/project/build.js'
+import { selectBuildFiles } from '../src/lib/project/build.js'
 
 describe('explicit Python assistant integration compiler', () => {
   it('compiles the teaching solution into an answer data-flow graph', () => {
@@ -73,5 +74,13 @@ describe('explicit Python assistant integration compiler', () => {
     expect(first.diagnostics).toEqual([])
     expect(first.artifact.sourceHash).not.toBe(changed.artifact.sourceHash)
     expect(first.artifacts.sourceSnapshotsByHash[first.artifact.sourceHash].files['retrieval.sql']).toBe(INTEGRATION_SOLUTION_FILES['retrieval.sql'])
+  })
+
+  it('reparses the immutable build snapshot without the inspect-only schema file', () => {
+    const snapshot = selectBuildFiles(INTEGRATION_SOLUTION_FILES, INTEGRATION_MANIFEST)
+    expect(Object.hasOwn(snapshot, 'schema.sql')).toBe(false)
+    expect(parsePythonIntegration(snapshot, INTEGRATION_MANIFEST).diagnostics).toEqual([])
+    expect(parsePythonIntegration({ ...INTEGRATION_SOLUTION_FILES, 'schema.sql': 'changed' }, INTEGRATION_MANIFEST).diagnostics)
+      .toContainEqual(expect.objectContaining({ code: 'SCAFFOLD_MODIFIED', path: 'schema.sql' }))
   })
 })
