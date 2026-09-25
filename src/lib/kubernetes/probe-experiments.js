@@ -79,11 +79,11 @@ function captureSample(run, clusterId, experiment, nowMs, final = false) {
   const request = final ? { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } } : requestForSample(experiment, offset)
   const service = state.resources[`Service/${experiment.target.namespace}/assistant-public`]
   if (service?.status?.loadBalancer?.ingress?.[0]?.ip) {
-    const kind = String(experiment.script.kind).toLowerCase()
+    const kind = faultType(experiment.script)
     const faultActive = offset >= (experiment.script.startAfterStartSeconds ?? Infinity)
       && (experiment.script.endAfterStartSeconds === undefined || offset < experiment.script.endAfterStartSeconds)
-    const integrationProfile = faultActive && (kind.includes('aioutage') || kind.includes('aicoupling')) ? 'answer-unavailable-always'
-      : faultActive && (kind.includes('postgres') || kind.includes('database')) ? { stages: { embedding: [{ latencyMs: 40, result: 'success' }], postgres: [{ latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }], answer: [{ latencyMs: 50, result: 'success' }] } } : 'healthy'
+    const integrationProfile = faultActive && (kind === 'ai' || kind === 'ai-coupling') ? 'answer-unavailable-always'
+      : faultActive && kind === 'database' ? { stages: { embedding: [{ latencyMs: 40, result: 'success' }], postgres: [{ latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }], answer: [{ latencyMs: 50, result: 'success' }] } } : 'healthy'
     const routed = routeServiceRequest(run, { origin: { kind: 'external', clusterId }, hostname: service.status.loadBalancer.ingress[0].ip,
       port: service.spec.ports?.[0]?.port ?? 80, ...request, integrationProfile }, null)
     run = routed.run; state = run.runtime.kubernetes.clusters[clusterId]
@@ -104,6 +104,14 @@ function scenarioType(receipt) {
   if (receipt.script?.endOnContainerTermination === true) return 'hang'
   if (receipt.script?.sampleAtSeconds?.length === 2 && receipt.script?.endAfterStartSeconds === 20) return 'readiness'
   return 'outage'
+}
+
+function faultType(script) {
+  if (script?.endOnContainerTermination === true) return 'hang'
+  if (script?.endAfterStartSeconds === 20 && Array.isArray(script.sampleAtSeconds)) return 'readiness'
+  if (script?.endAfterStartSeconds === 25 && Array.isArray(script.sampleAtSeconds)) return 'database'
+  if (script?.endAfterStartSeconds === 35 && Array.isArray(script.sampleAtSeconds)) return script.sampleAtSeconds.length === 1 ? 'ai-coupling' : 'ai'
+  return null
 }
 
 function assess(state, receipt) {
@@ -129,15 +137,15 @@ function assess(state, receipt) {
     && receipt.podUids.some(uid => state.health.containers[uid]?.containerId !== receipt.containerIds[uid])
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.body?.sources?.includes('training-backups'))
-  const kind = String(receipt.script?.kind ?? '').toLowerCase()
-  if (kind.includes('aicoupling')) return receipt.summary.restartReceipts.some(item => item.cause === 'probe'
+  const kind = faultType(receipt.script)
+  if (kind === 'ai-coupling') return receipt.summary.restartReceipts.some(item => item.cause === 'probe'
     && item.probeType === 'LivenessProbeFailed' && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)
     && receipt.samples.some(item => item.second === 6 && item.response?.status === 200)
-  if (kind.includes('aioutage') || kind.includes('aicoupling')) return allReady && containers.every(item => item.restartCount === 0)
+  if (kind === 'ai') return allReady && containers.every(item => item.restartCount === 0)
     && receipt.samples.some(item => item.second === 10 && item.response?.status === 200)
     && receipt.samples.some(item => item.second === 12 && item.response?.status === 503)
     && receipt.samples.some(item => item.second === 40 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
-  if (kind.includes('postgres') || kind.includes('database')) return allReady
+  if (kind === 'database') return allReady
     && receipt.samples.some(item => item.second === 10 && (item.response?.status === 503 || item.response?.transport?.reason === 'NO_READY_ENDPOINTS'))
     && receipt.samples.some(item => item.second === 30 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
   return allReady && receipt.samples.length > 0

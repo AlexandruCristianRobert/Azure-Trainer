@@ -46,6 +46,14 @@ function probesFor(pod) {
   return { startup: container.startupProbe ?? null, readiness: container.readinessProbe ?? null, liveness: container.livenessProbe ?? null }
 }
 
+function experimentKind(script) {
+  if (script?.endOnContainerTermination === true) return 'hang'
+  if (script?.endAfterStartSeconds === 20 && Array.isArray(script.sampleAtSeconds)) return 'readiness'
+  if (script?.endAfterStartSeconds === 25 && Array.isArray(script.sampleAtSeconds)) return 'database'
+  if (script?.endAfterStartSeconds === 35 && Array.isArray(script.sampleAtSeconds)) return script.sampleAtSeconds.length === 1 ? 'ai-coupling' : 'ai'
+  return null
+}
+
 function healthAppSpec(run, state, pod) {
   const artifact = run.artifacts.buildsById?.[state.podSnapshots[pod.metadata.uid]?.artifactId]
   return artifact?.appSpec ?? null
@@ -147,13 +155,14 @@ export function processProbeTimestamp(input, atMs, lab) {
     const elapsedSeconds = script && Number.isFinite(experiment.baselineReadyAtMs)
       ? (atMs - experiment.baselineReadyAtMs) / 1000 : -1
     const terminatedFault = script?.endOnContainerTermination === true
-      && state.health.receipts?.some(item => item.cause === 'probe' && item.probeType === 'liveness')
+      && state.health.receipts?.some(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
+        && experiment.podUids.includes(item.podUid) && item.atMs >= experiment.startedAtMs)
     const activeFault = script && !terminatedFault && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
       && (script.endAfterStartSeconds === undefined || elapsedSeconds < script.endAfterStartSeconds)
-    const kind = String(script?.kind ?? '').toLowerCase()
+    const kind = experimentKind(script)
     const dependencySignals = {
-      ai_available: !(activeFault && (kind.includes('aioutage') || kind.includes('aicoupling'))),
-      postgres_available: !(activeFault && (kind.includes('postgres') || kind.includes('database') || kind.includes('dboutage'))),
+      ai_available: !(activeFault && (kind === 'ai' || kind === 'ai-coupling')),
+      postgres_available: !(activeFault && kind === 'database'),
     }
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
     for (const pod of pods) {
@@ -161,8 +170,8 @@ export function processProbeTimestamp(input, atMs, lab) {
       if (!container || pod.status?.phase !== 'Running') continue
       if (script) {
         const selected = pod.metadata.uid === pods[0]?.metadata.uid
-        const admissionClosed = selected && activeFault && script.kind === 'temporaryAdmissionClosure'
-        const hung = selected && activeFault && script.kind === 'processHang'
+        const admissionClosed = selected && activeFault && kind === 'readiness'
+        const hung = selected && activeFault && kind === 'hang'
         if (container.localFaults.admissionClosed !== admissionClosed || container.localFaults.hung !== hung) {
           recordHealthEvent(state, { type: 'fault', atMs, podUid: pod.metadata.uid, admissionClosed, hung })
         }
