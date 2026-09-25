@@ -67,12 +67,11 @@ export function scheduleConfigurationProjection(input, clusterId, resourceKey) {
   return run
 }
 
-export function advanceConfigurationProjection(input, seconds) {
+export function projectConfigurationAt(input, atMs) {
   const run = clone(input)
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) return run
-  run.runtime.simTimeMs += seconds * 1000
+  if (!Number.isFinite(atMs) || atMs < 0) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters)) for (const [uid, due] of Object.entries(state.projectionDue)) {
-    if (due > run.runtime.simTimeMs) continue
+    if (due > atMs) continue
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     const snapshot = state.podSnapshots[uid]
     if (pod && snapshot) {
@@ -86,4 +85,11 @@ export function advanceConfigurationProjection(input, seconds) {
     delete state.projectionDue[uid]
   }
   return run
+}
+
+export function advanceConfigurationProjection(input, seconds) {
+  const run = clone(input)
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) return run
+  run.runtime.simTimeMs += seconds * 1000
+  return projectConfigurationAt(run, run.runtime.simTimeMs)
 }

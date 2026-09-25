@@ -1,0 +1,43 @@
+import { projectConfigurationAt } from './configuration.js'
+import { processProbeTimestamp, reconcileHealth } from './probes.js'
+
+const clone = value => structuredClone(value)
+
+function nextHealthDeadline(run, limit) {
+  let next = null
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) for (const container of Object.values(state.health?.containers ?? {})) {
+    for (const value of Object.values(container.checks ?? {})) {
+      for (const deadline of [value?.nextAtMs, value?.pending?.completeAtMs]) {
+        if (Number.isFinite(deadline) && deadline > run.runtime.simTimeMs && deadline <= limit && (next === null || deadline < next)) next = deadline
+      }
+    }
+  }
+  return next
+}
+
+function nextProjectionDeadline(run, limit) {
+  let next = null
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) for (const deadline of Object.values(state.projectionDue ?? {})) {
+    if (Number.isFinite(deadline) && deadline > run.runtime.simTimeMs && deadline <= limit && (next === null || deadline < next)) next = deadline
+  }
+  return next
+}
+
+export function advanceKubernetesTime(input, seconds, lab) {
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) return input
+  let run = reconcileHealth(clone(input), lab)
+  const target = run.runtime.simTimeMs + seconds * 1000
+  run = projectConfigurationAt(run, run.runtime.simTimeMs)
+  run = processProbeTimestamp(run, run.runtime.simTimeMs, lab)
+  let events = 0
+  while (true) {
+    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
+    if (next === undefined) break
+    if (++events > 10_000) return input
+    run.runtime.simTimeMs = next
+    run = projectConfigurationAt(run, next)
+    run = processProbeTimestamp(run, next, lab)
+  }
+  run.runtime.simTimeMs = target
+  return run
+}

@@ -2,6 +2,7 @@ import { kubeObjectKey } from './objects.js'
 import { reconcileServicesResult } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
+import { reconcileHealth } from './probes.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -106,6 +107,7 @@ function recordReplacement(state, deleted, replacement, cause = 'template') {
 export function reconcileKubernetesResult(input, lab) {
   const original = input
   let run = clone(input)
+  run = reconcileHealth(run, lab)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
