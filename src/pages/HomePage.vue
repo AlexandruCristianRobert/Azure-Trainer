@@ -8,7 +8,10 @@ import { onMounted } from 'vue'
 import { useProgressStore } from '../stores/progress.js'
 const progress = useProgressStore()
 const legacyLabs = LABS.filter((lab) => lab.engineVersion !== 2)
-const journeyLabs = LABS.filter((lab) => lab.journeyId === 'containerapps-end-to-end').sort((a, b) => a.journeyOrder - b.journeyOrder)
+const journeys = Object.values(LABS.filter(lab => lab.engineVersion === 2 && lab.journeyId).reduce((groups, lab) => {
+  const group = groups[lab.journeyId] ?? { id: lab.journeyId, title: lab.journeyId === 'containerapps-end-to-end' ? 'Container Apps journey' : lab.journeyId === 'aks-knowledge-assistant' ? 'Kubernetes journey' : 'Learning journey', description: lab.journeyId === 'containerapps-end-to-end' ? 'Build an API, publish an image and verify a running deployment.' : 'Build and inspect a simulated cloud workload.', labs: [] }
+  group.labs.push(lab); groups[lab.journeyId] = group; return groups
+}, {})).map(group => ({ ...group, labs: group.labs.sort((a, b) => a.journeyOrder - b.journeyOrder) }))
 onMounted(() => { void progress.hydrateNative().catch(() => {}) })
 </script>
 
@@ -25,6 +28,6 @@ onMounted(() => { void progress.hydrateNative().catch(() => {}) })
     <div class="home__labs">
       <LabCard v-for="lab in legacyLabs" :key="lab.id" :lab="lab" />
     </div>
-    <section v-if="journeyLabs.length" class="home__journey" aria-label="Container Apps learning journey"><h2 class="home__section">Container Apps journey</h2><p>Build an API, publish an image and verify a running deployment.</p><div class="home__labs"><LabCard v-for="lab in journeyLabs" :key="lab.id" :lab="lab" /></div></section>
+    <section v-for="journey in journeys" :key="journey.id" class="home__journey" :aria-label="`${journey.title} learning journey`"><h2 class="home__section">{{ journey.title }}</h2><p>{{ journey.description }}</p><div class="home__labs"><LabCard v-for="lab in journey.labs" :key="lab.id" :lab="lab" /></div></section>
   </main>
 </template>

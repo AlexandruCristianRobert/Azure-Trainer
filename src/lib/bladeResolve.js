@@ -54,6 +54,10 @@ export function resolveBlade(blade, sandbox) {
     if (hasResource(sandbox.containerApps, blade.resourceGroup, blade.name)) return { ...blade }
     return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
   }
+  if (blade.kind === 'aks-cluster') {
+    if (hasResource(sandbox.aksClusters, blade.resourceGroup, blade.name)) return { ...blade }
+    return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
+  }
   if (blade.kind === 'container-registry' || blade.kind === 'managed-identity') {
     const resources = blade.kind === 'container-registry' ? sandbox.containerRegistries : sandbox.managedIdentities
     if (hasResource(resources, blade.resourceGroup, blade.name)) return { ...blade }

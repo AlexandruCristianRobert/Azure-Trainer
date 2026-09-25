@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 
 export const DEFAULT_BLADE = { kind: 'resource-groups' }
 
-const TYPE_LABEL = { resourceGroup: 'resource group', namespace: 'Service Bus namespace', queue: 'queue', topic: 'topic', subscription: 'subscription', rule: 'rule', containerAppEnvironment: 'Container Apps environment', containerApp: 'Container App', containerRegistry: 'container registry', managedIdentity: 'managed identity', registryRoleAssignment: 'registry role assignment', imageBuild: 'image build', cosmosAccount: 'Cosmos DB account', cosmosDatabase: 'Cosmos DB database', cosmosContainer: 'Cosmos DB container', keyVault: 'Key Vault', keyVaultRoleAssignment: 'Key Vault role assignment', keyVaultSecret: 'Key Vault secret', storageAccount: 'storage account', functionApp: 'Function App', eventGridTopic: 'Event Grid topic', eventGridSubscription: 'Event Grid subscription' }
+const TYPE_LABEL = { resourceGroup: 'resource group', namespace: 'Service Bus namespace', queue: 'queue', topic: 'topic', subscription: 'subscription', rule: 'rule', containerAppEnvironment: 'Container Apps environment', containerApp: 'Container App', containerRegistry: 'container registry', managedIdentity: 'managed identity', aksCluster: 'Kubernetes service', registryRoleAssignment: 'registry role assignment', imageBuild: 'image build', cosmosAccount: 'Cosmos DB account', cosmosDatabase: 'Cosmos DB database', cosmosContainer: 'Cosmos DB container', keyVault: 'Key Vault', keyVaultRoleAssignment: 'Key Vault role assignment', keyVaultSecret: 'Key Vault secret', storageAccount: 'storage account', functionApp: 'Function App', eventGridTopic: 'Event Grid topic', eventGridSubscription: 'Event Grid subscription' }
 const VERB = { created: 'Created', updated: 'Updated', deleted: 'Deleted' }
 const TITLE = { created: 'Deployment succeeded', updated: 'Update succeeded', deleted: 'Deleted' }
 
@@ -37,6 +37,7 @@ export function bladeForEvent(e, current) {
       case 'containerApp': return { kind: 'containerapp', resourceGroup: e.resourceGroup, name: e.name }
       case 'containerRegistry': return { kind: 'container-registry', resourceGroup: e.resourceGroup, name: e.name }
       case 'managedIdentity': return { kind: 'managed-identity', resourceGroup: e.resourceGroup, name: e.name }
+      case 'aksCluster': return { kind: 'aks-cluster', resourceGroup: e.resourceGroup, name: e.name }
       case 'registryRoleAssignment': return { kind: 'container-registry', resourceGroup: e.resourceGroup, name: e.registry }
       case 'imageBuild': return current
       case 'cosmosAccount': return { kind: 'cosmos-account', resourceGroup: e.resourceGroup, name: e.name }
@@ -72,6 +73,8 @@ export function bladeForEvent(e, current) {
     return current.kind === kind && same(current.name, e.name) && same(current.resourceGroup, e.resourceGroup)
       ? { kind: 'resource-group', name: current.resourceGroup } : current
   }
+  if (e.resourceType === 'aksCluster') return current.kind === 'aks-cluster' && same(current.name, e.name) && same(current.resourceGroup, e.resourceGroup)
+    ? { kind: 'resource-group', name: current.resourceGroup } : current
   if (e.resourceType === 'storageAccount' || e.resourceType === 'functionApp') {
     const kind = e.resourceType === 'storageAccount' ? 'storage-account' : 'function-app'
     const affected = current.kind === kind && same(current.name, e.name) && same(current.resourceGroup, e.resourceGroup)

@@ -7,6 +7,7 @@ import EvidenceDetails from './EvidenceDetails.vue'
 import CpuExperimentPanel from './CpuExperimentPanel.vue'
 import ProbeExperimentPanel from './ProbeExperimentPanel.vue'
 import FoundryRequestPanel from './FoundryRequestPanel.vue'
+import AksExperimentPanel from './AksExperimentPanel.vue'
 
 const run = useLabRunStore()
 const appId = ref('')
@@ -33,6 +34,8 @@ async function send() {
 
 <template>
   <section class="experiment-tool" aria-label="Experiment Controls">
+    <AksExperimentPanel v-if="run.lab?.capabilities?.kubernetes" />
+    <template v-else>
     <header><h2>Experiment Controls</h2><p>Simulated requests use the active deployment's captured source and configuration.</p></header>
     <CpuExperimentPanel v-if="run.lab?.capabilities?.cpuScaling" />
     <ProbeExperimentPanel v-if="run.lab?.capabilities?.healthProbes" />
@@ -49,5 +52,6 @@ async function send() {
     <div class="experiment-tool__response"><h3>Response</h3><p v-if="!response">No request sent yet.</p><template v-else><strong>HTTP {{ response.status }}</strong><pre>{{ JSON.stringify(response.body, null, 2) }}</pre></template></div>
     <EvidenceDetails :record="evidence" />
     <div class="experiment-tool__logs"><h3>Deployment log</h3><p v-if="!logs.length">No deployment events yet.</p><ol v-else><li v-for="(line, index) in logs" :key="index">{{ line.level }}: {{ line.message }}</li></ol></div>
+    </template>
   </section>
 </template>

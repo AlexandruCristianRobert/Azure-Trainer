@@ -2,6 +2,7 @@
 export const SERVICES = {
   'service-bus': { label: 'Service Bus', icon: 'service-bus', tint: 'var(--tint-blue)' },
   'container-apps': { label: 'Container Apps', icon: 'container-apps', tint: 'var(--tint-teal)' },
+  aks: { label: 'Kubernetes Service', icon: 'aks', tint: 'var(--tint-blue)' },
   'cosmos-db': { label: 'Cosmos DB', icon: 'cosmos-db', tint: 'var(--tint-purple)' },
   'key-vault': { label: 'Key Vault', icon: 'key-vault', tint: 'var(--tint-amber)' },
   functions: { label: 'Functions', icon: 'functions', tint: 'var(--tint-violet)' },
@@ -11,4 +12,4 @@ export const SERVICES = {
   'event-grid': { label: 'Event Grid', icon: 'event-grid', tint: 'var(--tint-teal)' },
 }
 
-export const HOME_SERVICES = ['service-bus', 'container-apps', 'cosmos-db', 'key-vault', 'functions', 'postgresql', 'managed-redis', 'container-registry']
+export const HOME_SERVICES = ['service-bus', 'container-apps', 'aks', 'cosmos-db', 'key-vault', 'functions', 'postgresql', 'managed-redis', 'container-registry']
