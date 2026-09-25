@@ -32,7 +32,18 @@ const mountedBeforeApplied = context => {
   return mountedBeforeObserved(context) && uid && record?.measurements?.body?.displayName === 'Training assistant'
 }
 const commands = lines => ({ steps: lines.map(line => ({ kind: 'command', line })) })
-const support = (id, text, check, solution, verification, dependencies = deps) => ({ id, stageId: 'configure', text, explanation: 'This browser-local exercise uses supplied fictional dependencies and captured Kubernetes configuration.', check, hints: ['Save the edited file before using a command.', 'Inspect the current resource and Pod snapshots before changing configuration.'], solution, examNote: 'Saved source, applied manifests, and Pod snapshots are separate states.', ...(verification ? { dependencies, verification } : {}) })
+const teaching = {
+  'python-settings': ['Read configuration at request time; the supplied downstream services are fictional fixtures.', 'Use PGHOST, not a literal endpoint.', 'Code changes need a new image build.'],
+  image: ['A build captures saved Python files into an immutable artifact.', 'The seeded image cannot satisfy a new source build.', 'Publishing never changes a running Pod.'],
+  objects: ['ConfigMaps hold ordinary settings; Secrets hold fictional credentials encoded as base64.', 'Objects are namespace-scoped and must be applied from saved YAML.', 'Describe exposes Secret key names, not values.'],
+  references: ['Use key references and a read-only mounted settings file instead of literal credentials.', 'ConfigMap and Secret references resolve only in the Pod namespace.', 'Saved manifests, applied objects, and captured Pods are distinct.'],
+  baseline: ['The answer comes from the supplied fixture adapter, not a live service.', 'Inspect its redacted trace and named source.', 'A request verifies captured runtime state.'],
+  'stale-env': ['Applying a ConfigMap does not mutate an existing Pod environment.', 'Compare current applied APP_ENV with the captured Pod value.', 'A stale environment observation is historical evidence.'],
+  'env-refresh': ['Replacement Pods capture current environment values.', 'Restart is required after an environment-backed update.', 'Mounted files have a separate projection delay.'],
+  'mounted-before': ['Mounted ConfigMap files update on the visible 60-second teaching interval.', 'The supplied Python settings reader rereads JSON per request.', 'Observe old projected content before advancing time.'],
+  'mounted-after': ['Advance only the local AKS clock; reads do not advance it.', 'Verify both final environment and projected-file results.', 'The same Pod UID proves file projection rather than restart.'],
+}
+const support = (id, text, check, solution, verification, dependencies = deps) => { const [explanation, hint, examNote] = teaching[id]; return ({ id, stageId: 'configure', text, explanation, check, hints: [hint, 'Save the edited file before using a command.'], solution, examNote, ...(verification ? { dependencies, verification } : {}) }) }
 
 export const aksConfigGuidedLab = {
   id: 'aks-config-guided', title: 'Configure an AKS Knowledge Assistant', brief: 'Use ConfigMaps, Secrets, captured environments, and projected files to configure a supplied assistant.', minutes: 45, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 4, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'available',
