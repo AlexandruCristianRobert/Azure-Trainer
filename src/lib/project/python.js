@@ -126,7 +126,7 @@ function parseAssistantProject(files, manifest, text, tree) {
   const infoValues = infoDict && parseDictionary(infoDict, text, node => readExpr(node, text, constants))
   if (infoBody.length !== 1 || !infoValues || Object.keys(infoValues).sort().join(',') !== 'environment,service,version' || infoValues.service?.kind !== 'literal' || infoValues.version?.kind !== 'literal' || infoValues.environment?.kind !== 'config') diagnostics.push(diag('PYTHON_UNSUPPORTED', 'info() must return the supported service, version, and environment fields.', 'app.py', text, functions.info?.body?.from ?? 0))
   if (files['training_runtime.py'] !== manifest.fixedFiles?.['training_runtime.py']) diagnostics.push(diag('SCAFFOLD_MODIFIED', 'The supplied training assistant helper is fixed.', 'training_runtime.py'))
-  if (constants.PORT !== 8080) diagnostics.push(diag('PYTHON_UNSUPPORTED', 'PORT must be the supported integer 8080.', 'app.py'))
+  if (!Number.isInteger(constants.PORT) || constants.PORT < 1 || constants.PORT > 65535) diagnostics.push(diag('PYTHON_UNSUPPORTED', 'PORT must be a valid integer literal.', 'app.py'))
   if (diagnostics.length) return { appSpec: null, diagnostics }
   return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT,
     routes: [{ method: 'GET', path: '/api/info', response: infoValues }, { method: 'POST', path: '/api/ask', response: { kind: 'assistant', settings: settingValues } }],

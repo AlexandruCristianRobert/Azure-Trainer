@@ -3,6 +3,11 @@ import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../src/dat
 import { parsePythonProject } from '../src/lib/project/python.js'
 
 describe('AKS Python configuration projection', () => {
+  it('accepts a bounded alternate listener port for a rebuilt assistant image', () => {
+    const files = { ...CONFIG_SOLUTION_FILES, 'app.py': CONFIG_SOLUTION_FILES['app.py'].replace('PORT = 8080', 'PORT = 9090') }
+    expect(parsePythonProject(files, CONFIG_MANIFEST)).toMatchObject({ diagnostics: [], appSpec: { listeningPort: 9090 } })
+  })
+
   it('projects environment and mounted JSON settings into the assistant AppSpec', () => {
     const parsed = parsePythonProject(CONFIG_FILES, CONFIG_MANIFEST)
     expect(parsed.diagnostics).toEqual([])
