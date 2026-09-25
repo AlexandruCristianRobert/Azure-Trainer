@@ -196,6 +196,15 @@ export function healthContainer(run, clusterId, podUid) {
   return value === undefined ? undefined : structuredClone(value)
 }
 
+export function startHealthFault(run, clusterId, podUid, fault, enabled = true) {
+  if (!['admissionClosed', 'hung'].includes(fault)) throw new Error(`Unknown health fault: ${fault}`)
+  const next = structuredClone(run)
+  const container = next.runtime.kubernetes.clusters[clusterId]?.health?.containers?.[podUid]
+  if (!container) throw new Error(`No health container state for Pod ${podUid}`)
+  container.localFaults[fault] = enabled
+  return next
+}
+
 export function seedConnectivityTest({ profile = 'training', namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
   let { lab, run, clusterId } = seedConfiguredAssistant({ namespace, profile })
   run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
