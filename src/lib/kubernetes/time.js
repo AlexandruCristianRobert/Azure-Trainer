@@ -27,6 +27,20 @@ function nextProjectionDeadline(run, limit) {
   return next
 }
 
+function nextExperimentDeadline(run, limit) {
+  let next = null
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
+    const experiment = state.health?.experiment; if (!experiment || experiment.status !== 'active') continue
+    const script = experiment.script ?? {}
+    for (const value of [experiment.startedAtMs + (script.startAfterStartSeconds ?? 0) * 1000,
+      script.endAfterStartSeconds === undefined ? null : experiment.startedAtMs + script.endAfterStartSeconds * 1000,
+      experiment.endsAtMs]) {
+      if (Number.isFinite(value) && value > run.runtime.simTimeMs && value <= limit && (next === null || value < next)) next = value
+    }
+  }
+  return next
+}
+
 function scheduledEventCount(run, atMs) {
   let count = 0
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
@@ -53,7 +67,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
-    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
+    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
     if (next === undefined) break
     events += scheduledEventCount(run, next)
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
