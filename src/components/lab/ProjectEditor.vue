@@ -2,6 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { getProjectManifest } from '../../lib/project/manifests.js'
+import { parseKubernetesYaml } from '../../lib/kubernetes/yaml.js'
+import { kubeJson } from '../../lib/kubernetes/format.js'
 
 const run = useLabRunStore()
 const path = ref('src/Trainer.Api/Program.cs')
@@ -17,7 +19,19 @@ const dirty = computed(() => text.value !== saved.value)
 const version = computed(() => current.value?.fileVersions?.[path.value] ?? 0)
 const published = computed(() => Object.values(run.behavioralRun?.artifacts?.buildsById ?? {}).at(-1))
 const isKubernetes = computed(() => manifest.value?.runtimeFamily === 'aks' || manifest.value?.language === 'python')
-const applied = computed(() => isKubernetes.value && path.value.startsWith('k8s/') ? 'Applied when you run kubectl apply using this saved YAML.' : 'Applied state is available after deployment.')
+function semanticManifest(value) {
+  return { apiVersion: value.apiVersion, kind: value.kind, metadata: { name: value.metadata?.name, ...(value.metadata?.namespace ? { namespace: value.metadata.namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }, ...(value.spec ? { spec: value.spec } : {}) }
+}
+const applied = computed(() => {
+  if (!isKubernetes.value || !path.value.startsWith('k8s/')) return 'Not a Kubernetes manifest.'
+  const parsed = parseKubernetesYaml(saved.value, path.value)
+  if (parsed.diagnostics.length) return 'Not applied: saved YAML has diagnostics.'
+  const context = run.behavioralRun?.runtime?.kubernetes?.contexts?.[run.behavioralRun?.runtime?.kubernetes?.currentContext]
+  const resources = context && run.behavioralRun?.runtime?.kubernetes?.clusters?.[context.clusterId]?.resources
+  if (!resources) return 'Not applied to a current cluster.'
+  const current = parsed.documents.every(document => Object.values(resources).some(resource => kubeJson(semanticManifest(resource)) === kubeJson(semanticManifest(document))))
+  return current ? 'Applied to the current cluster.' : 'Not applied to the current cluster.'
+})
 
 function selectFile(next) {
   path.value = next
@@ -43,7 +57,7 @@ async function save() {
 
 <template>
   <section class="project-tool" aria-label="Project files">
-    <header class="project-tool__head"><div><h2>Project files</h2><p v-if="run.lab?.capabilities?.bicepDeployment">Edit the modular Bicep project and save each file. Validate, preview, and deploy saved versions in Cloud Shell.</p><p v-else-if="isKubernetes">Python source and ordinary YAML are editable. Save source before building an image; save YAML before applying it to the simulated cluster.</p><p v-else>Simulated .NET 10 project. Builds capture saved C# files.</p><p v-if="run.lab?.capabilities?.healthProbes">Use supported health expressions in Program.cs: HealthState.StartupComplete, HealthState.Ready, and HealthState.Responsive. The helper is fixed and read-only. Edit containerapp.yaml in JSON form; general block YAML is outside this trainer's supported format. Save C# → build image → deploy. Save probe YAML → deploy; no image build is needed.</p></div><span class="project-tool__build">{{ published ? `Built ${published.id}` : 'No image built' }}</span></header>
+    <header class="project-tool__head"><div><h2>Project files</h2><p v-if="run.lab?.capabilities?.bicepDeployment">Edit the modular Bicep project and save each file. Validate, preview, and deploy saved versions in Cloud Shell.</p><p v-else-if="isKubernetes">Python source and ordinary YAML are editable. Save source before building an image; save YAML before applying it to the simulated cluster.</p><p v-else>Simulated .NET 10 project. Builds capture saved C# files.</p><p v-if="run.lab?.capabilities?.healthProbes">Use supported health expressions in Program.cs: HealthState.StartupComplete, HealthState.Ready, and HealthState.Responsive. The helper is fixed and read-only. Edit containerapp.yaml in JSON form; general block YAML is outside this trainer's supported format. Save C# → build image → deploy. Save probe YAML → deploy; no image build is needed.</p></div><span class="project-tool__build">{{ isKubernetes ? (published ? `Built ${published.id}` : 'No image built') : (published ? `Published ${published.id}` : 'No image published') }}</span></header>
     <div class="project-tool__body">
       <nav class="project-tool__files" aria-label="Project file list">
         <button v-for="item in files" :key="item" type="button" :aria-current="path === item ? 'page' : undefined" @click="selectFile(item)">{{ item }}</button>

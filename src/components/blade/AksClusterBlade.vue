@@ -22,7 +22,9 @@ const essentials = computed(() => cluster.value ? [
 const rows = (items, mapper) => computed(() => items.value.map(mapper))
 const deploymentRows = rows(scoped('deployments'), item => ({ name: item.metadata.name, status: `${item.spec.replicas} desired`, image: item.spec.template.spec.containers[0]?.image ?? '' }))
 const podRows = rows(scoped('pods'), item => ({ name: item.metadata.name, status: item.status?.phase ?? 'Unknown', image: item.spec.containers[0]?.image ?? '' }))
-const serviceRows = rows(scoped('services'), item => ({ name: item.metadata.name, status: item.spec.type ?? 'ClusterIP', endpoint: `${item.spec.ports?.[0]?.port ?? ''} → ${item.spec.ports?.[0]?.targetPort ?? ''}` }))
+const serviceRows = computed(() => view.value.serviceEndpoints.filter(item => item.namespace === namespace.value).map(item => ({ name: item.name, status: item.type, endpoint: `${item.readyBackends.length} ready: ${item.readyBackends.map(backend => backend.name).join(', ') || 'none'} · ${item.targetPort ?? 'none'} → ${item.resolvedPort ?? 'unresolved'}` })))
+const imageEvents = computed(() => view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['RegistryAccessDenied', 'ImageNotFound'].includes(item.reason))
+  .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message })))
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -33,6 +35,6 @@ const serviceRows = rows(scoped('services'), item => ({ name: item.metadata.name
     <h3 class="blade__section-title">Deployments</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Replicas' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="deploymentRows" empty-text="No deployments in this namespace" />
     <h3 class="blade__section-title">Pods</h3><EntityTable :columns="[{ key: 'name', label: 'Name', grow: 1.5 }, { key: 'status', label: 'Status' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="podRows" empty-text="No Pods in this namespace" />
     <h3 class="blade__section-title">Services</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Type' }, { key: 'endpoint', label: 'Endpoint' }]" :rows="serviceRows" empty-text="No Services in this namespace" />
-    <h3 class="blade__section-title">Image-pull events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="view.events.filter(item => ['RegistryAccessDenied', 'ImageNotFound'].includes(item.reason)).map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message }))" empty-text="No image-pull events" />
+    <h3 class="blade__section-title">Image-pull events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="imageEvents" empty-text="No image-pull events in this namespace" />
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
 </div></section></template>

@@ -12,6 +12,9 @@ it('routes Kubernetes labs to a declared-scenario experiment panel', async () =>
   expect(aks).toContain("type: 'aks-request'")
   expect(aks).toContain('scenarioId')
   expect(aks).toContain('run.completedAt')
+  expect(aks).toContain('latestEvidence')
+  expect(aks).toContain('HTTP {{ latestEvidence.measurements?.status }}')
+  expect(aks).toContain('JSON.stringify(latestEvidence.measurements?.body')
 })
 
 it('labels Python/YAML project state and registers the AKS portal blade', async () => {
@@ -21,6 +24,8 @@ it('labels Python/YAML project state and registers the AKS portal blade', async 
   expect(editor).toContain('Saved')
   expect(editor).toContain('Applied')
   expect(editor).toContain('Built')
+  expect(editor).toContain('parseKubernetesYaml')
+  expect(editor).toContain('Applied to the current cluster')
   expect(host).toContain('AksClusterBlade')
   expect(group).toContain("kind: 'aks-cluster'")
 })
