@@ -3,6 +3,7 @@ import { getProjectManifest } from './manifests.js'
 import { lexCsharp, parseCsharp } from './csharp.js'
 import { parseFoundrySource, parseTroubleshootingFoundrySource, parseIndependentFoundrySource } from './foundry.js'
 import { parseCapstoneSource } from './capstone.js'
+import { parsePythonProject } from './python.js'
 
 function diagnostic(code, message, path, line = 1, column = 1) { return { code, message, path, line, column } }
 function clone(value) { return JSON.parse(JSON.stringify(value ?? {})) }
@@ -85,6 +86,7 @@ export function saveProjectFile(project, path, text, manifest = PROJECT_MANIFEST
 export function parseProject(savedFiles, manifest = PROJECT_MANIFEST) {
   const files = clone(savedFiles ?? {})
   const diagnostics = validateStaticFiles(files, manifest)
+  if (manifest.language === 'python') return parsePythonProject(files, manifest)
   const programPath = 'src/Trainer.Api/Program.cs'; const settingsPath = 'src/Trainer.Api/AppSettings.cs'; const jsonPath = 'src/Trainer.Api/appsettings.json'
   if (diagnostics.length) return { appSpec: null, diagnostics }
   const settings = validateJson(files[jsonPath], jsonPath, manifest); diagnostics.push(...settings.diagnostics)
