@@ -45,6 +45,21 @@ export function describeObject(resource, state) {
   if (resource.kind === 'Secret') lines.push(`Type: ${resource.type ?? 'Opaque'}`, `Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
   if (resource.kind === 'Pod') {
     lines.push(`Status: ${resource.status.phase}`, `Image: ${resource.spec.containers[0].image}`)
+    const health = state.health?.containers?.[resource.metadata.uid]
+    if (health) {
+      lines.push(`Container ID: ${health.containerId}`, `Container Ready: ${health.ready ? 'True' : 'False'}`,
+        `Restart Count: ${health.restartCount}`, `Startup Passed: ${health.startupPassed ? 'True' : 'False'}`,
+        `Initialized At: ${health.initializedAtMs / 1000}s`)
+      if (health.restartReason) lines.push(`Restart Cause: ${health.restartReason}`)
+      if (health.terminatedAtMs !== null) lines.push(`Terminating At: ${health.terminatedAtMs / 1000}s`)
+      if (health.restartAtMs !== null) lines.push(`Next Container Start: ${health.restartAtMs / 1000}s`)
+      if (health.previous) lines.push(`Previous Container ID: ${health.previous.containerId}`,
+        `Previous Exit Reason: ${health.previous.reason}`)
+      for (const type of ['startup', 'readiness', 'liveness']) {
+        const check = health.checks[type]
+        if (check) lines.push(`${type[0].toUpperCase()}${type.slice(1)} Probe: ${check.successes} successes, ${check.failures} failures, next ${check.pending?.completeAtMs ?? check.nextAtMs ?? 'none'}ms`)
+      }
+    }
     const waiting = resource.status.containerStatuses?.find(item => item.state?.waiting)?.state.waiting
     if (waiting?.reason) {
       lines.push(`Reason: ${waiting.reason}`)
