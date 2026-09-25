@@ -155,7 +155,10 @@ export function reconcileKubernetesResult(input, lab) {
     }
   }
   run = reconcileHealth(run, lab)
-  run = processProbeTimestamp(run, run.runtime.simTimeMs, lab)
+  if (lab?.capabilities?.kubernetesProbes === true && Object.values(run.runtime.kubernetes.clusters).some(state =>
+    Object.values(state.resources).some(item => item.kind === 'Pod' && item.spec?.containers?.[0]?.startupProbe))) {
+    run = processProbeTimestamp(run, run.runtime.simTimeMs, lab)
+  }
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const result = reconcileServicesResult(run, cluster.id)
     if (result.diagnostics.length) return { run: original, diagnostics: result.diagnostics }
