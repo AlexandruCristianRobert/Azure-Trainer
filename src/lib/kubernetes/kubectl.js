@@ -146,7 +146,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }
         for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] }
       }
-      return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(next))
+      return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(reconcileKubernetes(next, lab)))
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!['Pod', 'Deployment', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, or service NAME.')])
@@ -163,7 +163,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
       delete state.podSnapshots[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
     }
     else { const ids = new Set([item.metadata.uid]); let changed = true; while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }; for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] } }
-    const reconciled = kind === 'Pod' ? reconcileKubernetes(next, lab) : next
+    const reconciled = reconcileKubernetes(next, lab)
     return response(sandbox, [out(`${kind.toLowerCase()} "${name}" deleted`)], stateEffect(reconciled))
   }
   if (verb === 'rollout' && parsed.positional[0] === 'status' && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {

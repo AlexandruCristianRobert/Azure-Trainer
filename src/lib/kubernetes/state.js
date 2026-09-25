@@ -99,9 +99,10 @@ function validClusterState(state, run) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
-  if (!validConnectivity(state, resources, byUid)) return false
+  if (!validConnectivity(state, resources, byUid, run)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
+      if (resource.kind === 'Pod' && state.connectivity?.diagnosticPodUids.includes(resource.metadata.uid)) continue
       if (!Array.isArray(resource.metadata.ownerReferences) || resource.metadata.ownerReferences.length !== 1) return false
       const owner = resource.metadata.ownerReferences[0]
       const parent = byUid.get(owner.uid)
@@ -138,7 +139,8 @@ function validClusterState(state, run) {
       || !snapshot.configRefs.every(item => isPlainObject(item) && ['ConfigMap', 'Secret'].includes(item.kind) && typeof item.namespace === 'string' && typeof item.name === 'string' && typeof item.key === 'string' && ['env', 'file'].includes(item.mode) && typeof item.target === 'string')) return false
   }
   for (const [, resource] of resources) {
-    if (resource.kind === 'Pod' && resource.status?.phase === 'Running' && !Object.hasOwn(state.podSnapshots, resource.metadata.uid)) return false
+    if (resource.kind === 'Pod' && resource.status?.phase === 'Running' && !Object.hasOwn(state.podSnapshots, resource.metadata.uid)
+      && !state.connectivity?.diagnosticPodUids.includes(resource.metadata.uid)) return false
     if (resource.kind === 'Pod' && resource.status?.phase !== 'Running' && Object.hasOwn(state.podSnapshots, resource.metadata.uid)) return false
   }
   return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
@@ -146,29 +148,35 @@ function validClusterState(state, run) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validConnectivity(state, resources, byUid) {
+function validConnectivity(state, resources, byUid, run) {
   if (state.connectivity === undefined) return !resources.some(([, resource]) => resource.kind === 'EndpointSlice')
   const value = state.connectivity
   if (!isPlainObject(value) || value.version !== 1 || !Number.isInteger(value.nextServiceAddress) || value.nextServiceAddress < 1 || value.nextServiceAddress > 4064
     || !Number.isInteger(value.nextPodAddress) || value.nextPodAddress < 1 || value.nextPodAddress > 4064
     || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
     || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
-    || !value.diagnosticPodUids.every(uid => byUid.get(uid)?.kind === 'Pod') || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200 || value.incident !== null) return false
+    || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid))) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
+    || !value.applicationLogs.every(log => isPlainObject(log) && typeof log.requestId === 'string' && Number.isSafeInteger(log.sequence) && log.sequence >= 1 && log.sequence < run.nextSequence)
+    || value.incident !== null) return false
   const addresses = new Set()
+  let maxService = 0; let maxPod = 0; let maxExternal = 9
   for (const [, resource] of resources) {
     if (resource.kind === 'Service') {
       if (!/^10\.96\.(?:[0-9]|1[0-5])\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(resource.spec?.clusterIP ?? '') || addresses.has(resource.spec.clusterIP)) return false
       addresses.add(resource.spec.clusterIP)
+      maxService = Math.max(maxService, addressIndex(resource.spec.clusterIP))
       const external = resource.status?.loadBalancer?.ingress?.[0]?.ip
       if (resource.spec.type === 'LoadBalancer' ? !/^192\.0\.2\.(?:1[0-9]|[2-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(external ?? '') : external !== undefined) return false
-      if (external) { if (addresses.has(external)) return false; addresses.add(external) }
+      if (external) { if (addresses.has(external)) return false; addresses.add(external); maxExternal = Math.max(maxExternal, Number(external.split('.')[3])) }
     }
     if (resource.kind === 'Pod' && resource.status?.podIP !== undefined) {
       if (!/^10\.244\.(?:[0-9]|1[0-5])\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(resource.status.podIP) || addresses.has(resource.status.podIP)) return false
       addresses.add(resource.status.podIP)
+      maxPod = Math.max(maxPod, addressIndex(resource.status.podIP))
     }
   }
-  return resources.filter(([, resource]) => resource.kind === 'EndpointSlice').every(([, slice]) => {
+  if (value.nextServiceAddress <= maxService || value.nextPodAddress <= maxPod || value.nextExternalAddress <= maxExternal) return false
+  if (!resources.filter(([, resource]) => resource.kind === 'EndpointSlice').every(([, slice]) => {
     const owner = slice.metadata.ownerReferences?.[0]; const service = owner && byUid.get(owner.uid)
     if (!service || service.kind !== 'Service' || owner.kind !== 'Service' || owner.name !== service.metadata.name
       || slice.metadata.namespace !== service.metadata.namespace || slice.metadata.labels?.['kubernetes.io/service-name'] !== service.metadata.name
@@ -179,7 +187,43 @@ function validConnectivity(state, resources, byUid) {
         && endpoint.targetRef.namespace === pod.metadata.namespace && Array.isArray(endpoint.addresses) && endpoint.addresses.length === 1
         && endpoint.addresses[0] === pod.status?.podIP && typeof endpoint.conditions?.ready === 'boolean'
     })
+  })) return false
+  return resources.filter(([, service]) => service.kind === 'Service').every(([, service]) => validServiceSlices(state, service))
+}
+
+function addressIndex(address) { const [, , third, fourth] = address.split('.').map(Number); return third * 254 + fourth - 1 }
+
+function validServiceSlices(state, service) {
+  const target = service.spec.ports[0].targetPort ?? service.spec.ports[0].port
+  const groups = new Map()
+  for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === service.metadata.namespace
+    && Object.entries(service.spec.selector).every(([key, value]) => item.metadata.labels?.[key] === value))) {
+    const port = typeof target === 'number' ? target : pod.spec.containers?.[0]?.ports?.find(item => item.name === target)?.containerPort
+    if (!port || !pod.status?.podIP) continue
+    const endpoints = groups.get(port) ?? []; endpoints.push(pod); groups.set(port, endpoints)
+  }
+  if (!groups.size) groups.set(null, [])
+  const expected = new Set([...groups.keys()].map(port => kubeSliceKey(service, port)))
+  const actual = Object.entries(state.resources).filter(([, item]) => item.kind === 'EndpointSlice' && item.metadata.ownerReferences?.[0]?.uid === service.metadata.uid)
+  if (actual.length !== expected.size || actual.some(([key]) => !expected.has(key))) return false
+  return [...groups.entries()].every(([port, pods]) => {
+    const slice = state.resources[kubeSliceKey(service, port)]
+    return JSON.stringify(slice.ports) === JSON.stringify(port === null ? [] : [{ protocol: 'TCP', port }])
+      && JSON.stringify(slice.endpoints) === JSON.stringify(pods.sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid)).map(pod => ({ addresses: [pod.status.podIP], conditions: { ready: pod.status.phase === 'Running' && pod.status.conditions?.some(item => item.type === 'Ready' && item.status === 'True') }, targetRef: { kind: 'Pod', namespace: pod.metadata.namespace, name: pod.metadata.name, uid: pod.metadata.uid } })))
   })
+}
+
+function kubeSliceKey(service, port) {
+  const suffix = port === null ? 'empty' : String(port)
+  const name = `${service.metadata.name}-${service.metadata.uid.replace(/[^a-z0-9]/g, '').slice(-12)}-${suffix}`.slice(0, 63)
+  return `EndpointSlice/${service.metadata.namespace}/${name}`
+}
+
+function validDiagnosticPod(pod) {
+  return pod?.kind === 'Pod' && pod.metadata?.name === 'diagnostics' && pod.metadata?.namespace === 'diagnostics'
+    && JSON.stringify(pod.metadata.labels) === JSON.stringify({ app: 'diagnostics' }) && pod.spec?.containers?.length === 1
+    && pod.spec.containers[0]?.name === 'diagnostics' && pod.spec.containers[0]?.image === 'mcr.microsoft.com/aks-trainer/diagnostics:1'
+    && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True')
 }
 
 function validCapturedArtifact(artifact, source, run) {

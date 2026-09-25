@@ -106,15 +106,29 @@ export function seedConfiguredAssistant({ namespace = 'assistant', profile = 'tr
   return { lab: { ...lab, scenarios: { info: scenario }, tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false }] }, run, clusterId }
 }
 
-export function seedConnectivityTest({ namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
-  let { lab, run, clusterId } = seedFoundation({ namespace })
-  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConfiguration: true, kubernetesConnectivity: true } }
-  const service = run.runtime.kubernetes.clusters[clusterId].resources[`Service/${namespace}/${namespace}`]
-  service.spec.type = serviceType
-  service.spec.ports[0].targetPort = targetPort
+export function seedConnectivityTest({ profile = 'training', namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {
+  let { lab, run, clusterId } = seedConfiguredAssistant({ namespace, profile })
+  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConnectivity: true }, scenarios: { networkInternal: { kind: 'aks-request', version: 1,
+    target: { clusterId, namespace, serviceName: 'assistant-internal', deploymentName: 'assistant' }, request: { method: 'GET', path: '/api/info' },
+    expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: 'training' } }, requireReplacement: false } } }
   if (listener !== 8080) {
-    for (const pod of Object.values(run.runtime.kubernetes.clusters[clusterId].resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)) pod.spec.containers[0].ports[0].containerPort = listener
+    run = act(run, lab, { type: 'save-file', path: 'app.py', text: run.project.savedFiles['app.py'].replace('PORT = 8080', `PORT = ${listener}`) }).run
+    run = act(run, lab, { type: 'save-file', path: 'Dockerfile', text: run.project.savedFiles.Dockerfile.replace('EXPOSE 8080', `EXPOSE ${listener}`) }).run
+    run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: run.project.savedFiles['k8s/deployment.yaml'].replace('containerPort: 8080', `containerPort: ${listener}`) }).run
+    run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksconfig -t assistant:v1 .' }).run
+    run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
   }
+  run = act(run, lab, { type: 'command', line: `kubectl delete service assistant -n ${namespace}` }).run
+  const service = run.project.savedFiles['k8s/service.yaml'].replace('name: assistant\n', 'name: assistant-internal\n').replace('type: LoadBalancer', `type: ${serviceType}`).replace('targetPort: http', `targetPort: ${targetPort}`)
+  run = act(run, lab, { type: 'save-file', path: 'k8s/service.yaml', text: service }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/service.yaml' }).run
   run = reconcileServices(initializeConnectivity(run, clusterId), clusterId)
-  return { lab, run, clusterId, diagnosticPodUid: null, target: { clusterId, namespace, serviceName: namespace } }
+  const state = run.runtime.kubernetes.clusters[clusterId]
+  state.resources['Namespace//diagnostics'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'diagnostics', uid: `fixture-${clusterId}-diagnostics-namespace`, resourceVersion: '1' } }
+  const diagnosticPodUid = `fixture-${clusterId}-diagnostics-pod`
+  state.resources['Pod/diagnostics/diagnostics'] = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'diagnostics', namespace: 'diagnostics', uid: diagnosticPodUid, resourceVersion: '1', labels: { app: 'diagnostics' } },
+    spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
+  state.connectivity.diagnosticPodUids = [diagnosticPodUid]
+  run = reconcileServices(run, clusterId)
+  return { lab, run, clusterId, diagnosticPodUid, target: { clusterId, namespace, serviceName: 'assistant-internal' } }
 }

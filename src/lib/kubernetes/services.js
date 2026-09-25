@@ -5,6 +5,14 @@ const serviceAddress = value => `10.96.${Math.floor(value / 254)}.${(value % 254
 const podAddress = value => `10.244.${Math.floor(value / 254)}.${(value % 254) + 1}`
 const externalAddress = value => `192.0.2.${value}`
 
+export function serviceAllocationDiagnostic(run, clusterId, service, existing = null) {
+  const connectivity = run.runtime?.kubernetes?.clusters?.[clusterId]?.connectivity
+  if (!connectivity || existing) return null
+  if (connectivity.nextServiceAddress > 4063) return { code: 'SIMULATOR_LIMIT', message: 'The simulated Service address range is exhausted.' }
+  if (service.spec.type === 'LoadBalancer' && connectivity.nextExternalAddress > 254) return { code: 'SIMULATOR_LIMIT', message: 'The simulated external address range is exhausted.' }
+  return null
+}
+
 export function initializeConnectivity(input, clusterId) {
   const run = clone(input)
   const state = run.runtime?.kubernetes?.clusters?.[clusterId]

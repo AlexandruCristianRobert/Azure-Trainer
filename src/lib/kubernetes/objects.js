@@ -1,5 +1,6 @@
 import { validateKubernetesObject } from './schema.js'
 import { scheduleConfigurationProjection } from './configuration.js'
+import { serviceAllocationDiagnostic } from './services.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -24,6 +25,8 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       return { run: next, lines, diagnostics: [{ code: 'KUBE_NAMESPACE_NOT_FOUND', message: `Namespace '${ns}' was not found.` }] }
     }
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
+    const allocationIssue = object.kind === 'Service' ? serviceAllocationDiagnostic(next, clusterId, object, old) : null
+    if (allocationIssue) return { run: next, lines, diagnostics: [allocationIssue] }
     if (object.kind === 'Deployment' && old?.spec?.template?.metadata?.annotations?.['kubectl.kubernetes.io/restarted-at']
       && object.spec.template.metadata.annotations?.['kubectl.kubernetes.io/restarted-at'] === undefined) {
       object.spec.template.metadata.annotations = { ...(object.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': old.spec.template.metadata.annotations['kubectl.kubernetes.io/restarted-at'] }

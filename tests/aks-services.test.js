@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
-import { seedFoundation } from './helpers/aks.js'
+import { seedFoundation, seedConnectivityTest, act } from './helpers/aks.js'
 import { getServiceBackends, initializeConnectivity, reconcileServices } from '../src/lib/kubernetes/services.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 
 it('keeps a numeric backend port even if the application does not listen there', () => {
   let { run, clusterId } = seedFoundation()
@@ -10,6 +12,43 @@ it('keeps a numeric backend port even if the application does not listen there',
   const view = getServiceBackends(run, { clusterId, namespace: 'assistant', serviceName: 'assistant' })
   expect(view.readyEndpoints).toHaveLength(2)
   expect(view.readyEndpoints.every(endpoint => endpoint.port === 8081)).toBe(true)
+})
+
+it('seeds a configured assistant and a trusted diagnostic Pod without requests', () => {
+  const { lab, run, clusterId, diagnosticPodUid, target } = seedConnectivityTest()
+  const state = run.runtime.kubernetes.clusters[clusterId]
+  expect(target.serviceName).toBe('assistant-internal')
+  expect(state.resources['Service/assistant/assistant-internal']).toBeTruthy()
+  expect(state.connectivity.diagnosticPodUids).toEqual([diagnosticPodUid])
+  expect(state.resources[`Pod/diagnostics/diagnostics`].metadata.uid).toBe(diagnosticPodUid)
+  expect(run.runtime.kubernetes.requests).toEqual([])
+  expect(state.connectivity.applicationLogs).toEqual([])
+  expect(validateBehavioralRun(run, lab)).toBe(run)
+})
+
+it('rejects exhausted Service address allocation before creating a Service', () => {
+  const { lab, run, clusterId } = seedConnectivityTest()
+  const exhausted = structuredClone(run)
+  exhausted.runtime.kubernetes.clusters[clusterId].connectivity.nextServiceAddress = 4064
+  const result = applyKubernetesObjects(exhausted, [{ apiVersion: 'v1', kind: 'Service', metadata: { name: 'another', namespace: 'assistant' }, spec: { type: 'ClusterIP', selector: { app: 'assistant' }, ports: [{ port: 80, targetPort: 'http', protocol: 'TCP' }] } }], { clusterId }, lab)
+  expect(result.diagnostics[0]).toMatchObject({ code: 'SIMULATOR_LIMIT' })
+  expect(result.run.runtime.kubernetes.clusters[clusterId].resources['Service/assistant/another']).toBeUndefined()
+})
+
+it('reconciles EndpointSlices when kubectl deletes a Service', () => {
+  let { lab, run, clusterId } = seedConnectivityTest()
+  run = act(run, lab, { type: 'command', line: 'kubectl delete service assistant-internal -n assistant' }).run
+  expect(Object.values(run.runtime.kubernetes.clusters[clusterId].resources).some(item => item.kind === 'EndpointSlice')).toBe(false)
+})
+
+it('rejects forged diagnostic identities and stale EndpointSlices', () => {
+  const { lab, run, clusterId } = seedConnectivityTest()
+  const forgedDiagnostic = structuredClone(run)
+  forgedDiagnostic.runtime.kubernetes.clusters[clusterId].connectivity.diagnosticPodUids = [Object.values(forgedDiagnostic.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant').metadata.uid]
+  expect(() => validateBehavioralRun(forgedDiagnostic, lab)).toThrow(/Kubernetes/)
+  const staleSlice = structuredClone(run)
+  Object.values(staleSlice.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'EndpointSlice').endpoints = []
+  expect(() => validateBehavioralRun(staleSlice, lab)).toThrow(/Kubernetes/)
 })
 
 it('allocates stable addresses and projects ready EndpointSlice endpoints', () => {
