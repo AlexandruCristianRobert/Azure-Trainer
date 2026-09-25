@@ -86,6 +86,7 @@ export function saveProjectFile(project, path, text, manifest = PROJECT_MANIFEST
 export function parseProject(savedFiles, manifest = PROJECT_MANIFEST) {
   const files = clone(savedFiles ?? {})
   const diagnostics = validateStaticFiles(files, manifest)
+  if (diagnostics.length) return { appSpec: null, diagnostics }
   if (manifest.language === 'python') return parsePythonProject(files, manifest)
   const programPath = 'src/Trainer.Api/Program.cs'; const settingsPath = 'src/Trainer.Api/AppSettings.cs'; const jsonPath = 'src/Trainer.Api/appsettings.json'
   if (diagnostics.length) return { appSpec: null, diagnostics }

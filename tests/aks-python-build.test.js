@@ -27,6 +27,17 @@ describe('Python immutable build sources', () => {
     expect(build(run(FOUNDATION_FILES, draft)).artifact.sourceHash).toBe(first.artifact.sourceHash)
   })
 
+  it.each([
+    ['missing fixed server file', { ...FOUNDATION_FILES, 'server.py': undefined }, 'MISSING_FILE'],
+    ['tampered fixed server file', { ...FOUNDATION_FILES, 'server.py': `${FOUNDATION_FILES['server.py']}\n# changed` }, 'SCAFFOLD_MODIFIED'],
+    ['unknown project file', { ...FOUNDATION_FILES, 'notes.txt': 'extra' }, 'UNKNOWN_FILE'],
+    ['source exceeds per-file bounds', { ...FOUNDATION_FILES, 'app.py': 'x'.repeat(FOUNDATION_MANIFEST.maxFileBytes + 1) }, 'FILE_TOO_LARGE'],
+  ])('rejects %s before publishing', (_caseName, files, code) => {
+    const result = build(run(files))
+    expect(result.artifact).toBeNull()
+    expect(result.diagnostics.map(item => item.code)).toContain(code)
+  })
+
   it('rejects missing source, disallowed COPY, entrypoint, and port mismatches without publishing', () => {
     expect(build(run({ ...FOUNDATION_FILES, 'app.py': undefined })).artifact).toBeNull()
     expect(parsePythonDockerfile(FOUNDATION_FILES.Dockerfile.replace('app.py server.py', 'app.py k8s/deployment.yaml')).diagnostics.map(item => item.code)).toContain('UNSUPPORTED_COPY_SOURCE')

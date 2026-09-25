@@ -30,6 +30,13 @@ describe('bounded Python project projection', () => {
     expect(parsePythonProject(local, FOUNDATION_MANIFEST).diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
   })
 
+  it('requires service and version to resolve to strings', () => {
+    const changed = { ...FOUNDATION_FILES, 'app.py': FOUNDATION_FILES['app.py'].replace('SERVICE_NAME = \"knowledge-assistant\"', 'SERVICE_NAME = 7') }
+    const parsed = parsePythonProject(changed, FOUNDATION_MANIFEST)
+    expect(parsed.appSpec).toBeNull()
+    expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
+  })
+
   it('rejects unsupported calls, syntax errors, and ambiguous info definitions', () => {
     const unsupported = { ...FOUNDATION_FILES, 'app.py': FOUNDATION_FILES['app.py'].replace('SERVICE_NAME,', 'str(SERVICE_NAME),') }
     expect(parsePythonProject(unsupported, FOUNDATION_MANIFEST).diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py' }))

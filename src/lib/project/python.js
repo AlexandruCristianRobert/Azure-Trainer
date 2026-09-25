@@ -91,6 +91,8 @@ export function parsePythonProject(files, manifest = {}) {
     if (items[i]?.name === ',') i++
   }
   for (const key of ['service', 'version', 'environment']) if (!Object.hasOwn(response, key)) out.push(diag('PYTHON_UNSUPPORTED', `The return dictionary must include ${key}.`, 'app.py', text, dict.from))
+  for (const key of ['service', 'version']) if (response[key] && (response[key].kind !== 'literal' || typeof response[key].value !== 'string')) out.push(diag('PYTHON_UNSUPPORTED', `${key} must resolve to a string literal.`, 'app.py', text, dict.from))
+  if (response.environment && (response.environment.kind === 'literal' ? typeof response.environment.value !== 'string' : typeof response.environment.key !== 'string' || typeof response.environment.defaultValue !== 'string')) out.push(diag('PYTHON_UNSUPPORTED', 'environment must be a string literal or a supported string configuration lookup.', 'app.py', text, dict.from))
   if (Object.values(response).some(value => value.kind === 'config') && !hasOsImport) out.push(diag('PYTHON_UNSUPPORTED', 'Import os before reading environment configuration.', 'app.py', text, fn.from))
   if (!Number.isInteger(constants.PORT) || constants.PORT < 1 || constants.PORT > 65535) out.push(diag('PYTHON_UNSUPPORTED', 'PORT must be a valid integer literal.'))
   if (out.length) return { appSpec: null, diagnostics: out }
