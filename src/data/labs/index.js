@@ -27,6 +27,7 @@ import { aksConfigGuidedLab } from './aks-journey/config-guided.lab.js'
 import { aksConfigTroubleshootingLab } from './aks-journey/config-troubleshooting.lab.js'
 import { aksConfigIndependentLab } from './aks-journey/config-independent.lab.js'
 import { aksConnectivityGuidedLab } from './aks-journey/connectivity-guided.lab.js'
+import { aksConnectivityTroubleshootingLab } from './aks-journey/connectivity-troubleshooting.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -59,6 +60,7 @@ export const LABS = [
   aksConfigTroubleshootingLab,
   aksConfigIndependentLab,
   aksConnectivityGuidedLab,
+  aksConnectivityTroubleshootingLab,
 ]
 
 export function labById(id) {

@@ -7,7 +7,7 @@ import { executeAksSolution } from './helpers/aks.js'
 import { act } from './helpers/aks.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { inspectConnectivity } from '../src/lib/kubernetes/connectivity-inspection.js'
-import { LABS } from '../src/data/labs/index.js'
+import { LABS, labById, nextLabFor } from '../src/data/labs/index.js'
 import { readFile } from 'node:fs/promises'
 import { parse, stringify } from 'yaml'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
@@ -39,6 +39,7 @@ describe('AKS connectivity troubleshooting Lab', () => {
 
   it('keeps Lab 8 registered and exposes its guarded control in the experiment panel', async () => {
     expect(LABS.some(item => item.id === aksConnectivityTroubleshootingLab.id)).toBe(true)
+    expect(nextLabFor(labById('aks-connectivity-guided'))).toBe(aksConnectivityTroubleshootingLab)
     expect(aksConnectivityTroubleshootingLab.tasks).toHaveLength(8)
     expect(aksConnectivityTroubleshootingLab.tasks.every(item => item.hints?.length === 2 && item.solution?.steps?.length
       && typeof item.examNote === 'string' && item.examNote.length > 0)).toBe(true)
