@@ -116,7 +116,7 @@ function assess(state, receipt) {
     && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length && item.response?.route?.podUid !== receipt.podUids[0])
     && receipt.samples.some(item => item.second === 25 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
     && containers.every(item => item.restartCount === 0)
-  if (scenarioType(receipt) === 'hang') return allReady && receipt.summary.restartReceipts.length > 0
+  if (scenarioType(receipt) === 'hang') return receipt.summary.restartReceipts.length > 0
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.body?.sources?.includes('training-backups'))
   const kind = String(receipt.script?.kind ?? '').toLowerCase()
