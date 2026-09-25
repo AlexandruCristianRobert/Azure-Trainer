@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { aksAiIndependentLab } from '../src/data/labs/aks-journey/ai-independent.lab.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
@@ -8,6 +9,11 @@ import { act, executeAksSolution } from './helpers/aks.js'
 const solve = (run, ids = aksAiIndependentLab.tasks.map(task => task.id)) => ids.reduce((value, id) => executeAksSolution(value, aksAiIndependentLab, aksAiIndependentLab.tasks.find(task => task.id === id)), run)
 
 describe('AKS independent partner retrieval lab', () => {
+  it('registers after the troubleshooting Lab', () => {
+    expect(labById('aks-ai-independent')).toBe(aksAiIndependentLab)
+    expect(nextLabFor(labById('aks-ai-troubleshooting'))).toBe(aksAiIndependentLab)
+  })
+
   it('completes all nine tasks from its standalone optional Solutions', () => {
     const run = solve(createBehavioralRun(aksAiIndependentLab, { attemptId: 'partner-solutions' }))
     expect(evaluateLab(aksAiIndependentLab, run).isComplete).toBe(true)
