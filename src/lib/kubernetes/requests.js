@@ -204,7 +204,7 @@ function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
     : expectedTransport.reason === 'NO_READY_ENDPOINTS' ? outcome.route.selectedCount === 0
       : expectedTransport.reason === 'CONNECTION_REFUSED' ? (outcome.route.readyEndpointUids?.length ?? 0) > 0
         : true
-  const dependencyPattern = outcome.status !== 503 ? true : !!outcome.route.podUid
+  const dependencyPattern = outcome.integrationTrace ? true : outcome.status !== 503 ? true : !!outcome.route.podUid
     && outcome.dependencyTrace[0]?.operation === 'embedding' && outcome.dependencyTrace[0]?.status === 'succeeded'
     && outcome.dependencyTrace.some(item => item.operation === 'postgres-query' && item.status === 'failed')
   const matches = outcome.status === scenario.expected.status && canonicalize(outcome.body) === canonicalize(scenario.expected.body)

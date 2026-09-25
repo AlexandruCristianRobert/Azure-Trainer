@@ -549,7 +549,7 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
-  if (action.type === 'aks-request' || action.type === 'aks-advance') {
+  if (action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident') {
     const aks = applyAksAction(run, action, lab)
     const refreshed = refreshKubernetesDependencies(run, aks.run, lab)
     const result = { ...aks, run: refreshed }

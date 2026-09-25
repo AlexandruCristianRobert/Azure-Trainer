@@ -4,6 +4,7 @@ import { refreshKubernetesDependencies } from './evidence.js'
 import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
 import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
+import { advanceIntegrationIncident } from './integration-incidents.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -19,6 +20,11 @@ function validConnectivityExpected(expected) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (action.type === 'aks-integration-next-incident') {
+    if (Object.keys(action).length !== 1) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Incident advancement accepts no caller-selected values.' }] }
+    const result = advanceIntegrationIncident(run, lab)
+    return { ...result, portalEvents: [] }
+  }
   if (action.type === 'aks-advance') {
     if (Object.keys(action).some(key => !['type', 'seconds'].includes(key)) || lab?.capabilities?.kubernetesConfiguration !== true || !Number.isInteger(action.seconds) || action.seconds < 1 || action.seconds > 300) {
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS time advance requires an integer seconds value from 1 through 300.' }] }
@@ -60,7 +66,7 @@ export function applyAksAction(run, action, lab) {
   if (!task) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'No Task verifies this AKS request scenario.' }] }
   const refreshed = refreshKubernetesDependencies(run, run, lab)
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })
-  if (lab?.id === 'aks-connectivity-troubleshooting') {
+  if (lab?.id === 'aks-connectivity-troubleshooting' || lab?.id === 'aks-ai-troubleshooting') {
     response.measurements.deploymentUid = response.run.runtime.kubernetes.clusters?.[target.clusterId]?.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]?.metadata?.uid ?? null
   }
   let next = recordVerification(response.run, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version,

@@ -7,6 +7,7 @@ import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspectio
 import { inspectIntegration, INTEGRATION_PROFILE_LABELS } from '../../lib/kubernetes/integration-inspection.js'
 import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
+import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 const run = useLabRunStore()
 const choice = ref('')
@@ -23,6 +24,11 @@ const connectivityIncident = computed(() => {
   if (run.lab?.id !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID) return null
   return run.behavioralRun?.runtime?.kubernetes?.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.connectivity?.incident ?? null
 })
+const integrationIncident = computed(() => run.lab?.id === AI_TROUBLESHOOTING_LAB_ID ? run.behavioralRun?.runtime?.kubernetes?.integrationIncident ?? null : null)
+const integrationIncidentMessage = computed(() => INTEGRATION_INCIDENT_PHASES.find(item => item.phase === integrationIncident.value?.phase)?.phase === 'deployment'
+  ? 'Repair the captured embedding deployment and verify recovery before revealing the metadata filter.'
+  : integrationIncident.value?.phase === 'filter' ? 'Restore the employee audience and verify the published training row before revealing retry behavior.'
+    : 'The throttled-once profile is active. Rebuild and deploy the bounded retry policy.')
 const connectivityIncidentMessage = computed(() => CONNECTIVITY_INCIDENT_PHASES.find(item => item.phase === connectivityIncident.value?.phase)
   ? ({ selector: 'Observe and repair the internal Service selector fault before advancing.', port: 'Observe and repair the internal targetPort fault before advancing.', dependency: 'Repair PGHOST and restart the assistant Pods, then complete both final route checks.' }[connectivityIncident.value.phase]) : '')
 const canIntroduceConnectivityIncident = computed(() => {
@@ -110,6 +116,14 @@ async function introduceConnectivityIncident() {
     statusMessage.value = error.value ? 'The connectivity fault was not introduced.' : 'The next connectivity fault was introduced and applied.'
   } catch (reason) { error.value = reason.message; statusMessage.value = 'The connectivity fault was not introduced.' }
 }
+async function introduceIntegrationIncident() {
+  error.value = ''; statusMessage.value = 'Checking the current assistant failure and recovery before revealing the next incident.'
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-integration-next-incident' })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'The assistant incident did not advance.' : 'The next assistant incident is ready.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'The assistant incident did not advance.' }
+}
 async function copyLogCommand(command) {
   try { await navigator.clipboard.writeText(command); statusMessage.value = 'Supported log command copied.' }
   catch { statusMessage.value = 'Select and copy the displayed log command.' }
@@ -163,6 +177,11 @@ async function copyLogCommand(command) {
       <h3>Controlled connectivity incidents</h3>
       <p>Current phase: {{ connectivityIncident.phase }}. {{ connectivityIncidentMessage }}</p>
       <button type="button" class="btn" :disabled="locked || !canIntroduceConnectivityIncident" @click="introduceConnectivityIncident">Introduce next connectivity fault</button>
+    </section>
+    <section v-if="integrationIncident" class="aks-connectivity-controls" aria-label="Staged assistant incident">
+      <h3>Controlled assistant incidents</h3>
+      <p>Current phase: {{ integrationIncident.phase }}. {{ integrationIncidentMessage }}</p>
+      <button type="button" class="btn" :disabled="locked || integrationIncident.phase === 'retry'" @click="introduceIntegrationIncident">Introduce next assistant fault</button>
     </section>
     <p v-if="!scenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
     <p v-if="error" role="alert">{{ error }}</p>

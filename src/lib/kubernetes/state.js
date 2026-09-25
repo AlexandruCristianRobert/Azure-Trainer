@@ -6,6 +6,7 @@ import { parsePythonProject } from '../project/python.js'
 import { parsePythonDockerfile } from '../project/python-dockerfile.js'
 import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
 import { CONNECTIVITY_INCIDENT_PHASES, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
+import { AI_TROUBLESHOOTING_CLUSTER_ID, AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -36,11 +37,28 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   if (!validConfigIncident(runtime, run)) return false
+  if (!validIntegrationIncident(runtime, run)) return false
   const clusterIds = new Set((run.sandbox.aksClusters ?? []).map(cluster => cluster.id))
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
     && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id))
+}
+
+function validIntegrationIncident(runtime, run) {
+  const incident = runtime.integrationIncident
+  if (run.labId !== AI_TROUBLESHOOTING_LAB_ID) return incident === undefined
+  if (incident === undefined && Object.keys(runtime.clusters).length === 0) return true
+  if (!isPlainObject(incident) || Object.keys(incident).sort().join(',') !== 'labId,phase,transitions,version' || incident.version !== 1 || incident.labId !== AI_TROUBLESHOOTING_LAB_ID || !Array.isArray(incident.transitions) || incident.transitions.length > 2) return false
+  const expected = INTEGRATION_INCIDENT_PHASES[incident.transitions.length]?.phase
+  if (incident.phase !== expected) return false
+  let prior = 0
+  for (let index = 0; index < incident.transitions.length; index++) {
+    const transition = incident.transitions[index]; const phase = INTEGRATION_INCIDENT_PHASES[index]; const evidence = run.evidence?.experimentsById?.[transition?.evidenceId]
+    if (!isPlainObject(transition) || Object.keys(transition).sort().join(',') !== 'deploymentUid,evidenceId,from,sequence,to' || transition.from !== phase.phase || transition.to !== phase.next || !Number.isSafeInteger(transition.sequence) || transition.sequence <= prior || transition.sequence >= run.nextSequence || typeof transition.deploymentUid !== 'string' || typeof transition.evidenceId !== 'string' || !evidence || evidence.id !== transition.evidenceId || evidence.attemptId !== run.attemptId || evidence.labId !== AI_TROUBLESHOOTING_LAB_ID || evidence.taskId !== phase.recoveryTask || evidence.scenarioId !== phase.recoveryScenario || evidence.outcome !== 'passed' || evidence.completed !== true || evidence.sequence >= transition.sequence || evidence.measurements?.deploymentUid !== transition.deploymentUid || evidence.measurements?.clusterId !== AI_TROUBLESHOOTING_CLUSTER_ID) return false
+    prior = transition.sequence
+  }
+  return true
 }
 
 function validIntegrationTrace(trace) {
