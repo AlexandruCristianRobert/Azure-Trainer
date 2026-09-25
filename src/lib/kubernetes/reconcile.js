@@ -2,7 +2,7 @@ import { kubeObjectKey } from './objects.js'
 import { reconcileServicesResult } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
-import { processProbeTimestamp, reconcileHealth } from './probes.js'
+import { reconcileHealth } from './probes.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -155,10 +155,6 @@ export function reconcileKubernetesResult(input, lab) {
     }
   }
   run = reconcileHealth(run, lab)
-  if (lab?.capabilities?.kubernetesProbes === true && Object.values(run.runtime.kubernetes.clusters).some(state =>
-    Object.values(state.resources).some(item => item.kind === 'Pod' && item.spec?.containers?.[0]?.startupProbe))) {
-    run = processProbeTimestamp(run, run.runtime.simTimeMs, lab)
-  }
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const result = reconcileServicesResult(run, cluster.id)
     if (result.diagnostics.length) return { run: original, diagnostics: result.diagnostics }
