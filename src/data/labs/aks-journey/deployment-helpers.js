@@ -5,6 +5,9 @@ import { selectBuildFiles, projectSourceHash } from '../../../lib/project/build.
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { ACR_PULL_ROLE_ID } from '../../../lib/sandbox/roleAssignments.js'
+import { parseKubernetesYaml } from '../../../lib/kubernetes/yaml.js'
+import { canonicalize } from '../../../lib/labEngine/evidence.js'
+import { TROUBLESHOOTING_CLUSTER, TROUBLESHOOTING_GROUP, TROUBLESHOOTING_IMAGE, TROUBLESHOOTING_REGISTRY, troubleshootingSolutionFiles } from './deployment-seeds.js'
 
 export const GUIDED_GROUP = 'rg-aks-guided'
 export const GUIDED_REGISTRY = 'acraksguided'
@@ -110,3 +113,81 @@ export function solutionAction(run, lab, task, resolver) {
 }
 
 export const guidedSolutionFiles = FOUNDATION_SOLUTION_FILES
+
+const troubleshootingSame = (left, right) => typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase()
+const troubleshootingClusterId = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${TROUBLESHOOTING_GROUP}/providers/Microsoft.ContainerService/managedClusters/${TROUBLESHOOTING_CLUSTER}`
+
+function troubleshootingCluster(context) {
+  return context.sandbox.aksClusters?.find(item => troubleshootingSame(item.name, TROUBLESHOOTING_CLUSTER) && troubleshootingSame(item.resourceGroup, TROUBLESHOOTING_GROUP)) ?? null
+}
+
+function troubleshootingSavedFilesReady(context) {
+  return Object.entries(troubleshootingSolutionFiles).filter(([path]) => path.startsWith('k8s/')).every(([path, expected]) => {
+    const parsed = parseKubernetesYaml(context.project.savedFiles[path] ?? '', path)
+    const expectedParsed = parseKubernetesYaml(expected, path)
+    return !parsed.diagnostics.length && !expectedParsed.diagnostics.length
+      && canonicalize(parsed.documents) === canonicalize(expectedParsed.documents)
+  })
+}
+
+function expectedObject(path) {
+  return parseKubernetesYaml(troubleshootingSolutionFiles[path], path).documents[0]
+}
+
+function comparableObject(object) {
+  return object && { apiVersion: object.apiVersion, kind: object.kind,
+    metadata: { name: object.metadata?.name, ...(object.metadata?.namespace ? { namespace: object.metadata.namespace } : {}) },
+    ...(object.spec ? { spec: object.spec } : {}) }
+}
+
+export function troubleshootingContextReady(context) {
+  const cluster = troubleshootingCluster(context)
+  const current = context.runtime.kubernetes?.currentContext
+  return !!cluster && context.runtime.kubernetes?.contexts?.[current]?.clusterId === cluster.id
+    && context.runtime.kubernetes.contexts[current]?.namespace === 'assistant'
+}
+
+export function troubleshootingPublishedImageReady(context) {
+  const cluster = troubleshootingCluster(context)
+  const registry = context.sandbox.containerRegistries?.find(item => troubleshootingSame(item.name, TROUBLESHOOTING_REGISTRY)
+    && troubleshootingSame(item.resourceGroup, TROUBLESHOOTING_GROUP))
+  const artifactId = context.artifacts.publishedTags?.[TROUBLESHOOTING_IMAGE.toLowerCase()]
+  const deployment = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]?.resources['Deployment/assistant/assistant']
+  return !!registry && !!artifactId && context.artifacts.buildsById?.[artifactId]?.image?.registryId === registry.id
+    && deployment?.spec?.template?.spec?.containers?.[0]?.image?.toLowerCase() === TROUBLESHOOTING_IMAGE.toLowerCase()
+}
+
+export function troubleshootingRegistryAccessReady(context) {
+  const registry = context.sandbox.containerRegistries?.find(item => troubleshootingSame(item.name, TROUBLESHOOTING_REGISTRY)
+    && troubleshootingSame(item.resourceGroup, TROUBLESHOOTING_GROUP))
+  const cluster = troubleshootingCluster(context)
+  return !!registry && !!cluster && context.sandbox.roleAssignments?.some(assignment => assignment.roleName === 'AcrPull'
+    && troubleshootingSame(assignment.roleDefinitionId, ACR_PULL_ROLE_ID) && troubleshootingSame(assignment.scope, registry.id)
+    && troubleshootingSame(assignment.principalId, cluster.identityProfile?.kubeletidentity?.objectId)) === true
+}
+
+export function troubleshootingRepairedManifestsReady(context) {
+  const cluster = troubleshootingCluster(context)
+  if (!cluster || !troubleshootingSavedFilesReady(context)) return false
+  const state = context.runtime.kubernetes?.clusters?.[cluster.id]
+  const deployment = state?.resources['Deployment/assistant/assistant']
+  const service = state?.resources['Service/assistant/assistant']
+  const namespace = state?.resources['Namespace//assistant']
+  return !!namespace && !!deployment && !!service && deployment.spec?.replicas === 2
+    && canonicalize(comparableObject(namespace)) === canonicalize(expectedObject('k8s/namespace.yaml'))
+    && canonicalize(comparableObject(deployment)) === canonicalize(expectedObject('k8s/deployment.yaml'))
+    && canonicalize(comparableObject(service)) === canonicalize(expectedObject('k8s/service.yaml'))
+    && deployment.spec.template.spec?.containers?.[0]?.image?.toLowerCase() === TROUBLESHOOTING_IMAGE.toLowerCase()
+    && deployment.spec.template.spec?.containers?.[0]?.env?.some(item => item.name === 'APP_ENV' && item.value === 'training')
+}
+
+export function troubleshootingRecoveryReady(context) {
+  const cluster = troubleshootingCluster(context)
+  if (!cluster || !troubleshootingContextReady(context) || !troubleshootingRepairedManifestsReady(context)
+    || !troubleshootingPublishedImageReady(context) || !troubleshootingRegistryAccessReady(context)) return false
+  const state = context.runtime.kubernetes?.clusters?.[cluster.id]
+  if (state?.resources['Deployment/staging/assistant'] || state?.resources['Service/staging/assistant']) return false
+  const pods = getDeploymentPods({ runtime: context.runtime }, troubleshootingClusterId, 'assistant', 'assistant')
+  return pods.length === 2 && pods.every(pod => pod.status?.phase === 'Running'
+    && state.podSnapshots[pod.metadata.uid]?.environment?.APP_ENV === 'training')
+}
