@@ -19,3 +19,11 @@ it('rejects an explicit namespace that conflicts with a manifest', () => {
   const { run, lab } = seedFoundation()
   expect(() => act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml -n wrong' })).toThrow(/namespace/i)
 })
+
+it('renders a saved deployment as structured JSON without mutating Kubernetes state', () => {
+  const { run, lab } = seedFoundation()
+  const before = structuredClone(run.runtime.kubernetes)
+  const result = act(run, lab, { type: 'command', line: 'kubectl get deployment assistant -n assistant -o json' })
+  expect(JSON.parse(result.lines[0].text).metadata.name).toBe('assistant')
+  expect(result.run.runtime.kubernetes).toEqual(before)
+})
