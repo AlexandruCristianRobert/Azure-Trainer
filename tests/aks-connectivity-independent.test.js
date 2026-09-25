@@ -4,6 +4,7 @@ import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { executeAksSolution, act } from './helpers/aks.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 import { resolveServiceDns } from '../src/lib/kubernetes/connectivity.js'
 
 function solve(run) {
@@ -13,6 +14,10 @@ function solve(run) {
 function done(run, id) { return evaluateLab(aksConnectivityIndependentLab, run).tasks.find(task => task.id === id).done }
 
 describe('independent AKS connectivity Lab', () => {
+  it('is published after troubleshooting in the AKS journey', () => {
+    expect(labById('aks-connectivity-independent')).toBe(aksConnectivityIndependentLab)
+    expect(nextLabFor(labById('aks-connectivity-troubleshooting'))).toBe(aksConnectivityIndependentLab)
+  })
   it('completes from a fresh standalone run using the authored Solutions', () => {
     let run = createBehavioralRun(aksConnectivityIndependentLab, { attemptId: 'independent-network' })
     run = solve(run)

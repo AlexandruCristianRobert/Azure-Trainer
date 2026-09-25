@@ -62,7 +62,7 @@ const answerTask = ({ id, stageId, text, explanation, hints, examNote, scenarioI
 export const aksConnectivityIndependentLab = {
   id: 'aks-connectivity-independent', title: 'Expose an independent AKS review assistant',
   brief: 'The primary and review namespaces deliberately use identical Deployment names and app=assistant labels. Services select Pods only in their own namespace. Create review Services for the supplied shared image, then prove complete answers through both review and unchanged primary routes. From diagnostics, use qualified review DNS such as assistant-internal.review:8080; an unqualified name stays in diagnostics and does not fall back to either assistant namespace. No NetworkPolicy exercise is modeled, so qualified cross-namespace access is available in this simulation.',
-  minutes: 40, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 9, labMode: 'independent', skillAreaId: 'containers', service: 'aks', status: 'draft',
+  minutes: 40, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 9, labMode: 'independent', skillAreaId: 'containers', service: 'aks', status: 'available',
   manifestId: CONNECTIVITY_INDEPENDENT_MANIFEST.id, capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true },
   initialProjectFiles: CONNECTIVITY_INDEPENDENT_FILES, solutionFiles: CONNECTIVITY_INDEPENDENT_SOLUTION_FILES, initializeSimulation: seedConnectivityIndependent,
   stages: [
