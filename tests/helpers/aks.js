@@ -7,6 +7,8 @@ import { initializeConnectivity, reconcileServices } from '../../src/lib/kuberne
 import { INTEGRATION_MANIFEST, INTEGRATION_SOLUTION_FILES } from '../../src/data/templates/aks-python/integration.js'
 import { integrationDependencies } from '../../src/lib/kubernetes/evidence.js'
 import { HEALTH_MANIFEST, HEALTH_SOLUTION_FILES } from '../../src/data/templates/aks-python/health.js'
+import { HEALTH_FIXTURES } from '../../src/data/fixtures/aks/health.js'
+import { probeDependencies } from '../../src/lib/kubernetes/probe-experiments.js'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { getDeploymentPods } from '../../src/lib/kubernetes/reconcile.js'
 
@@ -168,9 +170,10 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
       kubernetesConnectivity: true, kubernetesAiIntegration: true },
     initialProjectFiles: projectFiles,
   })
-  const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesProbes: true,
+  const baseLab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesProbes: true,
     kubernetesConnectivity: true, kubernetesAiIntegration: true },
     healthFixture: { initializationSeconds: startupSeconds } }
+  const lab = baseLab
   let run = initial
   run = act(run, lab, { type: 'command', line: 'az group create -n rgaksprobesguided -l eastus' }).run
   run = act(run, lab, { type: 'command', line: 'az acr create -g rgaksprobesguided -n acraksprobesguided --sku Basic' }).run
@@ -184,7 +187,15 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
   const clusterId = run.sandbox.aksClusters[0].id
   const podUids = getDeploymentPods(run, clusterId, 'assistant', 'assistant').map(pod => pod.metadata.uid).sort()
   const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' }
-  return { lab, run, clusterId, podUids, target }
+  const scenarios = Object.fromEntries(Object.entries(HEALTH_FIXTURES.scenarios).map(([id, fixture]) => {
+    const script = structuredClone(fixture)
+    const durationSeconds = script.finishAfterStartSeconds ?? (Number.isInteger(script.initializationSeconds) ? script.initializationSeconds + 6 : 60)
+    return [id, { kind: 'aks-probe', version: 1, title: id, target: structuredClone(target), durationSeconds, script }]
+  }))
+  const probeTasks = Object.entries(scenarios).map(([id, scenario]) => ({ id: `probe-${id}`, verification: { scenarioId: id, scenarioVersion: 1 },
+    dependencies: probeDependencies(target), check: () => false }))
+  const seededLab = { ...baseLab, scenarios: { ...(baseLab.scenarios ?? {}), ...scenarios }, tasks: [...(baseLab.tasks ?? []), ...probeTasks] }
+  return { lab: seededLab, run, clusterId, podUids, target }
 }
 
 export function advanceHealth(run, lab, seconds) {
