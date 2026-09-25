@@ -1,7 +1,9 @@
 import { kubeObjectKey } from './objects.js'
 import { getServiceBackends } from './services.js'
 import { simulateAssistant } from './assistant.js'
+import { simulateIntegration } from './integration.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
+import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 
 const clone = value => structuredClone(value)
 const resultDns = (ok, reason, service = null, canonicalName = null) => ({ ok, serviceKey: service ? kubeObjectKey('Service', service.metadata.namespace, service.metadata.name) : null,
@@ -55,7 +57,9 @@ function appResponse(run, cluster, pod, probe) {
   const app = artifact?.appSpec
   const route = app?.routes?.find(item => item.method === probe.method && item.path === probe.path)
   if (!snapshot || !artifact || !route) return { status: 404, body: { error: 'Not found.' }, dependencyTrace: [], diagnostic: { code: 'ROUTE_NOT_FOUND', message: 'The captured application route does not exist.' } }
-  if (probe.path === '/api/ask') return simulateAssistant(app, snapshot, probe, KNOWLEDGE_FIXTURES)
+  if (probe.path === '/api/ask') return app.integration?.graph?.version === 1
+    ? simulateIntegration(app, snapshot, probe, INTEGRATION_FIXTURES, 'healthy')
+    : simulateAssistant(app, snapshot, probe, KNOWLEDGE_FIXTURES)
   const body = Object.fromEntries(Object.entries(route.response ?? {}).map(([key, expression]) => [key,
     expression.kind === 'config' ? (snapshot.environment?.[expression.key] ?? expression.defaultValue) : expression.value]))
   return { status: 200, body, dependencyTrace: [], diagnostic: null }

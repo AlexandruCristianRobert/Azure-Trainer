@@ -2,7 +2,9 @@ import { getDeploymentPods } from './reconcile.js'
 import { canonicalize } from '../labEngine/evidence.js'
 import { tokenize } from '../az/tokenize.js'
 import { simulateAssistant } from './assistant.js'
+import { simulateIntegration } from './integration.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
+import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { routeServiceRequest } from './connectivity.js'
 
 const diagnostic = (code, message) => ({ code, message })
@@ -67,7 +69,7 @@ export function simulateKubernetesRequest(run, scenario) {
   const resources = cluster?.resources ?? {}
   const service = resources[`Service/${namespace}/${serviceName}`]
   const deployment = resources[`Deployment/${namespace}/${deploymentName}`]
-  let status = 503; let body = { error: 'ServiceUnavailable' }; let selected = []; let dependencyTrace = []
+  let status = 503; let body = { error: 'ServiceUnavailable' }; let selected = []; let dependencyTrace = []; let integrationTrace = null
   let issue = diagnostic('SERVICE_NOT_FOUND', `Service '${serviceName}' was not found in namespace '${namespace}'.`)
   if (service) {
     const pods = getDeploymentPods(run, clusterId, namespace, deploymentName)
@@ -95,9 +97,12 @@ export function simulateKubernetesRequest(run, scenario) {
       else if (!snapshot || !artifact || !source || !route) issue = diagnostic('CAPTURED_APPLICATION_UNAVAILABLE', 'The selected Pod has no matching captured application route.')
       else {
         if (scenario.request.method === 'POST') {
-          const answer = simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES)
+          const answer = artifact.appSpec?.integration?.graph?.version === 1
+            ? simulateIntegration(artifact.appSpec, snapshot, scenario.request, INTEGRATION_FIXTURES, scenario.integrationProfile ?? 'healthy')
+            : simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES)
           status = answer.status; body = answer.body; issue = answer.diagnostic
           dependencyTrace = answer.dependencyTrace
+          integrationTrace = answer.integrationTrace ?? null
         } else {
           const response = {}
           for (const [key, expression] of Object.entries(route.response)) response[key] = expression.kind === 'config'
@@ -112,7 +117,9 @@ export function simulateKubernetesRequest(run, scenario) {
     const artifact = snapshot && run.artifacts.buildsById[snapshot.artifactId]
     const route = artifact?.appSpec?.routes?.find(item => item.method === scenario.request.method && item.path === scenario.request.path)
     const podBody = route && (scenario.request.method === 'POST'
-      ? simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES).body
+      ? (artifact.appSpec?.integration?.graph?.version === 1
+          ? simulateIntegration(artifact.appSpec, snapshot, scenario.request, INTEGRATION_FIXTURES, scenario.integrationProfile ?? 'healthy')
+          : simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES)).body
       : Object.fromEntries(Object.entries(route.response).map(([key, expression]) => [key,
         expression.kind === 'config' ? (snapshot.environment[expression.key] ?? expression.defaultValue) : expression.value])))
     const c = pod?.spec?.containers?.[0]
@@ -160,6 +167,7 @@ export function simulateKubernetesRequest(run, scenario) {
   const capturedConfigMatches = matches(snapshot?.environment ?? {}, scenario.expectedCapturedConfig)
   measurement.currentConfig = currentConfig; measurement.currentConfigMatches = currentConfigMatches; measurement.capturedConfigMatches = capturedConfigMatches
   measurement.dependencyTrace = dependencyTrace
+  if (integrationTrace) measurement.integrationTrace = integrationTrace
   const expectedReplicas = scenario.requireTwoReplicas ? 2 : 1
   const outcome = status === scenario.expected.status && canonicalize(body) === canonicalize(scenario.expected.body)
     && selectedPods.filter(pod => pod.matchesExpected).length >= expectedReplicas && replacementProven && currentConfigMatches && capturedConfigMatches
