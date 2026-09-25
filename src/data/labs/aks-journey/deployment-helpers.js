@@ -40,7 +40,8 @@ export function guidedPythonReady(context) {
   const { appSpec, diagnostics } = parsePythonProject(context.project.savedFiles, FOUNDATION_MANIFEST)
   return !diagnostics.length && appSpec?.service === 'knowledge-assistant' && appSpec.version === '1.0'
     && appSpec.routes.some(route => route.method === 'GET' && route.path === '/api/info'
-      && route.response.environment?.kind === 'config' && route.response.environment.key === 'APP_ENV')
+      && route.response.environment?.kind === 'config' && route.response.environment.key === 'APP_ENV'
+      && route.response.environment.defaultValue === 'development')
 }
 
 export function guidedDockerReady(context) {

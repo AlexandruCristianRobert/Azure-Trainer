@@ -113,6 +113,13 @@ describe('guided AKS deployment Lab', () => {
     expect(Object.values(run.evidence.experimentsById).at(-1)).toMatchObject({ outcome: 'passed', measurements: { body: { environment: 'training' } } })
   })
 
+  it('requires the APP_ENV lookup to default to development', () => {
+    let run = createBehavioralRun(aksDeployGuidedLab, { attemptId: 'guided-source-default' })
+    const source = aksDeployGuidedLab.solutionFiles['app.py'].replace('os.environ.get("APP_ENV", "development")', 'os.environ.get("APP_ENV", "production")')
+    run = act(run, aksDeployGuidedLab, { type: 'save-file', path: 'app.py', text: source }).run
+    expect(evaluateLab(aksDeployGuidedLab, run).tasks.find(task => task.id === 'python-source').done).toBe(false)
+  })
+
   it('resumes saved Task state and assistance without marking work complete', async () => {
     const { fakeLocalStorage } = await import('./helpers/fakeLocalStorage.js')
     const { behavioralRepository } = await import('./helpers/behavioralRepository.js')
