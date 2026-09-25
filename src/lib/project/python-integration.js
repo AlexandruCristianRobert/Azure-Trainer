@@ -1,52 +1,56 @@
 import { parser } from '@lezer/python'
 import { parseRetrievalSql } from './retrieval-sql.js'
 
-const skip = new Set([':', ',', '(', ')', '[', ']', '{', '}', '\n', 'Comment'])
-const kids = n => { const a = []; for (let c = n?.firstChild; c; c = c.nextSibling) a.push(c); return a }
-const source = (n, t) => t.slice(n.from, n.to)
-const loc = (t, n) => { const b = t.slice(0, n.from); return { path: 'app.py', line: b.split('\n').length, column: n.from - b.lastIndexOf('\n'), from: n.from, to: n.to } }
-const parts = n => kids(n).filter(x => !skip.has(x.name))
-const digest = s => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return `sha256:${(h >>> 0).toString(16).padStart(8, '0')}` }
-function fn(tree, text, name) { return kids(tree.topNode).find(n => n.name === 'FunctionDefinition' && source(kids(n).find(x => x.name === 'VariableName'), text) === name) }
-function body(n) { return kids(n).find(x => x.name === 'Body') }
-function literal(n, text) { const s = source(n, text); if (n?.name === 'String') return s.slice(1, -1); if (n?.name === 'Number') return Number(s); if (n?.name === 'Boolean') return s === 'True'; return undefined }
+const ignored = new Set(['(', ')', '[', ']', '{', '}', ',', ':', 'AssignOp', 'for', 'in', 'if', 'try', 'except', 'return', '\n', 'Comment'])
+const kids = n => { const r = []; for (let c = n?.firstChild; c; c = c.nextSibling) r.push(c); return r }
+const parts = n => kids(n).filter(n => !ignored.has(n.name))
+const raw = (n, text) => text.slice(n.from, n.to)
+const at = (text, n, path = 'app.py') => { const before = text.slice(0, n.from); return { path, line: before.split('\n').length, column: n.from - before.lastIndexOf('\n'), from: n.from, to: n.to } }
+const error = (text, n, message) => ({ code: 'PYTHON_UNSUPPORTED', message, ...at(text, n) })
+const digest = s => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return `sha256:${(h >>> 0).toString(16)}` }
+const fn = (tree, text, name) => kids(tree.topNode).find(n => n.name === 'FunctionDefinition' && raw(kids(n).find(x => x.name === 'VariableName'), text) === name)
+const body = n => kids(n).find(n => n.name === 'Body')
+function scalar(n, text) { if (n?.name === 'String') return raw(n, text).slice(1, -1); if (n?.name === 'Number') return Number(raw(n, text)); if (n?.name === 'Boolean') return raw(n, text) === 'True'; return undefined }
 
 export function parsePythonIntegration(files, manifest = {}) {
   const text = files?.['app.py']; if (typeof text !== 'string') return { appSpec: null, diagnostics: [{ code: 'MISSING_FILE', path: 'app.py', line: 1, column: 1 }] }
-  const tree = parser.parse(text); let fault = null; tree.iterate({ enter: n => { if (n.name === '⚠') fault = n } })
-  if (fault) return { appSpec: null, diagnostics: [{ code: 'PYTHON_SYNTAX', message: 'Python source contains a syntax error.', ...loc(text, fault) }] }
-  const diagnostics = []; for (const path of ['server.py', 'training_clients.py', 'schema.sql']) if (files[path] !== manifest.fixedFiles?.[path]) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'The supplied integration scaffold is fixed.', path, line: 1, column: 1 })
-  const parsedSql = parseRetrievalSql(files?.['retrieval.sql']); diagnostics.push(...parsedSql.diagnostics)
-  const answerFn = fn(tree, text, 'answer'); if (!answerFn) diagnostics.push({ code: 'PYTHON_UNSUPPORTED', message: 'Define answer(question).', path: 'app.py', line: 1, column: 1 })
-  if (diagnostics.length) return { appSpec: null, diagnostics }
-  const graph = { version: 1, nodes: [], roots: {}, bindings: {} }; const bound = new Map()
-  const add = (op, node, more = {}) => { const id = `n${graph.nodes.length + 1}`; graph.nodes.push({ id, op, source: loc(text, node), ...more }); return id }
-  const bind = (name, id) => { bound.set(name, id); graph.bindings[name] = id; return id }
-  const expr = node => {
-    if (!node) return null; const fixed = literal(node, text); if (fixed !== undefined) return add('literal', node, { value: fixed })
-    if (node.name === 'VariableName') return bound.get(source(node, text)) ?? add('unbound', node, { name: source(node, text) })
-    if (node.name === 'ArrayExpression') { try { return add('literal', node, { value: JSON.parse(source(node, text)) }) } catch { return add('expression', node, { expression: source(node, text) }) } }
-    if (node.name === 'MemberExpression') { const method = source(node, text).replace(/\s/g, ''); if (method.endsWith('.embed')) return add('embed', node, { method }); if (method.endsWith('.execute')) return add('query', node, { method, querySpec: parsedSql.querySpec }); if (method.endsWith('.generate')) return add('answer', node, { method }); return add('expression', node, { expression: source(node, text) }) }
-    if (node.name === 'Argument') return expr(parts(node).at(-1))
-    if (node.name === 'DictionaryExpression') { parts(node).forEach((child, index) => { if (index % 2 === 1) expr(child) }); return add('dictionary', node, { sourceText: source(node, text) }) }
-    if (node.name !== 'CallExpression') return add('expression', node, { expression: source(node, text) })
-    const cs = kids(node); const callee = cs.find(x => x.name === 'MemberExpression') ?? cs.find(x => x.name === 'VariableName'); const args = parts(cs.find(x => x.name === 'ArgList')); const call = source(callee, text).replace(/\s/g, '')
-    if (call === 'as_vector') return add('format-vector', node, { input: expr(args[0]) })
-    if (call.endsWith('.embed')) return add('embed', node, { arguments: args.map(expr) })
-    if (call.endsWith('.execute')) return add('query', node, { arguments: args.map(expr), querySpec: parsedSql.querySpec })
-    if (call.endsWith('.generate')) return add('answer', node, { arguments: args.map(expr) })
-    if (call.endsWith('.invoke')) { args.slice(1).forEach(expr); return expr(args[0]) }
-    if (call === 'settings') return add('settings', node)
-    return add('call', node, { call })
+  const tree = parser.parse(text); let bad = null; tree.iterate({ enter(n) { if (n.name === '⚠') bad = n } }); if (bad) return { appSpec: null, diagnostics: [{ code: 'PYTHON_SYNTAX', message: 'Python source contains a syntax error.', ...at(text, bad) }] }
+  const diagnostics = []; for (const path of ['server.py', 'training_clients.py', 'schema.sql']) if (files[path] !== manifest.fixedFiles?.[path]) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Fixed integration scaffold modified.', path, line: 1, column: 1 })
+  const sql = parseRetrievalSql(files?.['retrieval.sql']); diagnostics.push(...sql.diagnostics); const answer = fn(tree, text, 'answer'); if (!answer) diagnostics.push({ code: 'PYTHON_UNSUPPORTED', message: 'Define answer(question).', path: 'app.py', line: 1, column: 1 }); if (diagnostics.length) return { appSpec: null, diagnostics }
+  const graph = { version: 1, nodes: [], roots: {}, bindings: {} }; const scope = new Map(); let unsupported = null
+  const add = (op, n, fields = {}) => { const id = `n${graph.nodes.length + 1}`; graph.nodes.push({ id, op, source: at(text, n), ...fields }); return id }
+  const bind = (name, id, n) => { const binding = add('binding', n, { name, value: id }); scope.set(name, binding); graph.bindings[name] = binding; return binding }
+  const lookup = (n, name) => { const id = scope.get(name); if (!id && !unsupported) unsupported = error(text, n, `Unknown binding '${name}'.`); return id }
+  const argumentsOf = node => { const values = kids(node).filter(x => !['(', ')', ','].includes(x.name)); const positional = []; const keywords = []; for (let i = 0; i < values.length; i++) { if (values[i + 1]?.name === 'AssignOp') { keywords.push([raw(values[i], text), values[i + 2]]); i += 2 } else positional.push(values[i]) } return { positional, keywords } }
+  const dict = n => { const p = parts(n); const entries = {}; for (let i = 0; i < p.length; i += 2) { const key = scalar(p[i], text); if (typeof key !== 'string') { unsupported ??= error(text, p[i], 'Dictionary keys must be string literals.'); return null } entries[key] = lower(p[i + 1]) } return add('dictionary', n, { entries }) }
+  const member = n => { const p = kids(n); const base = p.find(x => x.name === 'VariableName'); const property = p.find(x => x.name === 'PropertyName'); if (base && property) return { base: raw(base, text), property: raw(property, text) }; const key = p.find(x => x.name === 'String'); if (base && key) return { base: raw(base, text), key: scalar(key, text) }; return null }
+  const lower = n => {
+    if (!n || unsupported) return null; const fixed = scalar(n, text); if (fixed !== undefined) return add('literal', n, { value: fixed })
+    if (n.name === 'VariableName') return lookup(n, raw(n, text))
+    if (n.name === 'DictionaryExpression') return dict(n)
+    if (n.name === 'TupleExpression') return add('tuple', n, { values: parts(n).map(lower) })
+    if (n.name === 'ArrayExpression') return add('literal', n, { value: parts(n).map(x => scalar(x, text)) })
+    if (n.name === 'ArrayComprehensionExpression') { const p = kids(n); const iterable = p.filter(x => x.name === 'VariableName').at(-1); const item = p.find(x => x.name === 'DictionaryExpression'); if (item && iterable) return add('context-rows', n, { rows: lookup(iterable, raw(iterable, text)), fields: ['id', 'content'] }); return add('source-ids', n, { rows: lookup(iterable, raw(iterable, text)) }) }
+    if (n.name === 'MemberExpression') { const m = member(n); if (m?.key) return add('config', n, { object: lookup(n, m.base), key: m.key }); if (m) return add('invoke', n, { target: lookup(n, m.base), method: m.property, args: { positional: [], keywords: {} }, resultType: 'method' }); unsupported = error(text, n, 'Unsupported member expression.'); return null }
+    if (n.name !== 'CallExpression') { unsupported = error(text, n, `Unsupported expression '${n.name}'.`); return null }
+    const cs = kids(n); const callee = cs.find(x => x.name === 'MemberExpression') ?? cs.find(x => x.name === 'VariableName'); const args = argumentsOf(cs.find(x => x.name === 'ArgList')); const m = callee?.name === 'MemberExpression' ? member(callee) : null; const name = m ? m.property : raw(callee, text)
+    if (m?.property === 'strip') return add('strip', n, { input: lookup(callee, m.base) })
+    if (name === 'settings') return add('constructor', n, { class: 'settings', args: {} })
+    if (['RetryPolicy', 'RequestBudget', 'EmbeddingClient', 'AnswerClient', 'PgClient'].includes(name)) return add('constructor', n, { class: name, args: Object.fromEntries(args.keywords.map(([k, v]) => [k, lower(v)])) })
+    if (name === 'as_vector') return add('vector-format', n, { input: lower(args.positional[0]) })
+    if (m?.property === 'invoke') { const target = lower(args.positional[0]); const keywords = Object.fromEntries(args.keywords.map(([k, v]) => [k, lower(v)])); return add('invoke', n, { target, policy: lower(args.positional[1]), method: graph.nodes.find(x => x.id === target)?.method, args: { positional: [], keywords }, resultType: graph.nodes.find(x => x.id === target)?.method }) }
+    unsupported = error(text, n, `Unsupported call '${name}'.`); return null
   }
-  const params = kids(answerFn).find(x => x.name === 'ParamList'); const parameter = kids(params).find(x => x.name === 'VariableName'); const inputName = parameter && source(parameter, text); if (parameter) bind(inputName, add('input', parameter, { name: inputName }))
-  const walk = block => parts(block).forEach(statement => {
-    if (statement.name === 'AssignStatement') { const p = parts(statement); const id = expr(p.at(-1)); if (p[0]?.name === 'VariableName') bind(source(p[0], text), id); return }
-    if (statement.name === 'IfStatement') { const condition = kids(statement).find(x => !['if', 'Body'].includes(x.name)); const raw = source(condition, text).replace(/\s/g, ''); if (raw === `not${inputName}`) graph.roots.validation = add('validate-question', condition, { input: bound.get(inputName) }); walk(body(statement)); return }
-    if (statement.name === 'TryStatement') { walk(body(statement)); return }
-    if (statement.name === 'ReturnStatement') graph.roots.response = add('response', statement, { value: expr(kids(statement).find(x => x.name !== 'return')) })
-  })
-  walk(body(answerFn)); graph.roots.answer = graph.roots.response
-  const constants = Object.fromEntries(kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName').map(p => [source(p[0], text), literal(p.at(-1), text)]))
-  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info' }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: parsedSql.querySpec, graph } }, diagnostics: [] }
+  for (const statement of kids(tree.topNode).filter(n => n.name === 'AssignStatement')) { const p = parts(statement); if (p[0]?.name === 'VariableName' && ['SQL', 'QUERY_SOURCE'].includes(raw(p[0], text))) bind(raw(p[0], text), add('literal', p.at(-1), { value: 'retrieval.sql' }), p[0]) }
+  const params = kids(answer).find(n => n.name === 'ParamList'); const input = kids(params).find(n => n.name === 'VariableName'); const inputName = raw(input, text); bind(inputName, add('input', input, { name: inputName }), input)
+  const lowerBlock = block => { const sequence = []; for (const statement of parts(block)) { if (unsupported) break
+    if (statement.name === 'AssignStatement') { const p = parts(statement); const name = raw(p[0], text); sequence.push(bind(name, lower(p.at(-1)), p[0])); continue }
+    if (statement.name === 'IfStatement') { const condition = kids(statement).find(n => !['if', 'Body'].includes(n.name)); const conditionText = raw(condition, text).replace(/\s/g, ''); const then = lowerBlock(body(statement)); const guard = add('guard', condition, { condition: conditionText, input: conditionText === `not${inputName}` ? lookup(input, inputName) : null, then, otherwise: null }); sequence.push(guard); continue }
+    if (statement.name === 'TryStatement') { const attempt = lowerBlock(body(statement)); const catches = kids(statement).filter(n => n.name === 'ExceptClause').map(n => add('catch', n, { body: lowerBlock(body(n)) })); sequence.push(...attempt, ...catches); continue }
+    if (statement.name === 'ReturnStatement') { sequence.push(add('return', statement, { value: lower(kids(statement).find(n => n.name !== 'return')) })); continue }
+    unsupported = error(text, statement, `Unsupported statement '${statement.name}'.`) }
+    return sequence }
+  graph.roots.answer = lowerBlock(body(answer)); if (unsupported) return { appSpec: null, diagnostics: [unsupported] }
+  const constants = Object.fromEntries(kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName').map(p => [raw(p[0], text), scalar(p.at(-1), text)]))
+  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info' }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: sql.querySpec, graph } }, diagnostics: [] }
 }

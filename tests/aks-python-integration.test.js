@@ -9,7 +9,7 @@ describe('explicit Python assistant integration compiler', () => {
     expect(result.diagnostics).toEqual([])
     expect(result.appSpec.integration).toMatchObject({ adapter: 'integration-fixture-v1', adapterDigest: expect.any(String), querySpec: expect.any(Object) })
     expect(result.appSpec.integration.graph).toMatchObject({ version: 1, roots: expect.any(Object), bindings: expect.any(Object) })
-    expect(result.appSpec.integration.graph.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'validate-question', source: expect.any(Object) }), expect.objectContaining({ op: 'embed', source: expect.any(Object) }), expect.objectContaining({ op: 'query', source: expect.any(Object) })]))
+    expect(result.appSpec.integration.graph.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'guard', source: expect.any(Object) }), expect.objectContaining({ op: 'invoke', method: 'embed', source: expect.any(Object) }), expect.objectContaining({ op: 'invoke', method: 'execute', source: expect.any(Object) })]))
   })
 
   it('records a literal vector as a literal rather than an embedding result', () => {
@@ -20,12 +20,11 @@ describe('explicit Python assistant integration compiler', () => {
     expect(result.appSpec.integration.graph.nodes.some(node => node.op === 'literal' && Array.isArray(node.value) && node.value.length === 3)).toBe(true)
   })
 
-  it('does not allow an unused helper to satisfy active answer execution', () => {
+  it('rejects an active call to an unsupported helper with a source location', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES,
       'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('embeddings.embed', 'literal_vector') }
     const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
-    expect(result.diagnostics).toEqual([])
-    expect(result.appSpec.integration.graph.nodes.some(node => node.op === 'embed')).toBe(false)
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py', line: expect.any(Number) }))
   })
 
   it('compiles an answer path without an empty-input guard for behavioral assessment', () => {
@@ -40,7 +39,7 @@ describe('explicit Python assistant integration compiler', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': `${INTEGRATION_SOLUTION_FILES['app.py']}\n\ndef unused():\n    fake = EmbeddingClient()\n    return fake.embed("comment", "wrong")\n` }
     const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
     expect(result.diagnostics).toEqual([])
-    expect(result.appSpec.integration.graph.nodes.filter(node => node.op === 'embed')).toHaveLength(1)
+    expect(result.appSpec.integration.graph.nodes.filter(node => node.op === 'invoke' && node.method === 'embed')).toHaveLength(2)
   })
 
   it('includes saved retrieval SQL in the immutable image snapshot', () => {
