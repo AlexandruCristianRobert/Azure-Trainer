@@ -14,13 +14,13 @@ function invalid(message) { return { diagnostics: [{ code: 'INVALID_PROBE_EXPERI
 export function startProbeExperiment(input, scenarioId, lab) {
   const scenario = lab?.scenarios?.[scenarioId]
   if (!scenario || typeof scenarioId !== 'string') return { run: input, ...invalid('The selected probe experiment is not declared by this Lab.') }
-  const durationSeconds = scenario.script?.durationSeconds ?? scenario.script?.finishAfterStartSeconds ?? 60
+  const durationSeconds = scenario.durationSeconds ?? scenario.script?.durationSeconds ?? scenario.script?.finishAfterStartSeconds ?? 60
   const clusterId = scenario.target?.clusterId
   if (scenario.kind !== 'aks-probe' || scenario.version !== 1 || !Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 300 || typeof clusterId !== 'string') return { run: input, ...invalid('The declared probe experiment has invalid bounded timing.') }
   const run = clone(input); const state = run.runtime.kubernetes.clusters?.[clusterId]
   if (!state?.health || state.health.experiment !== null) return { run: input, ...invalid('A probe experiment is already active or its target cluster is unavailable.') }
   state.health.experiment = { version: 1, scenarioId, clusterId, startedAtMs: run.runtime.simTimeMs,
-    endsAtMs: run.runtime.simTimeMs + durationSeconds * 1000, status: 'active' }
+    endsAtMs: run.runtime.simTimeMs + durationSeconds * 1000, status: 'active', script: { ...clone(scenario.script), kind: scenarioId } }
   return { run, diagnostics: [] }
 }
 

@@ -130,10 +130,18 @@ export function processProbeTimestamp(input, atMs, lab) {
   let run = reconcileHealth(input, lab)
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
+    const script = state.health?.experiment?.status === 'active' ? state.health.experiment.script : null
+    const elapsedSeconds = script ? (atMs - state.health.experiment.startedAtMs) / 1000 : -1
+    const activeFault = script && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
+      && (script.endAfterStartSeconds === undefined || elapsedSeconds < script.endAfterStartSeconds)
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
     for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
+      if (script) {
+        container.localFaults.admissionClosed = activeFault && script.kind === 'temporaryAdmissionClosure'
+        container.localFaults.hung = activeFault && script.kind === 'processHang'
+      }
       const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
     }

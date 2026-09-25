@@ -7,7 +7,7 @@ import { advanceKubernetesTimeResult } from './time.js'
 import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 import { advanceIntegrationIncident } from './integration-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
-import { startProbeExperiment } from './probe-experiments.js'
+import { cancelProbeExperiment, startProbeExperiment } from './probe-experiments.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -27,6 +27,12 @@ export function applyAksAction(run, action, lab) {
     if (Object.keys(action).sort().join(',') !== 'scenarioId,type' || lab?.capabilities?.kubernetesProbes !== true) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Probe experiment starts accept only a declared scenario ID.' }] }
     const result = startProbeExperiment(run, action.scenarioId, lab)
     return { run: result.run, lines: result.diagnostics.length ? [] : [{ kind: 'out', text: `Started probe experiment ${action.scenarioId}.` }], portalEvents: [], diagnostics: result.diagnostics }
+  }
+  if (action.type === 'aks-probe-cancel') {
+    if (Object.keys(action).join(',') !== 'type' || lab?.capabilities?.kubernetesProbes !== true) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Probe experiment cancellation accepts no caller-selected values.' }] }
+    const active = Object.values(run.runtime.kubernetes.clusters ?? {}).find(state => state.health?.experiment)
+    const result = active ? cancelProbeExperiment(run, active.health.experiment.clusterId) : { run, diagnostics: [{ code: 'INVALID_PROBE_EXPERIMENT', message: 'There is no active probe experiment to cancel.' }] }
+    return { run: result.run, lines: result.diagnostics.length ? [] : [{ kind: 'out', text: 'Cancelled probe experiment.' }], portalEvents: [], diagnostics: result.diagnostics }
   }
   if (action.type === 'aks-integration-next-incident') {
     if (Object.keys(action).length !== 1) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Incident advancement accepts no caller-selected values.' }] }
