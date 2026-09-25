@@ -26,7 +26,7 @@ def live():
     return {"status": 503, "body": {"check": "liveness"}}
 `
 const integrationApp = INTEGRATION_SOLUTION_FILES['app.py']
-const deployment = INTEGRATION_SOLUTION_FILES['k8s/deployment.yaml']
+const deployment = INTEGRATION_SOLUTION_FILES['k8s/deployment.yaml'].replace('          ports:', '          imagePullPolicy: Always\n          ports:')
 const probeFields = `          startupProbe:
             httpGet: {path: /health/startup, port: http}
             initialDelaySeconds: 0

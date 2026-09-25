@@ -3,6 +3,8 @@ import { HEALTH_MANIFEST, HEALTH_FILES, HEALTH_SOLUTION_FILES } from '../src/dat
 import { HEALTH_FIXTURES } from '../src/data/fixtures/aks/health.js'
 import { parsePythonProject } from '../src/lib/project/python.js'
 import { parsePythonDockerfile } from '../src/lib/project/python-dockerfile.js'
+import { parseKubernetesYaml } from '../src/lib/kubernetes/yaml.js'
+import { validateKubernetesObject } from '../src/lib/kubernetes/schema.js'
 
 describe('AKS health teaching templates', () => {
   it('extends the complete integration project and copies the frozen health adapter into the image', () => {
@@ -21,6 +23,20 @@ describe('AKS health teaching templates', () => {
     expect(HEALTH_FILES['app.py']).toContain('def startup():')
     expect(HEALTH_FILES['app.py']).toContain('return {"status": 503')
     expect(HEALTH_FILES['app.py']).not.toBe(HEALTH_SOLUTION_FILES['app.py'])
+  })
+
+  it('supplies a valid complete Deployment with all three health probes', () => {
+    const parsed = parseKubernetesYaml(HEALTH_SOLUTION_FILES['k8s/deployment.yaml'], 'k8s/deployment.yaml')
+    expect(parsed.diagnostics).toEqual([])
+    const validated = validateKubernetesObject(parsed.documents[0], {
+      namespace: 'assistant',
+      capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true },
+    })
+    expect(validated.diagnostics).toEqual([])
+    const container = validated.object.spec.template.spec.containers[0]
+    expect(container.startupProbe.httpGet.path).toBe('/health/startup')
+    expect(container.readinessProbe.httpGet.path).toBe('/health/ready')
+    expect(container.livenessProbe.httpGet.path).toBe('/health/live')
   })
 
   it('declares fixed, source-independent initialization and outage fixture facts', () => {
