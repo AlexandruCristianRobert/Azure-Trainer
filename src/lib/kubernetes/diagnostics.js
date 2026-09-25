@@ -7,16 +7,39 @@ export function runDiagnosticCommand(input, rawTokens, lab) {
   const tokens = rawTokens[0] === 'kubectl' ? rawTokens.slice(1) : rawTokens
   const fail = (message, code = 'DIAGNOSTIC_SYNTAX') => ({ run: input, lines: [], diagnostics: [error(code, message)] })
   if (lab?.capabilities?.kubernetesConnectivity !== true || tokens[0] !== 'exec') return fail('Only the supplied connectivity diagnostic commands are supported.', 'DIAGNOSTIC_UNSUPPORTED')
-  let i = 1, podName = tokens[i++]
-  if (podName?.startsWith('pod/')) podName = podName.slice(4)
-  let namespace = null
-  if (tokens[i] === '-n' || tokens[i] === '--namespace') { namespace = tokens[i + 1]; i += 2 }
-  if (tokens[i++] !== '--' || podName !== 'diagnostics' || namespace !== 'diagnostics') return fail('exec is available only on the supplied Pod diagnostics in namespace diagnostics.', 'DIAGNOSTIC_ORIGIN')
+  let i = 1, podName = null
+  let namespace = null, contextName = null
+  while (i < tokens.length && tokens[i] !== '--') {
+    if (tokens[i] === '-n' || tokens[i] === '--namespace') {
+      if (namespace !== null || !tokens[i + 1]) return fail('exec accepts one namespace value.')
+      namespace = tokens[i + 1]; i += 2; continue
+    }
+    if (tokens[i] === '--context') {
+      if (contextName !== null || !tokens[i + 1]) return fail('exec accepts one context value.')
+      contextName = tokens[i + 1]; i += 2; continue
+    }
+    if (tokens[i].startsWith('--context=')) {
+      if (contextName !== null || !tokens[i].slice(10)) return fail('exec accepts one context value.')
+      contextName = tokens[i].slice(10); i++; continue
+    }
+    if (podName === null && !tokens[i].startsWith('-')) {
+      podName = tokens[i++]
+      if (podName.startsWith('pod/')) podName = podName.slice(4)
+      continue
+    }
+    return fail(`exec option '${tokens[i]}' is not supported.`, 'DIAGNOSTIC_UNSUPPORTED')
+  }
+  const kubernetes = input.runtime.kubernetes
+  const selectedContextName = contextName ?? kubernetes.currentContext
+  const context = kubernetes.contexts[selectedContextName]
+  const clusterId = context?.clusterId
+  const effectiveNamespace = namespace ?? context?.namespace
+  if (!context || podName !== 'diagnostics' || effectiveNamespace !== 'diagnostics') return fail('exec is available only on the supplied Pod diagnostics in namespace diagnostics.', 'DIAGNOSTIC_ORIGIN')
+  if (tokens[i++] !== '--') return fail('exec requires -- before the diagnostic command.')
   const command = tokens[i++]
-  // The UID itself is authoritative; derive its owning cluster without trusting the caller.
-  const originEntry = Object.entries(input.runtime.kubernetes.clusters).find(([clusterId, state]) => state.connectivity?.diagnosticPodUids.includes(`diagnostic/${clusterId}`))
-  if (!originEntry) return fail('The supplied diagnostic Pod is unavailable.', 'DIAGNOSTIC_ORIGIN')
-  const [clusterId] = originEntry
+  const cluster = kubernetes.clusters[clusterId]
+  const diagnosticUid = `diagnostic/${clusterId}`
+  if (!cluster?.connectivity?.diagnosticPodUids.includes(diagnosticUid)) return fail('The supplied diagnostic Pod is unavailable in the selected cluster.', 'DIAGNOSTIC_ORIGIN')
   if (command === 'nslookup') {
     if (tokens.length !== i + 1) return fail('nslookup accepts exactly one Service name.')
     const resolved = resolveServiceDns(input, { clusterId, clientNamespace: 'diagnostics', hostname: tokens[i] })
@@ -43,7 +66,7 @@ export function runDiagnosticCommand(input, rawTokens, lab) {
   if (method === 'POST' && (!seenData || !seenHeader || path !== '/api/ask')) return fail('POST requires the JSON header, a question body and /api/ask.')
   if (seenData && (method !== 'POST' || path !== '/api/ask' || typeof body?.question !== 'string')) return fail('curl JSON body is supported only for a question sent to /api/ask.')
   if (method === 'GET' && (seenData || seenHeader)) return fail('GET does not accept a request body or JSON header.')
-  const pod = Object.values(originEntry[1].resources).find(item => item.kind === 'Pod' && item.metadata.uid === `diagnostic/${clusterId}`)
+  const pod = Object.values(cluster.resources).find(item => item.kind === 'Pod' && item.metadata.uid === diagnosticUid)
   if (!pod) return fail('The supplied diagnostic Pod is unavailable.', 'DIAGNOSTIC_ORIGIN')
   const routed = routeServiceRequest(input, { origin: { kind: 'pod', clusterId, podUid: pod.metadata.uid }, hostname: match[2], port: Number(match[3] ?? (match[1] === 'https' ? 443 : 80)), method, path, body }, lab)
   const outcome = routed.outcome

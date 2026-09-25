@@ -31,9 +31,9 @@ export function describeObject(resource, state) {
   if (resource.kind === 'Deployment') lines.push(`Replicas: ${resource.spec.replicas}`, 'Scheduling, image pulls, and readiness are simulated.')
   if (resource.kind === 'Service') {
     const targetPort = resource.spec.ports[0]?.targetPort
-    const backends = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === resource.metadata.namespace && item.status?.phase === 'Running'
+    const backends = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === resource.metadata.namespace && item.status?.podIP
       && Object.entries(resource.spec.selector).every(([key, value]) => item.metadata.labels?.[key] === value)
-      && item.spec.containers.some(container => container.ports?.some(port => targetPort === port.containerPort || targetPort === port.name)))
+      && (typeof targetPort === 'number' || item.spec.containers.some(container => container.ports?.some(port => targetPort === port.name))))
     lines.push(`Type: ${resource.spec.type}`, `ClusterIP: ${resource.spec.clusterIP ?? '<pending>'}`,
       `External IP: ${resource.status?.loadBalancer?.ingress?.[0]?.ip ?? '<none>'}`, `Port: ${resource.spec.ports[0].port} -> ${targetPort}`,
       `Endpoints: ${backends.map(item => item.metadata.name).join(', ') || '<none>'}`)

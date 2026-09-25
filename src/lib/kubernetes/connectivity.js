@@ -35,7 +35,14 @@ function lookupService(run, probe) {
   const byAddress = Object.values(cluster.resources).find(item => item.kind === 'Service' && item.spec.clusterIP === probe.hostname)
   if (probe.origin.kind === 'external') {
     const service = Object.values(cluster.resources).find(item => item.kind === 'Service' && item.status?.loadBalancer?.ingress?.[0]?.ip === probe.hostname)
-    return service ? { service, reason: null } : { service: null, reason: byAddress ? 'INTERNAL_ADDRESS' : 'UNKNOWN_ADDRESS' }
+    if (service) return { service, reason: null }
+    if (byAddress) return { service: null, reason: 'INTERNAL_ADDRESS' }
+    const dns = resolveServiceDns(run, { clusterId: probe.origin.clusterId, clientNamespace: 'diagnostics', hostname: probe.hostname })
+    const dnsService = dns.ok ? cluster.resources[dns.serviceKey] : null
+    const parsed = dnsName(probe.hostname)
+    const namedInternal = parsed && !parsed.namespace ? Object.values(cluster.resources).some(item => item.kind === 'Service'
+      && item.metadata.name === parsed.service && item.spec.type !== 'LoadBalancer') : false
+    return { service: null, reason: dnsService && dnsService.spec.type !== 'LoadBalancer' || namedInternal ? 'INTERNAL_ADDRESS' : 'UNKNOWN_ADDRESS' }
   }
   if (byAddress) return { service: byAddress, reason: null }
   const resolved = resolveServiceDns(run, { clusterId: probe.origin.clusterId, clientNamespace: 'diagnostics', hostname: probe.hostname })
@@ -55,9 +62,34 @@ function appResponse(run, cluster, pod, probe) {
 }
 
 export function routeServiceRequest(input, probe, lab) {
-  const run = clone(input), sequence = run.nextSequence
-  const id = `aks-request-${sequence}`, runtime = run.runtime.kubernetes
+  const sequence = input.nextSequence
+  const id = `aks-request-${sequence}`
   const outcome = { requestId: id, transport: { ok: false, reason: null }, status: null, body: null, route: {}, dependencyTrace: [], diagnostic: null }
+  const runtimeBefore = input.runtime?.kubernetes
+  let originValid = false
+  if (probe?.origin?.kind === 'pod' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,podUid') {
+    const state = runtimeBefore?.clusters?.[probe.origin.clusterId]
+    const pod = Object.values(state?.resources ?? {}).find(item => item.kind === 'Pod' && item.metadata.uid === probe.origin.podUid)
+    originValid = pod?.metadata?.name === 'diagnostics' && pod.metadata.namespace === 'diagnostics'
+      && pod.spec?.containers?.length === 1 && pod.spec.containers[0].image === 'mcr.microsoft.com/aks-trainer/diagnostics:1'
+      && ready(pod) && state.connectivity?.diagnosticPodUids.includes(pod.metadata.uid)
+  } else if (probe?.origin?.kind === 'external' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind') {
+    originValid = !!runtimeBefore?.clusters?.[probe.origin.clusterId]?.connectivity
+  }
+  if (!originValid) {
+    outcome.transport.reason = 'INVALID_ORIGIN'
+    return { run: input, outcome }
+  }
+  const validHttpProbe = typeof probe.hostname === 'string' && probe.hostname.length > 0 && !probe.hostname.includes('://')
+    && Number.isInteger(probe.port) && probe.port >= 1 && probe.port <= 65535
+    && (probe.method === 'GET' && probe.path === '/api/info' && (probe.body === null || probe.body === undefined)
+      || probe.method === 'POST' && probe.path === '/api/ask' && typeof probe.body?.question === 'string'
+        && Object.keys(probe.body).length === 1 && Object.hasOwn(KNOWLEDGE_FIXTURES.questions, probe.body.question))
+  if (!validHttpProbe) {
+    outcome.transport.reason = 'INVALID_PROBE'
+    return { run: input, outcome }
+  }
+  const run = clone(input), runtime = run.runtime.kubernetes
   let clientNamespace = 'diagnostics'
   if (probe.origin?.kind === 'pod' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,podUid') {
     const state = runtime.clusters?.[probe.origin.clusterId]
@@ -67,7 +99,7 @@ export function routeServiceRequest(input, probe, lab) {
       && ready(pod) && state.connectivity?.diagnosticPodUids.includes(pod.metadata.uid)
     if (!fixture) outcome.transport.reason = 'INVALID_ORIGIN'
     else clientNamespace = pod.metadata.namespace
-  } else if (probe.origin?.kind !== 'external' || Object.keys(probe.origin).sort().join(',') !== 'clusterId,kind') outcome.transport.reason = 'INVALID_ORIGIN'
+  }
   const cluster = runtime.clusters?.[probe.origin?.clusterId]
   if (!outcome.transport.reason && !cluster) outcome.transport.reason = 'DNS_NOT_FOUND'
   const scheme = typeof probe.hostname === 'string' && probe.hostname.match(/^(https?):\/\//i)
@@ -121,6 +153,10 @@ export function routeServiceRequest(input, probe, lab) {
   const requests = [...runtime.requests, { id, sequence, connectivity: true, scenarioId: null, transport: outcome.transport, status: outcome.status,
     route: outcome.route, namespace: outcome.route.namespace ?? clientNamespace, dependencyTrace: outcome.dependencyTrace, origin: probe.origin,
     hostname: probe.hostname, port: probe.port, request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) } }].slice(-100)
+  const retainedRequestIds = new Set(requests.map(request => request.id))
+  for (const clusterState of Object.values(runtime.clusters)) if (clusterState.connectivity) {
+    clusterState.connectivity.applicationLogs = clusterState.connectivity.applicationLogs.filter(log => retainedRequestIds.has(log.requestId))
+  }
   run.nextSequence = sequence + 1
   run.runtime.kubernetes = { ...runtime, requests }
   return { run, outcome }

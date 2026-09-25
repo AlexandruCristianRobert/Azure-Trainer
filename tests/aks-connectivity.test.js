@@ -49,6 +49,41 @@ describe('AKS connectivity routing', () => {
     expect(result.run.runtime.kubernetes.clusters[seed.clusterId].connectivity.applicationLogs).toEqual([])
   })
 
+  it('reports an internal Service name as an internal address from an external origin', () => {
+    const seed = seedConnectivityTest()
+    for (const hostname of ['assistant-internal.assistant', 'assistant-internal']) {
+      const result = routeServiceRequest(seed.run, { origin: { kind: 'external', clusterId: seed.clusterId }, hostname,
+        port: 80, method: 'GET', path: '/api/info', body: null }, seed.lab)
+      expect(result.outcome.transport).toEqual({ ok: false, reason: 'INTERNAL_ADDRESS' })
+      expect(result.run.runtime.kubernetes.requests).toHaveLength(seed.run.runtime.kubernetes.requests.length + 1)
+    }
+  })
+
+  it('does not record malformed direct probes or invalid origins', () => {
+    const seed = seedConnectivityTest()
+    for (const [probe, reason] of [
+      [probeFor(seed, { origin: { kind: 'pod', clusterId: seed.clusterId, podUid: 'forged' } }), 'INVALID_ORIGIN'],
+      [probeFor(seed, { method: 'DELETE', path: '/api/info' }), 'INVALID_PROBE'],
+      [probeFor(seed, { body: { question: 'How long are backups kept?', password: 'training-only-password' } }), 'INVALID_PROBE'],
+    ]) {
+      const result = routeServiceRequest(seed.run, probe, seed.lab)
+      expect(result.run).toBe(seed.run)
+      expect(result.outcome.transport).toEqual({ ok: false, reason })
+    }
+  })
+
+  it('drops application logs when their request records age out of the bounded history', () => {
+    const seed = seedConnectivityTest()
+    let run = seed.run
+    for (let index = 0; index < 105; index++) {
+      run = routeServiceRequest(run, probeFor(seed, { method: 'GET', path: '/api/info', body: null }), seed.lab).run
+    }
+    const logs = run.runtime.kubernetes.clusters[seed.clusterId].connectivity.applicationLogs
+    expect(run.runtime.kubernetes.requests).toHaveLength(100)
+    expect(logs).toHaveLength(100)
+    expect(validateBehavioralRun(run, seed.lab)).toBe(run)
+  })
+
   it('returns an application dependency failure with a correlated failed database hop', () => {
     const seed = seedConnectivityTest()
     const pod = Object.values(seed.run.runtime.kubernetes.clusters[seed.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant')

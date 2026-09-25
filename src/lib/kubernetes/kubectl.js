@@ -118,7 +118,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (name && parsed.values.allNamespaces) return response(sandbox, [err('A named resource cannot use --all-namespaces.')])
     if (namespaced.has(kind) && !parsed.values.allNamespaces && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const derivedNodes = kind === 'Node' ? Array.from({ length: run.sandbox.aksClusters.find(cluster => cluster.id === selection.clusterId)?.nodeCount ?? 0 }, (_, index) => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: `nodepool1-${index}`, uid: `node-${selection.clusterId}-${index}` }, status: { phase: 'Ready' } })) : null
-    if (parsed.values.label && !/^[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$/.test(parsed.values.label)) return response(sandbox, [err('-l supports one equality selector in key=value form.')])
+    if (parsed.values.label && !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?=[A-Za-z0-9_.-]+$/.test(parsed.values.label)) return response(sandbox, [err('-l supports one equality selector in key=value form.')])
     if (parsed.values.showLabels && kind !== 'Pod') return response(sandbox, [err('--show-labels is supported only for Pods.')])
     const labelPair = parsed.values.label?.split('=')
     const found = (derivedNodes ?? resources(selection.state, kind, selection.namespace, parsed.values.allNamespaces)).filter(item => (!name || item.metadata.name === name)
