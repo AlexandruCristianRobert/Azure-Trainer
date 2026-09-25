@@ -171,6 +171,7 @@ function validClusterState(state, run, lab, clusterId) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
+  if (probesEnabled && !validHealthState(state.health, byUid)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
@@ -218,6 +219,28 @@ function validClusterState(state, run, lab, clusterId) {
   return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
     && new Set(state.receipts.map(receipt => receipt.sequence)).size === state.receipts.length
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
+}
+
+function validHealthState(health, byUid) {
+  const ids = new Set()
+  return Object.entries(health.containers).every(([uid, value]) => {
+    const pod = byUid.get(uid)
+    if (!pod || pod.kind !== 'Pod' || pod.status?.phase !== 'Running' || !isPlainObject(value)
+      || typeof value.containerId !== 'string' || !value.containerId || ids.has(value.containerId)
+      || !Number.isFinite(value.startedAtMs) || !Number.isFinite(value.initializedAtMs)
+      || typeof value.startupPassed !== 'boolean' || typeof value.ready !== 'boolean'
+      || !Number.isInteger(value.restartCount) || value.restartCount < 0
+      || !isPlainObject(value.localFaults) || typeof value.localFaults.admissionClosed !== 'boolean' || typeof value.localFaults.hung !== 'boolean'
+      || !isPlainObject(value.checks) || !Array.isArray(value.currentLogs) || value.currentLogs.length > 100) return false
+    ids.add(value.containerId)
+    return ['startup', 'readiness', 'liveness'].every(type => value.checks[type] === null || isPlainObject(value.checks[type])
+      && Number.isInteger(value.checks[type].successes) && value.checks[type].successes >= 0
+      && Number.isInteger(value.checks[type].failures) && value.checks[type].failures >= 0
+      && (value.checks[type].nextAtMs === null || Number.isFinite(value.checks[type].nextAtMs))
+      && (value.checks[type].pending === null || isPlainObject(value.checks[type].pending)
+        && value.checks[type].pending.containerId === value.containerId && Number.isFinite(value.checks[type].pending.startedAtMs)
+        && Number.isFinite(value.checks[type].pending.completeAtMs) && value.checks[type].pending.completeAtMs >= value.checks[type].pending.startedAtMs))
+  })
 }
 
 function validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab) {
