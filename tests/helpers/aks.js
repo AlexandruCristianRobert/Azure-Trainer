@@ -164,10 +164,12 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
   }
   const { lab: initialLab, run: initial } = createAksTestRun({
     manifestId: HEALTH_MANIFEST.id,
-    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true },
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true,
+      kubernetesConnectivity: true, kubernetesAiIntegration: true },
     initialProjectFiles: projectFiles,
   })
-  const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesProbes: true },
+  const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesProbes: true,
+    kubernetesConnectivity: true, kubernetesAiIntegration: true },
     healthFixture: { initializationSeconds: startupSeconds } }
   let run = initial
   run = act(run, lab, { type: 'command', line: 'az group create -n rgaksprobesguided -l eastus' }).run

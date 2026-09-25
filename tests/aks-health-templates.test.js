@@ -15,6 +15,8 @@ describe('AKS health teaching templates', () => {
     expect(HEALTH_SOLUTION_FILES['training_health.py']).toMatch(/Training-only adapter[\s\S]*performs no network calls/)
     expect(HEALTH_SOLUTION_FILES['app.py']).toContain('def answer(question):')
     expect(HEALTH_SOLUTION_FILES.Dockerfile).toContain('COPY app.py server.py training_clients.py training_health.py retrieval.sql ./')
+    expect(HEALTH_SOLUTION_FILES['k8s/service-internal.yaml']).toContain('protocol: TCP')
+    expect(HEALTH_SOLUTION_FILES['k8s/service-external.yaml']).toContain('protocol: TCP')
     expect(parsePythonDockerfile(HEALTH_SOLUTION_FILES.Dockerfile, { buildFiles: HEALTH_MANIFEST.buildFiles }).diagnostics).toEqual([])
     expect(parsePythonProject(HEALTH_SOLUTION_FILES, HEALTH_MANIFEST)).toMatchObject({ diagnostics: [], appSpec: { health: { version: 1 } } })
   })

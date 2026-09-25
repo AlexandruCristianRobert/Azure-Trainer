@@ -98,11 +98,14 @@ COPY app.py server.py training_clients.py training_health.py retrieval.sql ./
 EXPOSE 8080
 CMD ["python", "server.py"]
 `
+const tcpService = path => INTEGRATION_SOLUTION_FILES[path].replace('    - port: 80\n', '    - port: 80\n      protocol: TCP\n')
 const baseFiles = {
   ...INTEGRATION_SOLUTION_FILES,
   'server.py': fixedServer,
   'training_health.py': HEALTH_RUNTIME_SOURCE,
   Dockerfile: dockerfile,
+  'k8s/service-internal.yaml': tcpService('k8s/service-internal.yaml'),
+  'k8s/service-external.yaml': tcpService('k8s/service-external.yaml'),
   'k8s/deployment.yaml': deployment.replace('acraksintegration', 'acraksprobesguided').replace('assistant:integration-v1', 'assistant:starter'),
 }
 export const HEALTH_FILES = Object.freeze({
