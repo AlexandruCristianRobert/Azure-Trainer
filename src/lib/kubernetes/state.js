@@ -31,7 +31,8 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
         : typeof item.scenarioId === 'string' && Number.isInteger(item.status)
           && ((item.request?.method === 'GET' && item.request?.path === '/api/info')
             || (item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string')))
-      && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace)))
+      && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace))
+      && (item.integrationTrace === undefined || item.integrationTrace === null || validIntegrationTrace(item.integrationTrace)))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   if (!validConfigIncident(runtime, run)) return false
@@ -40,6 +41,26 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
     && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab?.capabilities?.kubernetesConnectivity === true, id))
+}
+
+function validIntegrationTrace(trace) {
+  const safeBindingKeys = new Set(['collection', 'audience', 'published', 'vector', 'cutoff', 'limit'])
+  const profileIds = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
+  const validAttempt = attempt => isPlainObject(attempt) && Object.keys(attempt).every(key => ['operation', 'attemptNumber', 'startMs', 'durationMs', 'timeoutMs', 'errorCode', 'delayBeforeNextMs'].includes(key))
+    && typeof attempt.operation === 'string' && ['embedding', 'postgres-query', 'answer'].includes(attempt.operation)
+    && Number.isInteger(attempt.attemptNumber) && attempt.attemptNumber >= 1 && attempt.attemptNumber <= 3
+    && ['startMs', 'durationMs', 'timeoutMs', 'delayBeforeNextMs'].every(key => Number.isFinite(attempt[key]) && attempt[key] >= 0 && attempt[key] <= 5000)
+    && (attempt.errorCode === null || typeof attempt.errorCode === 'string')
+  return isPlainObject(trace) && trace.version === 1 && Object.keys(trace).every(key => ['version', 'graphHash', 'queryHash', 'fixtureVersion', 'profileId', 'inputDisposition', 'vectorProvenance', 'queryBindings', 'selectedIds', 'contextIds', 'sourceProvenance', 'elapsedMs', 'attempts'].includes(key))
+    && typeof trace.graphHash === 'string' && typeof trace.queryHash === 'string' && Number.isInteger(trace.fixtureVersion)
+    && profileIds.has(trace.profileId) && ['accepted', 'rejected'].includes(trace.inputDisposition)
+    && (trace.vectorProvenance === null || typeof trace.vectorProvenance === 'string')
+    && (trace.sourceProvenance === null || typeof trace.sourceProvenance === 'string')
+    && (trace.queryBindings === null || isPlainObject(trace.queryBindings) && Object.keys(trace.queryBindings).every(key => safeBindingKeys.has(key)))
+    && Array.isArray(trace.selectedIds) && trace.selectedIds.every(value => typeof value === 'string')
+    && Array.isArray(trace.contextIds) && trace.contextIds.every(value => typeof value === 'string')
+    && Number.isFinite(trace.elapsedMs) && trace.elapsedMs >= 0 && trace.elapsedMs <= 5000
+    && Array.isArray(trace.attempts) && trace.attempts.length <= 9 && trace.attempts.every(validAttempt)
 }
 
 function validConfigIncident(runtime, run) {

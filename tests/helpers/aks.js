@@ -4,6 +4,8 @@ import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/
 import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../src/data/templates/aks-python/configuration.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 import { initializeConnectivity, reconcileServices } from '../../src/lib/kubernetes/services.js'
+import { INTEGRATION_MANIFEST, INTEGRATION_SOLUTION_FILES } from '../../src/data/templates/aks-python/integration.js'
+import { integrationDependencies } from '../../src/lib/kubernetes/evidence.js'
 
 export function makeTrainingSnapshot() {
   return {
@@ -104,6 +106,42 @@ export function seedConfiguredAssistant({ namespace = 'assistant', profile = 'tr
   const dependencies = kubernetesDependencies(clusterId, namespace, 'assistant', 'assistant', { sourceSensitive: true })
   const scenario = { kind: 'aks-request', version: 1, target: { clusterId, namespace, serviceName: 'assistant', deploymentName: 'assistant' }, request: { method: 'GET', path: '/api/info' }, expected: { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: profile } }, requireReplacement: false }
   return { lab: { ...lab, scenarios: { info: scenario }, tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false }] }, run, clusterId }
+}
+
+// This uses the public project/build/apply actions so evidence tests exercise
+// the same immutable image capture path available to learners.
+export function seedIntegrationTest() {
+  const { lab: initialLab, run: initial } = createAksTestRun({
+    manifestId: INTEGRATION_MANIFEST.id,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true },
+    initialProjectFiles: { ...INTEGRATION_SOLUTION_FILES },
+  })
+  let run = initial
+  let lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true } }
+  run = act(run, lab, { type: 'command', line: 'az group create -n rgaksintegration -l eastus' }).run
+  run = act(run, lab, { type: 'command', line: 'az acr create -g rgaksintegration -n acraksintegration --sku Basic' }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: run.project.savedFiles['k8s/deployment.yaml'].replace('          ports:', `          imagePullPolicy: Always${String.fromCharCode(10)}          ports:`) }).run
+  for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml']) {
+    run = act(run, lab, { type: 'save-file', path, text: run.project.savedFiles[path].replace('    - port: 80', '    - port: 80\n      protocol: TCP') }).run
+  }
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksintegration -t assistant:integration-v1 .' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks create -g rgaksintegration -n aksintegration --enable-managed-identity --generate-ssh-keys --attach-acr acraksintegration' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rgaksintegration -n aksintegration' }).run
+  for (const path of INTEGRATION_MANIFEST.kubernetesFiles) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  const clusterId = run.sandbox.aksClusters[0].id
+  const target = { clusterId, namespace: 'assistant', serviceName: 'assistant-public', deploymentName: 'assistant' }
+  const dependencies = integrationDependencies(target)
+  const scenario = (id, integrationProfile, expected) => ({ kind: 'aks-request', version: 1, target,
+    request: { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } },
+    expected, integrationProfile })
+  lab = { ...lab, scenarios: {
+    'ai-healthy': scenario('ai-healthy', 'healthy', { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training' } }),
+    'ai-transient': scenario('ai-transient', 'embedding-throttle-once', { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training' } }),
+  }, tasks: [
+    { id: 'healthy', verification: { scenarioId: 'ai-healthy', scenarioVersion: 1 }, dependencies, check: () => false },
+    { id: 'transient', verification: { scenarioId: 'ai-transient', scenarioVersion: 1 }, dependencies, check: () => false },
+  ] }
+  return { lab, run, clusterId }
 }
 
 export function seedConnectivityTest({ profile = 'training', namespace = 'assistant', listener = 8080, serviceType = 'ClusterIP', targetPort = 'http' } = {}) {

@@ -47,6 +47,38 @@ export function configurationDependencies(target, { historical = false } = {}) {
   }
 }
 
+// Integration proofs deliberately capture only the things that determine a
+// request result.  Request logs and attempt history are observations, not
+// dependencies: a second scenario must not stale a first scenario's proof.
+export function integrationDependencies(target) {
+  const { clusterId, namespace, deploymentName, serviceName } = target ?? {}
+  return {
+    [`aks-integration:${clusterId}:${namespace}:${deploymentName}:${serviceName}`]: context => {
+      const state = context.runtime.kubernetes?.clusters?.[clusterId]
+      const resources = state?.resources ?? {}
+      const deployment = resources[`Deployment/${namespace}/${deploymentName}`] ?? null
+      const service = resources[`Service/${namespace}/${serviceName}`] ?? null
+      const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
+      const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
+      const artifact = artifactId ? context.artifacts.buildsById?.[artifactId] ?? null : null
+      const manifest = getProjectManifest(context.project.manifestId)
+      const buildFiles = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, context.project.savedFiles[path] ?? null]))
+      const capturedFiles = artifact ? context.artifacts.sourceSnapshotsByHash?.[artifact.sourceHash]?.files ?? null : null
+      const pods = Object.values(resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)
+        .map(pod => ({ uid: pod.metadata.uid, phase: pod.status?.phase ?? null,
+          artifactId: state?.podSnapshots?.[pod.metadata.uid]?.artifactId ?? null,
+          templateHash: state?.podSnapshots?.[pod.metadata.uid]?.templateHash ?? null,
+          environment: Object.fromEntries(Object.entries(state?.podSnapshots?.[pod.metadata.uid]?.environment ?? {})
+            .filter(([key]) => !/(?:password|secret|token|credential|api[_-]?key)/i.test(key))),
+        })).sort((a, b) => a.uid.localeCompare(b.uid))
+      return { version: 1, clusterId, namespace, deploymentName, serviceName,
+        route: service ? { uid: service.metadata?.uid ?? null, version: service.metadata?.resourceVersion ?? null, spec: service.spec ?? null } : null,
+        image, artifact: artifact ? { id: artifact.id, image: artifact.image, sourceHash: artifact.sourceHash } : null,
+        capturedFiles, savedBuildFiles: buildFiles, pods }
+    },
+  }
+}
+
 // Connectivity proof is about the route that exists now.  Keep the whole
 // namespace candidate set because a label change can make a previously
 // irrelevant Pod a backend without changing the Service itself.

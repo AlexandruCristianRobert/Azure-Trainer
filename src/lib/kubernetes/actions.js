@@ -5,6 +5,8 @@ import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
 import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 
+const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
+
 function validConnectivityExpected(expected) {
   if (!expected || Object.keys(expected).some(key => !['status', 'body', 'transport', 'route'].includes(key))
     || !Object.hasOwn(expected, 'status') || !Object.hasOwn(expected, 'body') || !isJsonValue(expected.body)
@@ -27,7 +29,7 @@ export function applyAksAction(run, action, lab) {
     || lab?.capabilities?.kubernetes !== true || typeof action.scenarioId !== 'string')
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS requests accept only a declared scenarioId; outcomes cannot be supplied by the caller.' }] }
   const scenario = lab.scenarios?.[action.scenarioId]
-  const scenarioKeys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig']
+  const scenarioKeys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile']
   const target = scenario?.target; const request = scenario?.request; const expected = scenario?.expected
   if (!scenario || Object.keys(scenario).some(key => !scenarioKeys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1
     || !target || Object.keys(target).sort().join(',') !== 'clusterId,deploymentName,namespace,serviceName'
@@ -37,7 +39,8 @@ export function applyAksAction(run, action, lab) {
     || !expected || (scenario.connectivity !== undefined ? !validConnectivityExpected(expected)
       : Object.keys(expected).sort().join(',') !== 'body,status' || !Number.isInteger(expected.status) || !isJsonValue(expected.body))
     || scenario.requireReplacement !== undefined && typeof scenario.requireReplacement !== 'boolean'
-    || scenario.requireTwoReplicas !== undefined && typeof scenario.requireTwoReplicas !== 'boolean')
+    || scenario.requireTwoReplicas !== undefined && typeof scenario.requireTwoReplicas !== 'boolean'
+    || scenario.integrationProfile !== undefined && (lab?.capabilities?.kubernetesAiIntegration !== true || !integrationProfiles.has(scenario.integrationProfile)))
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'The declared AKS request scenario is invalid.' }] }
   if (lab?.capabilities?.kubernetesConnectivity === true && scenario.connectivity !== undefined) {
     const connectivity = scenario.connectivity
