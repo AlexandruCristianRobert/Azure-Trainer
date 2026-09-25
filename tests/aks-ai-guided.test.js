@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { aksAiGuidedLab } from '../src/data/labs/aks-journey/ai-guided.lab.js'
+import { labById, nextLabFor } from '../src/data/labs/index.js'
 import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { executeAksSolution } from './helpers/aks.js'
@@ -8,6 +9,11 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 const taskDone = (run, id) => evaluateLab(aksAiGuidedLab, run).tasks.find(task => task.id === id).done
 
 describe('guided AKS AI integration Lab', () => {
+  it('registers as the next AKS journey Lab', () => {
+    expect(labById('aks-ai-guided')).toBe(aksAiGuidedLab)
+    expect(nextLabFor(labById('aks-connectivity-independent'))).toBe(aksAiGuidedLab)
+  })
+
   it('completes using the authored Solutions from a standalone run', () => {
     let run = createBehavioralRun(aksAiGuidedLab, { attemptId: 'guided-ai' })
     for (const task of aksAiGuidedLab.tasks) run = executeAksSolution(run, aksAiGuidedLab, task)
