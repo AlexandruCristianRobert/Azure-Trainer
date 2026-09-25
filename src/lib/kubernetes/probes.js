@@ -139,8 +139,9 @@ export function processProbeTimestamp(input, atMs, lab) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       if (script) {
-        container.localFaults.admissionClosed = activeFault && script.kind === 'temporaryAdmissionClosure'
-        container.localFaults.hung = activeFault && script.kind === 'processHang'
+        const selected = pod.metadata.uid === pods[0]?.metadata.uid
+        container.localFaults.admissionClosed = selected && activeFault && script.kind === 'temporaryAdmissionClosure'
+        container.localFaults.hung = selected && activeFault && script.kind === 'processHang'
       }
       const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
