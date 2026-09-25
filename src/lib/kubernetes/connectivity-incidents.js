@@ -17,8 +17,7 @@ function matchingRecord(run, lab, phase, field, record) {
     || record.measurements?.clusterId !== CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID
     || record.measurements?.namespace !== 'assistant' || record.measurements?.deploymentName !== 'assistant'
     || record.measurements?.deploymentUid !== run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Deployment/assistant/assistant']?.metadata?.uid
-    || record.measurements?.serviceName !== 'assistant-internal'
-    || record.measurements?.serviceUid !== run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Service/assistant/assistant-internal']?.metadata?.uid) return false
+    || record.measurements?.serviceName !== 'assistant-internal') return false
   const expectedImage = run.artifacts.publishedTags?.[CONNECTIVITY_TROUBLESHOOTING_IMAGE]
   const deploymentImage = run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Deployment/assistant/assistant']?.spec?.template?.spec?.containers?.[0]?.image
   return !!expectedImage && deploymentImage === CONNECTIVITY_TROUBLESHOOTING_IMAGE

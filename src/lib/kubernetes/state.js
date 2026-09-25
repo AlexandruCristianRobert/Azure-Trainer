@@ -209,11 +209,15 @@ function validConnectivityIncident(incident, run) {
   if (!phase || incident.sequence !== phase.sequence
     || Object.keys(incident.observations).sort().join(',') !== 'dependency,port,selector'
     || Object.keys(incident.recoveries).sort().join(',') !== 'dependency,port,selector') return false
+  const activeIndex = CONNECTIVITY_INCIDENT_PHASES.indexOf(phase)
+  for (let itemIndex = 0; itemIndex < activeIndex; itemIndex++) {
+    const priorPhase = CONNECTIVITY_INCIDENT_PHASES[itemIndex]
+    if (typeof incident.observations[priorPhase.phase] !== 'string' || typeof incident.recoveries[priorPhase.phase] !== 'string') return false
+  }
   for (const item of CONNECTIVITY_INCIDENT_PHASES) for (const field of ['observations', 'recoveries']) {
     const id = incident[field][item.phase]
     if (id === null) continue
     const itemIndex = CONNECTIVITY_INCIDENT_PHASES.indexOf(item)
-    const activeIndex = CONNECTIVITY_INCIDENT_PHASES.indexOf(phase)
     if (itemIndex > activeIndex || field === 'recoveries' && !item.recoveryScenario) return false
     const record = run.evidence?.experimentsById?.[id]
     const taskId = field === 'observations' ? item.observation : item.recovery
@@ -226,9 +230,9 @@ function validConnectivityIncident(incident, run) {
       || run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Deployment/assistant/assistant']?.spec?.template?.spec?.containers?.[0]?.image !== CONNECTIVITY_TROUBLESHOOTING_IMAGE
       || record.measurements?.artifactId !== null && record.measurements?.artifactId !== run.artifacts.publishedTags?.[CONNECTIVITY_TROUBLESHOOTING_IMAGE]
       || record.measurements?.serviceName !== 'assistant-internal'
-      || record.measurements?.serviceUid !== run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Service/assistant/assistant-internal']?.metadata?.uid
       || field === 'recoveries' && record.measurements?.artifactId !== run.artifacts.publishedTags?.[CONNECTIVITY_TROUBLESHOOTING_IMAGE]) return false
-    if (field === 'observations' && itemIndex > 0) {
+    if (itemIndex < activeIndex && (!incident.observations[item.phase] || !incident.recoveries[item.phase])) return false
+    if (itemIndex > 0 && incident.observations[item.phase]) {
       const prior = run.evidence?.experimentsById?.[incident.recoveries[CONNECTIVITY_INCIDENT_PHASES[itemIndex - 1].phase]]
       if (!prior || record.sequence <= prior.sequence) return false
     }
@@ -261,7 +265,7 @@ function validApplicationLog(log, byUid, state, run) {
 }
 
 function validHistoricalConnectivityLog(log, request, run, state) {
-  if (run.labId !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID
+  if (!isPlainObject(request) || !isPlainObject(request.route) || run.labId !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID
     || request.route?.podUid !== log.podUid || request.route?.podName !== log.podName
     || request.route?.namespace !== log.namespace || request.route?.artifactId !== log.artifactId) return false
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId

@@ -51,7 +51,7 @@ function traceFor(run, clusterId, request) {
       ? `${request.hostname ?? ''} · ${service.spec.clusterIP}${service.status?.loadBalancer?.ingress?.[0]?.ip ? ` · ${service.status.loadBalancer.ingress[0].ip}` : ''}`
       : [request.hostname, reason].filter(Boolean).join(' · ') || 'Not reached'),
     stage('Service', route.serviceUid ? 'Reached' : failedTransport ? 'Failed' : 'Not reached', service
-      ? `${service.metadata.namespace}/${service.metadata.name} · service port ${request.port} → targetPort ${service.spec.ports?.[0]?.targetPort ?? service.spec.ports?.[0]?.port}`
+      ? `${service.metadata.namespace}/${service.metadata.name} · service port ${request.port} → targetPort ${route.targetPort ?? route.backendPort ?? service.spec.ports?.[0]?.targetPort ?? service.spec.ports?.[0]?.port}`
       : [route.serviceName, reason].filter(Boolean).join(' · ') || 'Not reached'),
     stage('Pod/listener', pod || route.podUid ? reason === 'CONNECTION_REFUSED' ? 'Failed' : 'Reached' : failedTransport ? 'Failed' : 'Not reached', pod
       ? `${pod.metadata.namespace}/${pod.metadata.name} · backend port ${route.backendPort ?? 'unknown'}${reason ? ` · ${reason}` : ''}`

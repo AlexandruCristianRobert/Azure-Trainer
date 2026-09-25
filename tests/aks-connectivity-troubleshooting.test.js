@@ -6,6 +6,7 @@ import { aksConnectivityTroubleshootingLab } from '../src/data/labs/aks-journey/
 import { executeAksSolution } from './helpers/aks.js'
 import { act } from './helpers/aks.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
+import { inspectConnectivity } from '../src/lib/kubernetes/connectivity-inspection.js'
 import { LABS } from '../src/data/labs/index.js'
 import { readFile } from 'node:fs/promises'
 import { parse, stringify } from 'yaml'
@@ -36,8 +37,8 @@ describe('AKS connectivity troubleshooting Lab', () => {
     expect(Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant')).toHaveLength(2)
   })
 
-  it('keeps Lab 8 out of the catalog and exposes its guarded control in the experiment panel', async () => {
-    expect(LABS.some(item => item.id === aksConnectivityTroubleshootingLab.id)).toBe(false)
+  it('keeps Lab 8 registered and exposes its guarded control in the experiment panel', async () => {
+    expect(LABS.some(item => item.id === aksConnectivityTroubleshootingLab.id)).toBe(true)
     expect(aksConnectivityTroubleshootingLab.tasks).toHaveLength(8)
     expect(aksConnectivityTroubleshootingLab.tasks.every(item => item.hints?.length === 2 && item.solution?.steps?.length
       && typeof item.examNote === 'string' && item.examNote.length > 0)).toBe(true)
@@ -170,6 +171,55 @@ describe('AKS connectivity troubleshooting Lab', () => {
     run = executeAksSolution(run, aksConnectivityTroubleshootingLab, task('observe-port'))
     const evidenceId = stateFor(run).connectivity.incident.observations.port
     run.evidence.experimentsById[evidenceId].measurements.artifactId = 'forged-image-artifact'
+    expect(() => validateBehavioralRun(run, aksConnectivityTroubleshootingLab)).toThrow(/Kubernetes runtime state is missing or malformed/)
+  })
+
+  it('rejects a saved phase that skips any earlier observation or recovery receipt', () => {
+    const run = createRun('forged-phase')
+    const incident = stateFor(run).connectivity.incident
+    incident.phase = 'port'
+    incident.sequence = 2
+    expect(() => validateBehavioralRun(run, aksConnectivityTroubleshootingLab)).toThrow(/Kubernetes runtime state is missing or malformed/)
+  })
+
+  it('retains a historical port observation after the Service is recreated', () => {
+    let run = solve(createRun('service-recreated'), 'observe-selector', 'repair-selector')
+    run = executeAksSolution(run, aksConnectivityTroubleshootingLab, task('observe-port'))
+    const oldServiceUid = stateFor(run).resources['Service/assistant/assistant-internal'].metadata.uid
+    const replacementUid = `${oldServiceUid}-replacement`
+    const current = stateFor(run)
+    current.resources['Service/assistant/assistant-internal'].metadata.uid = replacementUid
+    for (const [key, resource] of Object.entries(current.resources)) if (resource.kind === 'EndpointSlice'
+      && resource.metadata.ownerReferences?.[0]?.uid === oldServiceUid) {
+      delete current.resources[key]
+      resource.metadata.ownerReferences[0].uid = replacementUid
+      const suffix = resource.ports[0]?.port ?? 'empty'
+      const name = `assistant-internal-${replacementUid.replace(/[^a-z0-9]/g, '').slice(-12)}-${suffix}`.slice(0, 63)
+      resource.metadata.name = name
+      current.resources[`EndpointSlice/assistant/${name}`] = resource
+    }
+    expect(current.resources['Service/assistant/assistant-internal'].metadata.uid).not.toBe(oldServiceUid)
+    expect(() => validateBehavioralRun(run, aksConnectivityTroubleshootingLab)).not.toThrow()
+    expect(evaluateLab(aksConnectivityTroubleshootingLab, run).tasks.find(item => item.id === 'observe-port').done).toBe(true)
+  })
+
+  it('renders the captured 8081 target port in historical trace after repair', () => {
+    let run = solve(createRun('historical-trace'), 'observe-selector', 'repair-selector')
+    run = executeAksSolution(run, aksConnectivityTroubleshootingLab, task('observe-port'))
+    run = solve(run, 'repair-port')
+    const trace = inspectConnectivity(run, { clusterId: run.sandbox.aksClusters[0].id, namespace: 'assistant', serviceName: 'assistant-internal' })
+      .requests.find(item => item.scenarioId === 'trouble-port-failure').trace
+    expect(trace.find(item => item.name === 'Service').detail).toContain('targetPort 8081')
+    expect(trace.find(item => item.name === 'Pod/listener').detail).toContain('backend port 8081')
+  })
+
+  it('rejects a historical application log whose correlated request is missing', () => {
+    let run = solve(createRun('missing-log-request'), 'observe-selector', 'repair-selector')
+    run = executeAksSolution(run, aksConnectivityTroubleshootingLab, task('observe-port'))
+    run = solve(run, 'repair-port')
+    run = executeAksSolution(run, aksConnectivityTroubleshootingLab, task('observe-dependency'))
+    const requestIds = new Set(stateFor(run).connectivity.applicationLogs.map(item => item.requestId))
+    run.runtime.kubernetes.requests = run.runtime.kubernetes.requests.filter(item => !requestIds.has(item.id))
     expect(() => validateBehavioralRun(run, aksConnectivityTroubleshootingLab)).toThrow(/Kubernetes runtime state is missing or malformed/)
   })
 
