@@ -46,3 +46,15 @@ it('does not accept a seeded artifact, saved objects without apply, or a hardcod
   run = act(run, aksConfigGuidedLab, { type: 'save-file', path: 'k8s/configmap.yaml', text: `${aksConfigGuidedLab.solutionFiles['k8s/configmap.yaml']}\n` }).run
   expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'objects').done).toBe(false)
 })
+
+it('requires the published image to match current source and all configuration references to be captured', () => {
+  let run = createBehavioralRun(aksConfigGuidedLab, { attemptId: 'reference-integrity' })
+  for (const task of aksConfigGuidedLab.tasks.slice(0, 4)) run = executeAksSolution(run, aksConfigGuidedLab, task)
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'references').done).toBe(true)
+  const wrong = run.project.savedFiles['k8s/deployment.yaml'].replace('key: PGDATABASE', 'key: PGUSER')
+  run = act(run, aksConfigGuidedLab, { type: 'save-file', path: 'k8s/deployment.yaml', text: wrong }).run
+  run = act(run, aksConfigGuidedLab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'references').done).toBe(false)
+  run = act(run, aksConfigGuidedLab, { type: 'save-file', path: 'app.py', text: `${run.project.savedFiles['app.py']}\n# changed source\n` }).run
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'image').done).toBe(false)
+})

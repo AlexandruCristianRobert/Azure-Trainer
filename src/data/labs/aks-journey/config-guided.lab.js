@@ -1,5 +1,7 @@
 import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../templates/aks-python/configuration.js'
 import { configurationDependencies } from '../../../lib/kubernetes/evidence.js'
+import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
+import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { CONFIG_CLUSTER, CONFIG_GROUP, CONFIG_IMAGE, CONFIG_REGISTRY, configurationDeploymentReady, configurationEnvironmentRefreshed, configurationSourceReady } from './configuration-helpers.js'
 import { seedConfigurationGuided } from './configuration-seeds.js'
 
@@ -18,6 +20,32 @@ const samePod = (context, first, second) => {
 const staleObserved = context => configurationDeploymentReady(context) && samePod(context, 'baseline', 'stale-env')
 const mountedBeforeObserved = context => configurationEnvironmentRefreshed(context) && evidence(context, 'mounted-before')?.measurements?.body?.displayName === 'Training assistant'
 const mountedAfterObserved = context => configurationEnvironmentRefreshed(context) && samePod(context, 'mounted-before', 'mounted-after')
+const configuredArtifact = context => {
+  const id = context.artifacts.publishedTags?.[CONFIG_IMAGE]
+  const artifact = id && context.artifacts.buildsById?.[id]
+  return artifact?.id === id && artifact.image?.loginServer === `${CONFIG_REGISTRY}.azurecr.io`
+    && artifact.image?.repository === 'assistant' && artifact.image?.tag === 'configured'
+    && artifact.sourceHash === projectSourceHash(selectBuildFiles(context.project.savedFiles, CONFIG_MANIFEST))
+    && configurationSourceReady(context) ? artifact : null
+}
+const referencesReady = context => {
+  if (!configurationDeploymentReady(context)) return false
+  const state = context.runtime.kubernetes?.clusters?.[clusterId]
+  const deployment = state?.resources['Deployment/assistant/assistant']
+  const container = deployment?.spec?.template?.spec?.containers?.[0]
+  const artifact = configuredArtifact(context)
+  const configKeys = ['APP_ENV', 'AI_ENDPOINT', 'ANSWER_DEPLOYMENT', 'EMBEDDING_DEPLOYMENT', 'PGHOST', 'PGDATABASE', 'PGUSER', 'COLLECTION']
+  if (!artifact || container?.image !== CONFIG_IMAGE || !configKeys.every(name =>
+    container.env?.some(item => item.name === name && item.valueFrom?.configMapKeyRef?.name === 'assistant-config'
+      && item.valueFrom.configMapKeyRef.key === name && item.value === undefined))) return false
+  if (!container.env?.some(item => item.name === 'PGPASSWORD' && item.valueFrom?.secretKeyRef?.name === 'assistant-credentials'
+    && item.valueFrom.secretKeyRef.key === 'PGPASSWORD' && item.value === undefined)) return false
+  const mount = container.volumeMounts?.find(item => item.name === 'assistant-settings' && item.mountPath === '/etc/assistant' && item.readOnly === true)
+  const volume = deployment.spec.template.spec.volumes?.find(item => item.name === 'assistant-settings'
+    && item.configMap?.name === 'assistant-config' && item.configMap.items?.some(entry => entry.key === 'settings.json' && entry.path === 'settings.json'))
+  const pods = getDeploymentPods({ runtime: context.runtime }, clusterId, 'assistant', 'assistant')
+  return !!mount && !!volume && pods.length === 2 && pods.every(pod => state.podSnapshots[pod.metadata.uid]?.artifactId === artifact.id)
+}
 const learnerObjectsApplied = context => {
   const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
   const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]
@@ -61,9 +89,9 @@ export const aksConfigGuidedLab = {
   },
   tasks: [
     support('python-settings', 'Correct the Python PGHOST setting lookup.', configurationSourceReady, { steps: [file('app.py')] }),
-    support('image', 'Build and publish the corrected assistant image.', c => !!c.artifacts.publishedTags?.[CONFIG_IMAGE], commands([`az group create -n ${CONFIG_GROUP} -l eastus`, `az acr create -g ${CONFIG_GROUP} -n ${CONFIG_REGISTRY} --sku Basic`, `az acr build -r ${CONFIG_REGISTRY} -t assistant:configured .`])),
+    support('image', 'Build and publish the corrected assistant image.', c => !!configuredArtifact(c), commands([`az group create -n ${CONFIG_GROUP} -l eastus`, `az acr create -g ${CONFIG_GROUP} -n ${CONFIG_REGISTRY} --sku Basic`, `az acr build -r ${CONFIG_REGISTRY} -t assistant:configured .`])),
     support('objects', 'Save and apply the Namespace, ConfigMap and Secret.', learnerObjectsApplied, { steps: [file('k8s/namespace.yaml'), { kind: 'file', path: 'k8s/configmap.yaml', content: `${CONFIG_SOLUTION_FILES['k8s/configmap.yaml']}\n` }, { kind: 'file', path: 'k8s/secret.yaml', content: `${CONFIG_SOLUTION_FILES['k8s/secret.yaml']}\n` }, ...[`az aks get-credentials -g ${CONFIG_GROUP} -n ${CONFIG_CLUSTER}`, 'kubectl apply -f k8s/namespace.yaml', 'kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].map(line => ({ kind: 'command', line }))] }),
-    support('references', 'Apply the Deployment and Service using ConfigMap, Secret and mounted-file references.', configurationDeploymentReady, { steps: [{ kind: 'file', path: 'k8s/deployment.yaml', content: deploymentSolution }, file('k8s/service.yaml'), ...['kubectl apply -f k8s/deployment.yaml', 'kubectl apply -f k8s/service.yaml'].map(line => ({ kind: 'command', line }))] }),
+    support('references', 'Apply the Deployment and Service using ConfigMap, Secret and mounted-file references.', referencesReady, { steps: [{ kind: 'file', path: 'k8s/deployment.yaml', content: deploymentSolution }, file('k8s/service.yaml'), ...['kubectl apply -f k8s/deployment.yaml', 'kubectl apply -f k8s/service.yaml'].map(line => ({ kind: 'command', line }))] }),
     support('baseline', 'Verify the supplied training answer.', configurationDeploymentReady, { steps: [{ kind: 'scenario', scenarioId: 'config-baseline' }] }, { scenarioId: 'config-baseline', scenarioVersion: 1 }, historyDeps),
     support('stale-env', 'Apply APP_ENV=training-updated and observe that running environment remains captured.', staleObserved, { steps: [{ kind: 'file', path: 'k8s/configmap.yaml', content: updatedEnvironment }, { kind: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }, { kind: 'scenario', scenarioId: 'config-stale-env' }] }, { scenarioId: 'config-stale-env', scenarioVersion: 1 }, historyDeps),
     support('env-refresh', 'Restart the Deployment so replacement Pods capture training-updated; final verification follows the file projection.', configurationEnvironmentRefreshed, { steps: [{ kind: 'command', line: 'kubectl rollout restart deployment/assistant -n assistant' }] }, { scenarioId: 'config-env-refresh', scenarioVersion: 1 }),
