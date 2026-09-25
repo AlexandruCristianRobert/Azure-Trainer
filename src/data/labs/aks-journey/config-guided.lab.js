@@ -43,7 +43,10 @@ const teaching = {
   'mounted-before': ['Mounted ConfigMap files update on the visible 60-second teaching interval.', 'The supplied Python settings reader rereads JSON per request.', 'Observe old projected content before advancing time.'],
   'mounted-after': ['Advance only the local AKS clock; reads do not advance it.', 'Verify both final environment and projected-file results.', 'The same Pod UID proves file projection rather than restart.'],
 }
-const support = (id, text, check, solution, verification, dependencies = deps) => { const [explanation, hint, examNote] = teaching[id]; return ({ id, stageId: 'configure', text, explanation, check, hints: [hint, 'Save the edited file before using a command.'], solution, examNote, ...(verification ? { dependencies, verification } : {}) }) }
+const stageFor = id => ['python-settings', 'image'].includes(id) ? 'understand'
+  : ['objects', 'references', 'baseline'].includes(id) ? 'apply'
+    : ['stale-env', 'env-refresh'].includes(id) ? 'environment' : 'mounted'
+const support = (id, text, check, solution, verification, dependencies = deps) => { const [explanation, hint, examNote] = teaching[id]; return ({ id, stageId: stageFor(id), text, explanation, check, hints: [hint, 'Save the edited file before using a command.'], solution, examNote, ...(verification ? { dependencies, verification } : {}) }) }
 
 export const aksConfigGuidedLab = {
   id: 'aks-config-guided', title: 'Configure an AKS Knowledge Assistant', brief: 'Use ConfigMaps, Secrets, captured environments, and projected files to configure a supplied assistant.', minutes: 45, engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 4, labMode: 'guided', skillAreaId: 'containers', service: 'aks', status: 'available',

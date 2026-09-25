@@ -7,6 +7,9 @@ import { act } from './helpers/aks.js'
 
 it('declares nine guided configuration tasks with complete worked Solutions', () => {
   expect(aksConfigGuidedLab.tasks.map(task => task.id)).toEqual(['python-settings', 'image', 'objects', 'references', 'baseline', 'stale-env', 'env-refresh', 'mounted-before', 'mounted-after'])
+  for (const stage of aksConfigGuidedLab.stages) for (const taskId of stage.taskIds) {
+    expect(aksConfigGuidedLab.tasks.find(task => task.id === taskId)?.stageId).toBe(stage.id)
+  }
   for (const task of aksConfigGuidedLab.tasks) {
     expect(task.hints).toHaveLength(2)
     expect(task.solution.steps.length).toBeGreaterThan(0)
