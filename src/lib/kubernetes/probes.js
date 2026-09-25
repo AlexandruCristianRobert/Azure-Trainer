@@ -51,8 +51,8 @@ function fixtureDuration(lab) {
 
 function readyChecks(container, pod, atMs) {
   const { readiness, liveness } = probesFor(pod)
-  if (container.checks.readiness === null) container.checks.readiness = check(readiness, atMs + (readiness?.initialDelaySeconds ?? 0) * 1000)
-  if (container.checks.liveness === null) container.checks.liveness = check(liveness, atMs + (liveness?.initialDelaySeconds ?? 0) * 1000)
+  if (container.checks.readiness && container.checks.readiness.nextAtMs === null) container.checks.readiness.nextAtMs = atMs + (readiness?.initialDelaySeconds ?? 0) * 1000
+  if (container.checks.liveness && container.checks.liveness.nextAtMs === null) container.checks.liveness.nextAtMs = atMs + (liveness?.initialDelaySeconds ?? 0) * 1000
   if (!readiness) container.ready = true
 }
 
@@ -70,14 +70,17 @@ export function reconcileHealth(input, lab) {
   if (duration === null) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
     state.health ??= { version: 1, containers: {}, experiment: null, receipts: [] }
-    for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running')) {
+    const runningPods = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running')
+    const activeUids = new Set(runningPods.map(item => item.metadata.uid))
+    for (const uid of Object.keys(state.health.containers)) if (!activeUids.has(uid)) delete state.health.containers[uid]
+    for (const pod of runningPods) {
       if (!state.podSnapshots[pod.metadata.uid] || state.health.containers[pod.metadata.uid]) continue
       const probes = probesFor(pod); const startedAtMs = run.runtime.simTimeMs
       const container = state.health.containers[pod.metadata.uid] = {
         containerId: `container-${run.nextSequence++}`, startedAtMs, startupPassed: !probes.startup,
         ready: !probes.startup && !probes.readiness, restartCount: 0, consecutiveRestarts: 0,
         restartAtMs: null, terminatedAtMs: null, initializedAtMs: startedAtMs + duration,
-        checks: { startup: check(probes.startup, startedAtMs + (probes.startup?.initialDelaySeconds ?? 0) * 1000), readiness: null, liveness: null },
+        checks: { startup: check(probes.startup, startedAtMs + (probes.startup?.initialDelaySeconds ?? 0) * 1000), readiness: check(probes.readiness, null), liveness: check(probes.liveness, null) },
         localFaults: { admissionClosed: false, hung: false }, currentLogs: [], previous: null,
       }
       if (container.startupPassed) readyChecks(container, pod, startedAtMs)
@@ -89,11 +92,12 @@ export function reconcileHealth(input, lab) {
 
 function complete(container, pod, appSpec, type, nowMs) {
   const item = container.checks[type]; if (!item?.pending || item.pending.containerId !== container.containerId || item.pending.completeAtMs > nowMs) return
-  const result = item.pending.result; item.pending = null
+  const { result, startedAtMs } = item.pending; item.pending = null
   const success = Number.isInteger(result.status) && result.status >= 200 && result.status <= 399
   if (success) { item.successes++; item.failures = 0 } else { item.failures++; item.successes = 0 }
   const probe = probesFor(pod)[type]
-  item.nextAtMs = nowMs + probe.periodSeconds * 1000
+  item.nextAtMs = startedAtMs + probe.periodSeconds * 1000
+  while (item.nextAtMs <= nowMs) item.nextAtMs += probe.periodSeconds * 1000
   if (type === 'startup' && success && item.successes >= probe.successThreshold) {
     container.startupPassed = true; readyChecks(container, pod, nowMs)
   }
@@ -107,8 +111,8 @@ function start(container, pod, appSpec, type, nowMs, dependencySignals) {
   const item = container.checks[type]; const probe = probesFor(pod)[type]
   if (!item || item.pending || item.nextAtMs === null || item.nextAtMs > nowMs) return
   const result = evaluateHealthEndpoint(appSpec, container, dependencySignals, probe.httpGet.path, probe.httpGet.port, nowMs, pod)
-  const pending = result.timeout ? { containerId: container.containerId, completeAtMs: nowMs + probe.timeoutSeconds * 1000, result: { status: null } }
-    : { containerId: container.containerId, completeAtMs: nowMs, result }
+  const pending = result.timeout ? { containerId: container.containerId, startedAtMs: nowMs, completeAtMs: nowMs + probe.timeoutSeconds * 1000, result: { status: null } }
+    : { containerId: container.containerId, startedAtMs: nowMs, completeAtMs: nowMs, result }
   item.pending = pending
   item.nextAtMs = null
 }
@@ -117,15 +121,26 @@ export function processProbeTimestamp(input, atMs, lab) {
   let run = reconcileHealth(input, lab)
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
-    for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))) {
+    const pods = Object.values(state.resources).filter(item => item.kind === 'Pod').sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))
+    for (const pod of pods) {
       const container = state.health?.containers?.[pod.metadata.uid]
       if (!container || pod.status?.phase !== 'Running') continue
       const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
+    }
+    for (const pod of pods) {
+      const container = state.health?.containers?.[pod.metadata.uid]
+      if (!container || pod.status?.phase !== 'Running') continue
+      const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) {
         if ((type === 'readiness' || type === 'liveness') && !container.startupPassed) continue
         start(container, pod, appSpec, type, atMs, {})
       }
+    }
+    for (const pod of pods) {
+      const container = state.health?.containers?.[pod.metadata.uid]
+      if (!container || pod.status?.phase !== 'Running') continue
+      const appSpec = healthAppSpec(run, state, pod)
       for (const type of ['startup', 'readiness', 'liveness']) complete(container, pod, appSpec, type, atMs)
       syncPodReadiness(pod, container)
     }

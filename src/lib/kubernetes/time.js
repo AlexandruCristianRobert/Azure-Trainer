@@ -39,5 +39,7 @@ export function advanceKubernetesTime(input, seconds, lab) {
     run = processProbeTimestamp(run, next, lab)
   }
   run.runtime.simTimeMs = target
+  run = projectConfigurationAt(run, target)
+  run = processProbeTimestamp(run, target, lab)
   return run
 }
