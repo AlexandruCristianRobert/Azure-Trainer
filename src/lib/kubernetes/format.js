@@ -18,7 +18,9 @@ export function kubeTable(items, kind, wide = false) {
   const header = wide ? 'NAME\tSTATUS\tNAMESPACE\tDETAILS' : 'NAME\tSTATUS'
   const rows = items.map(item => {
     const status = item.status?.phase ?? item.status?.conditions?.find(x => x.type === 'Ready')?.status ?? 'Active'
-    const details = item.kind === 'Service' ? `${item.spec.type} ${item.spec.ports?.[0]?.port ?? ''}` : item.kind === 'Deployment' ? `${item.spec.replicas} desired` : item.reason ?? ''
+    const details = item.kind === 'Service' ? `${item.spec.type} ${item.spec.ports?.[0]?.port ?? ''}${wide ? ` ${item.spec.clusterIP ?? ''}${item.status?.loadBalancer?.ingress?.[0]?.ip ? ` ${item.status.loadBalancer.ingress[0].ip}` : ''}` : ''}`
+      : item.kind === 'EndpointSlice' ? `${item.endpoints?.length ?? 0} endpoints${wide ? ` ${item.ports?.map(port => port.port).join(',') ?? ''}` : ''}`
+        : item.kind === 'Deployment' ? `${item.spec.replicas} desired` : item.reason ?? ''
     return wide ? `${item.metadata?.name ?? ''}\t${status}\t${item.metadata?.namespace ?? '<cluster>'}\t${details}` : `${item.metadata?.name ?? ''}\t${status}`
   })
   return [header, ...rows].join('\n')
@@ -32,8 +34,13 @@ export function describeObject(resource, state) {
     const backends = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === resource.metadata.namespace && item.status?.phase === 'Running'
       && Object.entries(resource.spec.selector).every(([key, value]) => item.metadata.labels?.[key] === value)
       && item.spec.containers.some(container => container.ports?.some(port => targetPort === port.containerPort || targetPort === port.name)))
-    lines.push(`Type: ${resource.spec.type}`, `Endpoints: ${backends.map(item => item.metadata.name).join(', ') || '<none>'}`)
+    lines.push(`Type: ${resource.spec.type}`, `ClusterIP: ${resource.spec.clusterIP ?? '<pending>'}`,
+      `External IP: ${resource.status?.loadBalancer?.ingress?.[0]?.ip ?? '<none>'}`, `Port: ${resource.spec.ports[0].port} -> ${targetPort}`,
+      `Endpoints: ${backends.map(item => item.metadata.name).join(', ') || '<none>'}`)
   }
+  if (resource.kind === 'EndpointSlice') lines.push(`Service: ${resource.metadata.labels?.['kubernetes.io/service-name'] ?? '<unknown>'}`,
+    `Ports: ${resource.ports.map(item => `${item.name ?? 'tcp'}:${item.port}`).join(', ') || '<none>'}`,
+    `Endpoints: ${resource.endpoints.map(item => `${item.addresses.join(',')} (${item.conditions.ready ? 'ready' : 'not ready'})`).join('; ') || '<none>'}`)
   if (resource.kind === 'ConfigMap') lines.push(`Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
   if (resource.kind === 'Secret') lines.push(`Type: ${resource.type ?? 'Opaque'}`, `Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
   if (resource.kind === 'Pod') {

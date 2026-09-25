@@ -20,10 +20,16 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
     || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
     || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string'
       && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence < run.nextSequence
-      && item.id === `aks-request-${item.sequence}`
-      && typeof item.scenarioId === 'string' && Number.isInteger(item.status) && typeof item.namespace === 'string'
-      && ((item.request?.method === 'GET' && item.request?.path === '/api/info')
-        || (item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string'))
+      && item.id === `aks-request-${item.sequence}` && typeof item.namespace === 'string'
+      && (item.connectivity === true
+        ? (item.scenarioId === null || typeof item.scenarioId === 'string') && (item.status === null || Number.isInteger(item.status) && item.status >= 100 && item.status <= 599)
+          && isPlainObject(item.transport) && typeof item.transport.ok === 'boolean'
+          && (item.transport.reason === null || typeof item.transport.reason === 'string') && isPlainObject(item.route)
+          && (item.request?.method === 'GET' && item.request?.path === '/api/info'
+            || item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string')
+        : typeof item.scenarioId === 'string' && Number.isInteger(item.status)
+          && ((item.request?.method === 'GET' && item.request?.path === '/api/info')
+            || (item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string')))
       && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace)))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
@@ -157,7 +163,9 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
     || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
     || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
     || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid), clusterId)) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
-    || !value.applicationLogs.every(log => isPlainObject(log) && typeof log.requestId === 'string' && Number.isSafeInteger(log.sequence) && log.sequence >= 1 && log.sequence < run.nextSequence)
+    || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run))
+    || new Set(value.applicationLogs.map(log => log.requestId)).size !== value.applicationLogs.length
+    || value.applicationLogs.some((log, index, logs) => index > 0 && logs[index - 1].sequence >= log.sequence)
     || value.incident !== null) return false
   const addresses = new Set()
   let maxService = 0; let maxPod = 0; let maxExternal = 9
@@ -190,6 +198,25 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
     })
   })) return false
   return resources.filter(([, service]) => service.kind === 'Service').every(([, service]) => validServiceSlices(state, service))
+}
+
+function validApplicationLog(log, byUid, state, run) {
+  const keys = ['requestId', 'sequence', 'podUid', 'podName', 'namespace', 'image', 'method', 'path', 'status', 'artifactId', 'dependencySummary']
+  if (!isPlainObject(log) || Object.keys(log).sort().join(',') !== keys.sort().join(',')
+    || !Number.isSafeInteger(log.sequence) || log.sequence < 1 || log.sequence >= run.nextSequence
+    || log.requestId !== `aks-request-${log.sequence}` || !['GET', 'POST'].includes(log.method)
+    || !['/api/info', '/api/ask'].includes(log.path) || !Number.isInteger(log.status) || log.status < 100 || log.status > 599
+    || typeof log.podUid !== 'string' || typeof log.podName !== 'string' || typeof log.namespace !== 'string' || typeof log.image !== 'string'
+    || typeof log.artifactId !== 'string' || !Array.isArray(log.dependencySummary) || log.dependencySummary.length > 3) return false
+  const pod = byUid.get(log.podUid)
+  if (pod?.kind !== 'Pod' || pod.metadata.name !== log.podName || pod.metadata.namespace !== log.namespace
+    || pod.spec.containers[0]?.image !== log.image
+    || state.podSnapshots[pod.metadata.uid]?.artifactId !== log.artifactId) return false
+  if (!log.dependencySummary.every(item => isPlainObject(item) && Object.keys(item).every(key => ['operation', 'status', 'reason'].includes(key))
+    && ['embedding', 'postgres-query', 'answer'].includes(item.operation) && ['succeeded', 'failed'].includes(item.status)
+    && (item.reason === undefined || ['DNS_NOT_FOUND', 'AUTHENTICATION_FAILED', 'UNAVAILABLE'].includes(item.reason)))) return false
+  const request = run.runtime?.kubernetes?.requests?.find(item => item.id === log.requestId && item.sequence === log.sequence)
+  return !!request && request.route?.podUid === log.podUid && request.status === log.status
 }
 
 function addressIndex(address) { const [, , third, fourth] = address.split('.').map(Number); return third * 254 + fourth - 1 }

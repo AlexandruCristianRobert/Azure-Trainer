@@ -3,6 +3,7 @@ import { canonicalize } from '../labEngine/evidence.js'
 import { tokenize } from '../az/tokenize.js'
 import { simulateAssistant } from './assistant.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
+import { routeServiceRequest } from './connectivity.js'
 
 const diagnostic = (code, message) => ({ code, message })
 function hasPodDeleteCommand(history, name) {
@@ -22,6 +23,30 @@ function hasPodDeleteCommand(history, name) {
 }
 
 export function simulateKubernetesRequest(run, scenario) {
+  const route = scenario.connectivity ?? scenario.route
+  if (run.runtime.kubernetes.clusters?.[scenario.target?.clusterId]?.connectivity
+    && route && typeof route === 'object' && route.origin && (typeof route.hostname === 'string' || typeof route.externalService === 'string')) {
+    const clusterId = scenario.target.clusterId
+    const externalService = route.externalService && run.runtime.kubernetes.clusters[clusterId].resources[`Service/${scenario.target.namespace}/${route.externalService}`]
+    const hostname = route.hostname ?? externalService?.status?.loadBalancer?.ingress?.[0]?.ip
+    const routed = routeServiceRequest(run, { origin: route.origin, hostname, port: route.port ?? 80,
+      method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null }, null)
+    const latest = routed.run.runtime.kubernetes.requests.at(-1)
+    if (latest?.id === routed.outcome.requestId) latest.scenarioId = scenario.id
+    const outcome = routed.outcome
+    const matches = outcome.status === scenario.expected.status && canonicalize(outcome.body) === canonicalize(scenario.expected.body)
+      && outcome.transport.ok && !!outcome.route.podUid
+    const measurements = { status: outcome.status, body: outcome.body, requestSequence: run.nextSequence, clusterId,
+      namespace: scenario.target.namespace, serviceName: externalService?.metadata.name ?? route.serviceName ?? null,
+      serviceVersion: externalService?.metadata.resourceVersion ?? null, deploymentName: scenario.target.deploymentName,
+      deploymentGeneration: run.runtime.kubernetes.clusters[clusterId].resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.generation ?? null,
+      selectedPodUid: outcome.route.podUid ?? null, podUid: outcome.route.podUid ?? null, artifactId: outcome.route.artifactId ?? null,
+      selectedPods: outcome.route.podUid ? [{ uid: outcome.route.podUid, matchesExpected: matches }] : [],
+      runningReplicaCount: outcome.route.readyEndpointUids?.length ?? 0, requiredReplicas: 1,
+      diagnosticCode: outcome.transport.ok ? outcome.diagnostic?.code ?? null : outcome.transport.reason,
+      request: scenario.request, dependencyTrace: outcome.dependencyTrace, transport: outcome.transport, route: outcome.route, simulated: true }
+    return { run: routed.run, outcome: matches, status: outcome.status, body: outcome.body, measurements, diagnostic: outcome.diagnostic }
+  }
   const { clusterId, namespace, serviceName, deploymentName } = scenario.target
   const cluster = run.runtime.kubernetes.clusters?.[clusterId]
   const resources = cluster?.resources ?? {}
