@@ -1,4 +1,5 @@
 import { parser } from '@lezer/python'
+import { parsePythonIntegration } from './python-integration.js'
 
 const diag = (code, message, path = 'app.py', text = '', from = 0) => {
   const prefix = text.slice(0, from)
@@ -133,6 +134,7 @@ function parseAssistantProject(files, manifest, text, tree) {
     assistant: { adapter: 'knowledge-fixture-v1', settingsFunction: 'settings', helperValid: true } }, diagnostics: [] }
 }
 export function parsePythonProject(files, manifest = {}) {
+  if (manifest.integration) return parsePythonIntegration(files, manifest)
   const text = files?.['app.py']; if (typeof text !== 'string') return { appSpec: null, diagnostics: [diag('MISSING_FILE', 'A required Python source file is missing.')] }
   const { tree, diagnostics } = syntax(text, manifest.maxTokens ?? 20_000); if (diagnostics.length) return { appSpec: null, diagnostics }
   if (manifest.assistant) return parseAssistantProject(files, manifest, text, tree)

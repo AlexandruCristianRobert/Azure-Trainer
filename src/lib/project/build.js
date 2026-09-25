@@ -25,7 +25,7 @@ export function selectBuildFiles(files, manifest) {
 }
 
 export function buildImage(run, { registryId, loginServer, image, file = 'Dockerfile', context = '.' } = {}) {
-  const artifacts = clone(run?.artifacts ?? { buildsById: {}, publishedTags: {}, sourceSnapshotsByHash: {} })
+  const artifacts = { buildsById: {}, publishedTags: {}, sourceSnapshotsByHash: {}, ...clone(run?.artifacts ?? {}) }
   const files = run?.project?.savedFiles ?? {}; const diagnostics = []
   if (file !== 'Dockerfile' || context !== '.') diagnostics.push({ code: 'UNSUPPORTED_BUILD_CONTEXT', message: 'Builds support Dockerfile and local context only.', path: file, line: 1, column: 1 })
   const reference = imageReference(loginServer, image)
