@@ -1,3 +1,4 @@
+import { recordVerification } from '../labEngine/evidence.js'
 const clone = value => structuredClone(value)
 
 export function probeDependencies(target) {
@@ -37,7 +38,19 @@ export function observeProbeExperiment(input, atMs, lab) {
   return run
 }
 
-export function finishProbeExperiment(input, lab) { return observeProbeExperiment(input, input.runtime.simTimeMs, lab) }
+export function finishProbeExperiment(input, lab) {
+  let run = observeProbeExperiment(input, input.runtime.simTimeMs, lab)
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
+    const receipt = state.health?.receipts?.at(-1)
+    if (!receipt || receipt.status !== 'completed' || receipt.evidenceId) continue
+    const task = lab?.tasks?.find(item => item.verification?.scenarioId === receipt.scenarioId && item.verification?.scenarioVersion === 1)
+    if (!task) continue
+    run = recordVerification(run, lab, task.id, { scenarioId: receipt.scenarioId, scenarioVersion: 1, outcome: 'passed', completed: true,
+      startedAtMs: receipt.startedAtMs, endedAtMs: receipt.endedAtMs, measurements: { clusterId: receipt.clusterId, probeReceipt: receipt } })
+    state.health.receipts.at(-1).evidenceId = run.evidence.currentEvidenceByTask[task.id]
+  }
+  return run
+}
 
 export function cancelProbeExperiment(input, clusterId) {
   const run = clone(input); const state = run.runtime.kubernetes.clusters?.[clusterId]

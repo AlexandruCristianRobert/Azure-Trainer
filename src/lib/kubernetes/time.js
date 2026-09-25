@@ -2,7 +2,7 @@ import { projectConfigurationAt } from './configuration.js'
 import { processProbeTimestamp, reconcileHealth } from './probes.js'
 import { reconcileServices } from './services.js'
 import { processContainerLifecycle } from './container-lifecycle.js'
-import { observeProbeExperiment } from './probe-experiments.js'
+import { finishProbeExperiment } from './probe-experiments.js'
 
 const clone = value => structuredClone(value)
 
@@ -64,7 +64,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run.runtime.simTimeMs = target
   run = projectConfigurationAt(run, target)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
-  return { run: observeProbeExperiment(run, run.runtime.simTimeMs, lab), diagnostics: [] }
+  return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }
 
 export function advanceKubernetesTime(input, seconds, lab) { return advanceKubernetesTimeResult(input, seconds, lab).run }

@@ -65,7 +65,7 @@ function syncPodReadiness(pod, container) {
   const state = container.terminatedAtMs !== null
     ? { terminated: { reason: container.restartReason ?? 'ProbeFailed' } }
     : container.restartAtMs !== null
-      ? { waiting: { reason: 'CrashLoopBackOff' } }
+      ? { waiting: { reason: container.restartBlockReason ?? 'CrashLoopBackOff' } }
       : { running: { startedAtMs: container.startedAtMs } }
   pod.status.containerStatuses = [{ name: pod.spec.containers[0].name, ready: container.ready, started: container.terminatedAtMs === null && container.restartAtMs === null,
     restartCount: container.restartCount, state, ...(container.previous ? { lastState: { terminated: { reason: container.previous.reason } } } : {}) }]
