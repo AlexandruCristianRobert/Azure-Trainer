@@ -71,6 +71,30 @@ it('rejects excess config arguments and filters namespaced events', () => {
   expect(JSON.parse(result.lines[0].text).metadata.name).toBe('assistant-event')
 })
 
+it('shows stored image-pull diagnostics in event tables and pod descriptions', () => {
+  const { run, lab, clusterId } = seedFoundation()
+  const next = structuredClone(run)
+  const state = next.runtime.kubernetes.clusters[clusterId]
+  const pod = getDeploymentPods(next, clusterId, 'assistant', 'assistant')[0]
+  const reason = 'ImageNotFound'
+  const message = `Simulated image pull for ${pod.spec.containers[0].image} failed: ${reason}.`
+  pod.status = { phase: 'Pending', containerStatuses: [{ name: 'assistant', state: { waiting: { reason } } }] }
+  delete state.podSnapshots[pod.metadata.uid]
+  state.events.push({ apiVersion: 'v1', kind: 'Event', metadata: { name: 'failed-pull', namespace: 'assistant' }, reason, message })
+
+  const table = act(next, lab, { type: 'command', line: 'kubectl get events -n assistant' }).lines[0].text
+  expect(table).toContain(reason)
+  expect(table).toContain(message)
+  expect(table).toContain('assistant')
+
+  const description = act(next, lab, { type: 'command', line: `kubectl describe pod ${pod.metadata.name} -n assistant` }).lines[0].text
+  expect(description).toContain(`Reason: ${reason}`)
+  expect(description).toContain(`Message: ${message}`)
+  expect(act(next, lab, { type: 'command', line: 'kubectl get pods -n assistant' }).lines[0].text).toMatch(/^NAME\tSTATUS\n/)
+  const json = JSON.parse(act(next, lab, { type: 'command', line: 'kubectl get events -n assistant -o json' }).lines[0].text)
+  expect(json).toMatchObject({ reason, message })
+})
+
 it('deletes a saved Deployment and its controller-owned Pods without deleting its Service', () => {
   let { run, lab, clusterId } = seedFoundation()
   run = act(run, lab, { type: 'command', line: 'kubectl delete -f k8s/deployment.yaml' }).run
