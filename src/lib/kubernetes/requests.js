@@ -27,7 +27,7 @@ export function simulateKubernetesRequest(run, scenario) {
   const resources = cluster?.resources ?? {}
   const service = resources[`Service/${namespace}/${serviceName}`]
   const deployment = resources[`Deployment/${namespace}/${deploymentName}`]
-  let status = 503; let body = { error: 'ServiceUnavailable' }; let selected = []
+  let status = 503; let body = { error: 'ServiceUnavailable' }; let selected = []; let dependencyTrace = []
   let issue = diagnostic('SERVICE_NOT_FOUND', `Service '${serviceName}' was not found in namespace '${namespace}'.`)
   if (service) {
     const pods = getDeploymentPods(run, clusterId, namespace, deploymentName)
@@ -57,7 +57,7 @@ export function simulateKubernetesRequest(run, scenario) {
         if (scenario.request.method === 'POST') {
           const answer = simulateAssistant(artifact.appSpec, snapshot, scenario.request, KNOWLEDGE_FIXTURES)
           status = answer.status; body = answer.body; issue = answer.diagnostic
-          scenario.dependencyTrace = answer.dependencyTrace
+          dependencyTrace = answer.dependencyTrace
         } else {
           const response = {}
           for (const [key, expression] of Object.entries(route.response)) response[key] = expression.kind === 'config'
@@ -103,9 +103,21 @@ export function simulateKubernetesRequest(run, scenario) {
     selectedPods: selectedPods.slice(0, 3), runningReplicaCount: selected.length,
     requiredReplicas: scenario.requireTwoReplicas ? 2 : 1, replacementProven, replacementReceipts,
     diagnosticCode: issue?.code ?? null, request: { ...scenario.request }, dependencyTrace: scenario.dependencyTrace ?? [], simulated: true }
+  const snapshot = selected[0] && cluster.podSnapshots[selected[0].metadata.uid]
+  const currentConfig = Object.fromEntries((snapshot?.configRefs ?? []).filter(item => item.mode === 'env').flatMap(item => {
+    const resource = resources[`${item.kind}/${item.namespace}/${item.name}`]
+    const raw = resource?.data?.[item.key]
+    if (raw === undefined) return []
+    return item.kind === 'Secret' ? [] : [[item.target, raw]]
+  }))
+  const matches = (actual, expected) => expected === undefined || Object.entries(expected).every(([key, value]) => actual[key] === value)
+  const currentConfigMatches = matches(currentConfig, scenario.expectedCurrentConfig)
+  const capturedConfigMatches = matches(snapshot?.environment ?? {}, scenario.expectedCapturedConfig)
+  measurement.currentConfig = currentConfig; measurement.currentConfigMatches = currentConfigMatches; measurement.capturedConfigMatches = capturedConfigMatches
+  measurement.dependencyTrace = dependencyTrace
   const expectedReplicas = scenario.requireTwoReplicas ? 2 : 1
   const outcome = status === scenario.expected.status && canonicalize(body) === canonicalize(scenario.expected.body)
-    && selectedPods.filter(pod => pod.matchesExpected).length >= expectedReplicas && replacementProven
+    && selectedPods.filter(pod => pod.matchesExpected).length >= expectedReplicas && replacementProven && currentConfigMatches && capturedConfigMatches
   const runtime = run.runtime.kubernetes
   const requests = [...runtime.requests, { id: `aks-request-${requestSequence}`, sequence: requestSequence,
     scenarioId: scenario.id, ...measurement }].slice(-100)

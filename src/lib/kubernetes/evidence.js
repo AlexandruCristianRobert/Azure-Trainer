@@ -12,7 +12,10 @@ export function kubernetesDependencies(clusterId, namespace, deploymentName, ser
         && rs.metadata.uid === ref.uid && rs.metadata.ownerReferences?.some(owner => owner.uid === deployment?.metadata.uid))))
       .map(pod => ({ uid: pod.metadata.uid, phase: pod.status?.phase, snapshot: state.podSnapshots[pod.metadata.uid] ?? null }))
       .sort((a, b) => a.uid.localeCompare(b.uid))
-    return { clusterId, namespace, deployment, service, pods,
+    const configuration = Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata.namespace === namespace)
+      .map(item => ({ kind: item.kind, name: item.metadata.name, resourceVersion: item.metadata.resourceVersion, data: item.data })).sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`))
+    return { clusterId, namespace, deployment, service, pods, configuration,
+      savedConfiguration: Object.fromEntries(Object.entries(context.project.savedFiles).filter(([path]) => /^k8s\/(configmap|secret|deployment)\.ya?ml$/i.test(path))),
       ...(sourceSensitive ? { desiredSource: context.project.savedFiles['app.py'], fileVersion: context.project.fileVersions['app.py'] ?? 0 } : {}) }
   }
   const deps = { [`aks:${clusterId}:${namespace}:${deploymentName}:${serviceName}`]: base }
@@ -35,10 +38,10 @@ export function configurationDependencies(target, { historical = false } = {}) {
     [`aks-config-history:${clusterId}:${namespace}:${deploymentName}`]: context => {
       const state = context.runtime.kubernetes?.clusters?.[clusterId]
       const deployment = state?.resources?.[`Deployment/${namespace}/${deploymentName}`]
-      const pods = Object.values(state?.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)
-        .map(item => ({ uid: item.metadata.uid, snapshot: state.podSnapshots[item.metadata.uid] ?? null })).sort((a, b) => a.uid.localeCompare(b.uid))
+      const image = deployment?.spec?.template?.spec?.containers?.[0]?.image
+      const artifact = image && context.artifacts.buildsById[context.artifacts.publishedTags[image]]
       return { clusterUid: context.sandbox.aksClusters?.find(item => item.id === clusterId)?.id ?? null,
-        deploymentUid: deployment?.metadata?.uid ?? null, sourceHash: pods[0]?.snapshot?.artifactId ? context.artifacts.buildsById[pods[0].snapshot.artifactId]?.sourceHash ?? null : null, pods }
+        deploymentUid: deployment?.metadata?.uid ?? null, sourceHash: artifact?.sourceHash ?? null }
     },
   }
 }
