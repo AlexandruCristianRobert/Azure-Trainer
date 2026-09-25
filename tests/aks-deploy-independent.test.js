@@ -10,8 +10,9 @@ function started(attemptId = 'independent') {
 
 function task(result, id) { return result.tasks.find(item => item.id === id) }
 
-function solve(run, alternateFiles = {}) {
+function solve(run, alternateFiles = {}, { skipTaskIds = [] } = {}) {
   for (const item of aksDeployIndependentLab.tasks) {
+    if (skipTaskIds.includes(item.id)) continue
     for (const step of item.solution?.steps ?? []) {
       if (step.kind === 'file') {
         const content = alternateFiles[step.path] ?? step.content
@@ -48,6 +49,18 @@ describe('independent AKS deployment lab', () => {
     expect(result.isComplete).toBe(false)
   })
 
+  it('requires a fresh primary response after review deployment and replacement', () => {
+    let run = started('primary-freshness')
+    run = act(run, aksDeployIndependentLab, { type: 'aks-request', scenarioId: 'independent-primary' }).run
+    run = solve(run, {}, { skipTaskIds: ['primary-intact'] })
+    expect(task(evaluateLab(aksDeployIndependentLab, run), 'primary-intact').done).toBe(false)
+    expect(evaluateLab(aksDeployIndependentLab, run).isComplete).toBe(false)
+
+    run = act(run, aksDeployIndependentLab, { type: 'aks-request', scenarioId: 'independent-primary' }).run
+    expect(task(evaluateLab(aksDeployIndependentLab, run), 'primary-intact').done).toBe(true)
+    expect(evaluateLab(aksDeployIndependentLab, run).isComplete).toBe(true)
+  })
+
   it('completes the worked Solution with a valid alternate manifest layout', () => {
     const run = solve(started('solution'), alternateManifests())
     const result = evaluateLab(aksDeployIndependentLab, run)
@@ -68,6 +81,12 @@ describe('independent AKS deployment lab', () => {
     const state = changed.runtime.kubernetes.clusters[changed.sandbox.aksClusters[0].id]
     state.resources['Deployment/primary/assistant'].spec.template.spec.containers[0].env[0].value = 'staging'
     expect(task(evaluateLab(aksDeployIndependentLab, changed), 'primary-intact').done).toBe(false)
+
+    const changedService = structuredClone(solve(started('primary-service-change')))
+    const service = changedService.runtime.kubernetes.clusters[changedService.sandbox.aksClusters[0].id]
+      .resources['Service/primary/assistant']
+    service.spec.type = 'ClusterIP'
+    expect(task(evaluateLab(aksDeployIndependentLab, changedService), 'primary-intact').done).toBe(false)
   })
 
   it('invalidates request proof after a later replacement and rejects a hardcoded review image', () => {

@@ -86,19 +86,42 @@ function appliedReviewReady(context) {
     && state.podSnapshots[pod.metadata.uid]?.environment?.APP_ENV === 'review')
 }
 
+function currentPassedEvidence(context, taskId, dependencies) {
+  const id = context.evidence?.currentEvidenceByTask?.[taskId]
+  const record = id && context.evidence?.experimentsById?.[id]
+  if (record?.outcome !== 'passed' || record.completed !== true) return null
+  for (const [key, select] of Object.entries(dependencies)) {
+    if (canonicalize(record.dependencyValues?.[key]) !== canonicalize(select(context))
+      || record.dependencyGenerations?.[key] !== (context.dependencyGenerations?.[key] ?? 0)) return null
+  }
+  return record
+}
+
 function primaryIntact(context) {
   if (!appliedReviewReady(context)) return false
   const state = context.runtime.kubernetes?.clusters?.[clusterId]
+  const namespace = state?.resources['Namespace//primary']
   const deployment = state?.resources['Deployment/primary/assistant']
   const service = state?.resources['Service/primary/assistant']
-  const image = deployment?.spec?.template?.spec?.containers?.[0]?.image?.toLowerCase()
-  if (!deployment || !service || deployment.spec.replicas !== 2 || image !== INDEPENDENT_IMAGE_V1.toLowerCase()
-    || deployment.spec.template.spec.containers[0].env?.find(item => item.name === 'APP_ENV')?.value !== 'production') return false
-  const recordId = context.evidence?.currentEvidenceByTask?.['primary-intact']
-  const record = recordId && context.evidence?.experimentsById?.[recordId]
-  return record?.outcome === 'passed' && record?.scenarioId === 'independent-primary'
-    && record.measurements?.namespace === 'primary' && record.measurements?.body?.version === '1.0'
-    && record.measurements?.body?.environment === 'production'
+  const expectedDeployment = parsed({ project: { savedFiles: INDEPENDENT_FOUNDATION_FILES } }, 'k8s/primary-deployment.yaml')
+  const expectedService = parsed({ project: { savedFiles: INDEPENDENT_FOUNDATION_FILES } }, 'k8s/primary-service.yaml')
+  if (!namespace || !deployment || !service || !expectedDeployment || !expectedService
+    || deployment.metadata?.name !== expectedDeployment.metadata.name
+    || deployment.metadata?.namespace !== expectedDeployment.metadata.namespace
+    || service.metadata?.name !== expectedService.metadata.name
+    || service.metadata?.namespace !== expectedService.metadata.namespace
+    || canonicalize(deployment.spec) !== canonicalize(expectedDeployment.spec)
+    || canonicalize(service.spec) !== canonicalize(expectedService.spec)) return false
+  const primaryRecord = currentPassedEvidence(context, 'primary-intact', primaryDependencies)
+  const replacementRecord = currentPassedEvidence(context, 'replacement', reviewDependencies)
+  const reviewRecord = currentPassedEvidence(context, 'review-request', reviewDependencies)
+  return !!primaryRecord && primaryRecord.scenarioId === 'independent-primary'
+    && primaryRecord.measurements?.namespace === 'primary'
+    && primaryRecord.measurements?.body?.version === '1.0'
+    && primaryRecord.measurements?.body?.environment === 'production'
+    && !!replacementRecord && replacementRecord.scenarioId === 'independent-replacement'
+    && !!reviewRecord && reviewRecord.scenarioId === 'independent-review'
+    && primaryRecord.sequence > Math.max(replacementRecord.sequence, reviewRecord.sequence)
 }
 
 function deleteReviewPod(run) {
