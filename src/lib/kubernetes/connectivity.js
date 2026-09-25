@@ -52,6 +52,9 @@ function lookupService(run, probe) {
 }
 
 function appResponse(run, cluster, pod, probe) {
+  const health = cluster.health?.containers?.[pod.metadata.uid]
+  if (health && run.runtime.simTimeMs < health.initializedAtMs) return { status: 503, body: { error: 'INITIALIZING' }, dependencyTrace: [], diagnostic: { code: 'INITIALIZING', message: 'The selected container is still initializing.' } }
+  if (health?.localFaults?.admissionClosed) return { status: 503, body: { error: 'NOT_ACCEPTING' }, dependencyTrace: [], diagnostic: { code: 'NOT_ACCEPTING', message: 'The selected container is not accepting application requests.' } }
   const snapshot = cluster.podSnapshots[pod.metadata.uid]
   const artifact = snapshot && run.artifacts.buildsById[snapshot.artifactId]
   const app = artifact?.appSpec
@@ -139,6 +142,7 @@ export function routeServiceRequest(input, probe, lab) {
           artifactId: state.podSnapshots[pod.metadata.uid]?.artifactId ?? null }
         const artifact = run.artifacts.buildsById[state.podSnapshots[pod.metadata.uid]?.artifactId]
         if (artifact?.appSpec?.listeningPort !== selected.port) outcome.transport.reason = 'CONNECTION_REFUSED'
+        else if (state.health?.containers?.[pod.metadata.uid]?.localFaults?.hung) outcome.transport.reason = 'PROCESS_TIMEOUT'
         else {
           outcome.transport = { ok: true, reason: null }
           const response = appResponse(run, state, pod, probe)
@@ -150,6 +154,9 @@ export function routeServiceRequest(input, probe, lab) {
             artifactId: outcome.route.artifactId, dependencySummary: safeSummary }
           const connectivity = state.connectivity
           connectivity.applicationLogs = [...connectivity.applicationLogs, log].slice(-200)
+          const health = state.health?.containers?.[pod.metadata.uid]
+          if (health) health.currentLogs = [...health.currentLogs,
+            `request=${id} ${probe.method} ${probe.path} status=${outcome.status} dependencies=${safeSummary.map(item => `${item.operation}:${item.status}`).join(',')}`].slice(-100)
         }
       }
     }
