@@ -28,7 +28,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
   }
   for (let i = 0; i < documents.length; i++) {
-    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true }, sourceLocation: options.locations?.[i] })
+    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
     const ns = object.metadata.namespace ?? ''

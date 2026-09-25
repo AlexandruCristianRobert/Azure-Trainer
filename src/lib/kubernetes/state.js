@@ -223,7 +223,8 @@ function validClusterState(state, run, lab, clusterId) {
 
 function validHealthState(health, byUid) {
   const ids = new Set()
-  return Object.entries(health.containers).every(([uid, value]) => {
+  const managedRunning = [...byUid.values()].filter(pod => pod.kind === 'Pod' && pod.status?.phase === 'Running' && pod.metadata.ownerReferences?.[0])
+  return managedRunning.every(pod => Object.hasOwn(health.containers, pod.metadata.uid)) && Object.entries(health.containers).every(([uid, value]) => {
     const pod = byUid.get(uid)
     if (!pod || pod.kind !== 'Pod' || pod.status?.phase !== 'Running' || !isPlainObject(value)
       || typeof value.containerId !== 'string' || !value.containerId || ids.has(value.containerId)
