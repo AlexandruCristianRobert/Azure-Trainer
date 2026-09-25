@@ -5,6 +5,7 @@ import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
 import { parsePythonDockerfile } from '../project/python-dockerfile.js'
 import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
+import { CONNECTIVITY_INCIDENT_PHASES, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -166,7 +167,7 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
     || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run))
     || new Set(value.applicationLogs.map(log => log.requestId)).size !== value.applicationLogs.length
     || value.applicationLogs.some((log, index, logs) => index > 0 && logs[index - 1].sequence >= log.sequence)
-    || value.incident !== null) return false
+    || !validConnectivityIncident(value.incident, run)) return false
   const addresses = new Set()
   let maxService = 0; let maxPod = 0; let maxExternal = 9
   for (const [, resource] of resources) {
@@ -200,6 +201,45 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
   return resources.filter(([, service]) => service.kind === 'Service').every(([, service]) => validServiceSlices(state, service))
 }
 
+function validConnectivityIncident(incident, run) {
+  if (run.labId !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID) return incident === null
+  if (!isPlainObject(incident) || Object.keys(incident).sort().join(',') !== 'id,observations,phase,recoveries,sequence'
+    || incident.id !== 'network-hops-v1' || !isPlainObject(incident.observations) || !isPlainObject(incident.recoveries)) return false
+  const phase = CONNECTIVITY_INCIDENT_PHASES.find(item => item.phase === incident.phase)
+  if (!phase || incident.sequence !== phase.sequence
+    || Object.keys(incident.observations).sort().join(',') !== 'dependency,port,selector'
+    || Object.keys(incident.recoveries).sort().join(',') !== 'dependency,port,selector') return false
+  for (const item of CONNECTIVITY_INCIDENT_PHASES) for (const field of ['observations', 'recoveries']) {
+    const id = incident[field][item.phase]
+    if (id === null) continue
+    const itemIndex = CONNECTIVITY_INCIDENT_PHASES.indexOf(item)
+    const activeIndex = CONNECTIVITY_INCIDENT_PHASES.indexOf(phase)
+    if (itemIndex > activeIndex || field === 'recoveries' && !item.recoveryScenario) return false
+    const record = run.evidence?.experimentsById?.[id]
+    const taskId = field === 'observations' ? item.observation : item.recovery
+    const scenarioId = field === 'observations' ? item.observationScenario : item.recoveryScenario
+    if (!scenarioId || typeof id !== 'string' || record?.id !== id || record.attemptId !== run.attemptId || record.labId !== run.labId
+      || record.taskId !== taskId || record.scenarioId !== scenarioId || record.scenarioVersion !== 1
+      || record.outcome !== 'passed' || record.completed !== true || record.measurements?.clusterId !== CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID
+      || record.measurements?.namespace !== 'assistant' || record.measurements?.deploymentName !== 'assistant'
+      || record.measurements?.deploymentUid !== run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Deployment/assistant/assistant']?.metadata?.uid
+      || run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Deployment/assistant/assistant']?.spec?.template?.spec?.containers?.[0]?.image !== CONNECTIVITY_TROUBLESHOOTING_IMAGE
+      || record.measurements?.artifactId !== null && record.measurements?.artifactId !== run.artifacts.publishedTags?.[CONNECTIVITY_TROUBLESHOOTING_IMAGE]
+      || record.measurements?.serviceName !== 'assistant-internal'
+      || record.measurements?.serviceUid !== run.runtime.kubernetes.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.resources?.['Service/assistant/assistant-internal']?.metadata?.uid
+      || field === 'recoveries' && record.measurements?.artifactId !== run.artifacts.publishedTags?.[CONNECTIVITY_TROUBLESHOOTING_IMAGE]) return false
+    if (field === 'observations' && itemIndex > 0) {
+      const prior = run.evidence?.experimentsById?.[incident.recoveries[CONNECTIVITY_INCIDENT_PHASES[itemIndex - 1].phase]]
+      if (!prior || record.sequence <= prior.sequence) return false
+    }
+    if (field === 'recoveries') {
+      const observation = run.evidence?.experimentsById?.[incident.observations[item.phase]]
+      if (observation && record.sequence <= observation.sequence) return false
+    }
+  }
+  return true
+}
+
 function validApplicationLog(log, byUid, state, run) {
   const keys = ['requestId', 'sequence', 'podUid', 'podName', 'namespace', 'image', 'method', 'path', 'status', 'artifactId', 'dependencySummary']
   if (!isPlainObject(log) || Object.keys(log).sort().join(',') !== keys.sort().join(',')
@@ -209,14 +249,25 @@ function validApplicationLog(log, byUid, state, run) {
     || typeof log.podUid !== 'string' || typeof log.podName !== 'string' || typeof log.namespace !== 'string' || typeof log.image !== 'string'
     || typeof log.artifactId !== 'string' || !Array.isArray(log.dependencySummary) || log.dependencySummary.length > 3) return false
   const pod = byUid.get(log.podUid)
-  if (pod?.kind !== 'Pod' || pod.metadata.name !== log.podName || pod.metadata.namespace !== log.namespace
-    || pod.spec.containers[0]?.image !== log.image
-    || state.podSnapshots[pod.metadata.uid]?.artifactId !== log.artifactId) return false
+  const request = run.runtime?.kubernetes?.requests?.find(item => item.id === log.requestId && item.sequence === log.sequence)
+  if (pod ? pod.kind !== 'Pod' || pod.metadata.name !== log.podName || pod.metadata.namespace !== log.namespace
+    || pod.spec.containers[0]?.image !== log.image || state.podSnapshots[pod.metadata.uid]?.artifactId !== log.artifactId
+    : !validHistoricalConnectivityLog(log, request, run, state)) return false
   if (!log.dependencySummary.every(item => isPlainObject(item) && Object.keys(item).every(key => ['operation', 'status', 'reason'].includes(key))
     && ['embedding', 'postgres-query', 'answer'].includes(item.operation) && ['succeeded', 'failed'].includes(item.status)
     && (item.reason === undefined || ['DNS_NOT_FOUND', 'AUTHENTICATION_FAILED', 'UNAVAILABLE'].includes(item.reason)))) return false
-  const request = run.runtime?.kubernetes?.requests?.find(item => item.id === log.requestId && item.sequence === log.sequence)
-  return !!request && request.route?.podUid === log.podUid && request.status === log.status
+  return !!request && request.route?.podUid === log.podUid && request.route?.podName === log.podName
+    && request.route?.namespace === log.namespace && request.route?.artifactId === log.artifactId && request.status === log.status
+}
+
+function validHistoricalConnectivityLog(log, request, run, state) {
+  if (run.labId !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID
+    || request.route?.podUid !== log.podUid || request.route?.podName !== log.podName
+    || request.route?.namespace !== log.namespace || request.route?.artifactId !== log.artifactId) return false
+  return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
+    && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence
+    && evidence.measurements?.route?.podUid === log.podUid && evidence.measurements?.artifactId === log.artifactId
+    && evidence.measurements?.status === log.status && ['passed', 'failed'].includes(evidence.outcome))
 }
 
 function addressIndex(address) { const [, , third, fourth] = address.split('.').map(Number); return third * 254 + fourth - 1 }

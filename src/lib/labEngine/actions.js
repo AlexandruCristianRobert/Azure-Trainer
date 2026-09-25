@@ -26,6 +26,7 @@ import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
 import { reconcileKubernetes } from '../kubernetes/reconcile.js'
 import { initializeConnectivity } from '../kubernetes/services.js'
 import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
+import { advanceConnectivityIncident } from '../kubernetes/connectivity-incidents.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -568,6 +569,12 @@ export function applyRunAction(run, action, lab) {
     case 'aks-config-next-incident': {
       if (Object.keys(action).length !== 1) return actionError(run, 'Incident continuation accepts no caller-supplied phase or configuration.')
       const incident = advanceConfigIncident(run, lab)
+      result = envelope(incident.run, incident.lines, [], incident.diagnostics)
+      break
+    }
+    case 'aks-connectivity-next-incident': {
+      if (Object.keys(action).length !== 1 || lab?.capabilities?.kubernetesConnectivity !== true) return actionError(run, 'Connectivity incident advancement accepts no caller state and is available only in the connectivity Lab.')
+      const incident = advanceConnectivityIncident(run, lab)
       result = envelope(incident.run, incident.lines, [], incident.diagnostics)
       break
     }

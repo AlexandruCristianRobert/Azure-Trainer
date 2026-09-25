@@ -4,17 +4,31 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
 import { configIncidentEvidenceForPhase, isConfigIncidentFileDraftClean, CONFIG_INCIDENT_PHASES } from '../../lib/kubernetes/config-incidents.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
+import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
+import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 
 const run = useLabRunStore()
 const choice = ref('')
 const error = ref('')
 const scenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-request'))
-const configCapable = computed(() => run.lab?.capabilities?.kubernetesConfiguration === true)
+const configCapable = computed(() => run.lab?.capabilities?.kubernetesConfiguration === true && run.lab?.id !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID)
 const configIncident = computed(() => run.behavioralRun?.runtime?.kubernetes?.configIncident ?? null)
 const configIncidentMessage = computed(() => CONFIG_INCIDENT_PHASES.find(item => item.phase === configIncident.value?.phase)?.message ?? '')
 const canContinueIncident = computed(() => !!configIncident.value && configIncident.value.phase !== 'stale'
   && isConfigIncidentFileDraftClean(run.behavioralRun)
   && !!configIncidentEvidenceForPhase(run.behavioralRun, run.lab, configIncident.value.phase))
+const connectivityIncident = computed(() => {
+  if (run.lab?.id !== CONNECTIVITY_TROUBLESHOOTING_LAB_ID) return null
+  return run.behavioralRun?.runtime?.kubernetes?.clusters?.[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]?.connectivity?.incident ?? null
+})
+const connectivityIncidentMessage = computed(() => CONNECTIVITY_INCIDENT_PHASES.find(item => item.phase === connectivityIncident.value?.phase)
+  ? ({ selector: 'Observe and repair the internal Service selector fault before advancing.', port: 'Observe and repair the internal targetPort fault before advancing.', dependency: 'Repair PGHOST and restart the assistant Pods, then complete both final route checks.' }[connectivityIncident.value.phase]) : '')
+const canIntroduceConnectivityIncident = computed(() => {
+  const phase = CONNECTIVITY_INCIDENT_PHASES.find(item => item.phase === connectivityIncident.value?.phase)
+  return !!phase?.next && isConnectivityIncidentDraftClean(run.behavioralRun, phase.phase)
+    && !!connectivityIncidentEvidenceForPhase(run.behavioralRun, run.lab, 'observations', phase.phase)
+    && !!connectivityIncidentEvidenceForPhase(run.behavioralRun, run.lab, 'recoveries', phase.phase)
+})
 const questionScenarios = computed(() => scenarios.value.filter(([, scenario]) => scenario.request?.method === 'POST' && scenario.request?.path === '/api/ask' && typeof scenario.request?.body?.question === 'string'))
 const fixtureProfiles = computed(() => Object.entries(KNOWLEDGE_FIXTURES.profiles).map(([name, profile]) => ({ name, settings: Object.fromEntries(Object.entries(profile).filter(([key]) => key !== 'PGPASSWORD')) })))
 const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
@@ -76,6 +90,15 @@ async function continueIncident() {
     statusMessage.value = error.value ? 'The incident did not advance.' : 'The next simulated configuration incident is ready.'
   } catch (reason) { error.value = reason.message; statusMessage.value = 'The incident did not advance.' }
 }
+async function introduceConnectivityIncident() {
+  error.value = ''
+  statusMessage.value = 'Checking the current Service recovery before introducing the next fault.'
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-connectivity-next-incident' })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'The connectivity fault was not introduced.' : 'The next connectivity fault was introduced and applied.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'The connectivity fault was not introduced.' }
+}
 async function copyLogCommand(command) {
   try { await navigator.clipboard.writeText(command); statusMessage.value = 'Supported log command copied.' }
   catch { statusMessage.value = 'Select and copy the displayed log command.' }
@@ -113,6 +136,11 @@ async function copyLogCommand(command) {
         <button type="button" class="btn" :disabled="locked || !canContinueIncident" @click="continueIncident">Continue to next configuration incident</button>
       </div>
     </section>
+    <section v-if="connectivityIncident" class="aks-connectivity-controls" aria-label="Staged connectivity incident">
+      <h3>Controlled connectivity incidents</h3>
+      <p>Current phase: {{ connectivityIncident.phase }}. {{ connectivityIncidentMessage }}</p>
+      <button type="button" class="btn" :disabled="locked || !canIntroduceConnectivityIncident" @click="introduceConnectivityIncident">Introduce next connectivity fault</button>
+    </section>
     <p v-if="!scenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="statusMessage" role="status" aria-live="polite">{{ statusMessage }}</p>
@@ -134,6 +162,9 @@ async function copyLogCommand(command) {
 .aks-config-controls__incident { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
 .aks-config-controls__incident p { margin: 0 0 8px; text-transform: capitalize; }
 .aks-connectivity-trace { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
+.aks-connectivity-controls { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
+.aks-connectivity-controls h3 { margin: 0 0 10px; font-size: 15px; }
+.aks-connectivity-controls p { max-width: 70ch; line-height: 1.5; }
 .aks-connectivity-trace > p { max-width: 80ch; line-height: 1.5; }
 .aks-connectivity-trace code { overflow-wrap: anywhere; }
 .aks-connectivity-trace__hops { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0; list-style: none; }

@@ -19,7 +19,10 @@ export function initializeConnectivity(input, clusterId) {
   const state = run.runtime?.kubernetes?.clusters?.[clusterId]
   if (state && !state.connectivity) state.connectivity = {
     version: 1, nextServiceAddress: 1, nextPodAddress: 1, nextExternalAddress: 10,
-    diagnosticPodUids: [], applicationLogs: [], incident: null,
+    diagnosticPodUids: [], applicationLogs: [], incident: run.labId === 'aks-connectivity-troubleshooting'
+      ? { id: 'network-hops-v1', phase: 'selector', sequence: 1,
+        observations: { selector: null, port: null, dependency: null }, recoveries: { selector: null, port: null, dependency: null } }
+      : null,
   }
   return run
 }

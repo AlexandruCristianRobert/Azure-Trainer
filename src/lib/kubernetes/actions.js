@@ -3,6 +3,7 @@ import { simulateKubernetesRequest } from './requests.js'
 import { refreshKubernetesDependencies } from './evidence.js'
 import { isJsonValue } from '../labEngine/run.js'
 import { advanceConfigurationProjection } from './configuration.js'
+import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 
 function validConnectivityExpected(expected) {
   if (!expected || Object.keys(expected).some(key => !['status', 'body', 'transport', 'route'].includes(key))
@@ -56,10 +57,14 @@ export function applyAksAction(run, action, lab) {
   if (!task) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'No Task verifies this AKS request scenario.' }] }
   const refreshed = refreshKubernetesDependencies(run, run, lab)
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })
-  const next = recordVerification(response.run, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version,
+  if (lab?.id === 'aks-connectivity-troubleshooting') {
+    response.measurements.deploymentUid = response.run.runtime.kubernetes.clusters?.[target.clusterId]?.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]?.metadata?.uid ?? null
+  }
+  let next = recordVerification(response.run, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version,
     outcome: response.outcome ? 'passed' : 'failed', completed: response.outcome,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs, measurements: response.measurements })
+  next = recordConnectivityIncidentEvidence(next, lab, task, next.evidence.experimentsById[next.evidence.currentEvidenceByTask[task.id]])
   const text = `HTTP ${response.status} ${JSON.stringify(response.body)}`
   return { run: next, lines: [{ kind: response.status === scenario.expected.status ? 'out' : 'err', text,
-    status: response.status, body: response.body, measurements: response.measurements }], portalEvents: [], diagnostics: response.diagnostic ? [response.diagnostic] : [] }
+    status: response.status, body: response.body, measurements: response.measurements }], portalEvents: [], diagnostics: response.outcome || !response.diagnostic ? [] : [response.diagnostic] }
 }
