@@ -81,13 +81,13 @@ function syncSlices(state, service, view) {
   for (const [key] of previous) if (!wanted.has(key)) delete resources[key]
 }
 
-export function reconcileServices(input, clusterId) {
+export function reconcileServicesResult(input, clusterId) {
   const original = input
   let run = clone(input)
   const state = run.runtime?.kubernetes?.clusters?.[clusterId]
-  if (!state?.connectivity) return run
+  if (!state?.connectivity) return { run, diagnostics: [] }
   const pendingPods = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running' && !item.status?.podIP).length
-  if (state.connectivity.nextPodAddress + pendingPods - 1 > 4063) return original
+  if (state.connectivity.nextPodAddress + pendingPods - 1 > 4063) return { run: original, diagnostics: [{ code: 'SIMULATOR_LIMIT', message: 'The simulated Pod address range is exhausted.' }] }
   for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running')) {
     if (!pod.status.podIP) {
       const address = allocate(state, 'nextPodAddress', 4063, podAddress)
@@ -113,5 +113,7 @@ export function reconcileServices(input, clusterId) {
     }
     syncSlices(state, service, getServiceBackends(run, { clusterId, namespace: service.metadata.namespace, serviceName: service.metadata.name }))
   }
-  return run
+  return { run, diagnostics: [] }
 }
+
+export function reconcileServices(input, clusterId) { return reconcileServicesResult(input, clusterId).run }

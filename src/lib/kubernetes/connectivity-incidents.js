@@ -2,7 +2,7 @@ import { stringify } from 'yaml'
 import { saveProjectFile } from '../project/files.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects } from './objects.js'
-import { reconcileKubernetes, restartDeployment } from './reconcile.js'
+import { reconcileKubernetesResult, restartDeploymentResult } from './reconcile.js'
 import { CONNECTIVITY_INCIDENT_PHASES, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_FILES, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
@@ -123,8 +123,14 @@ export function advanceConnectivityIncident(run, lab) {
   const parsed = parseKubernetesYaml(mutation.text, mutation.path)
   const applied = applyKubernetesObjects(next, parsed.documents, { clusterId: CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, namespace: 'assistant' }, lab)
   if (applied.diagnostics.length) return { run, diagnostics: applied.diagnostics, lines: [] }
-  next = reconcileKubernetes(applied.run, lab)
-  if (phase.phase === 'port') next = restartDeployment(next, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, 'assistant', 'assistant', lab)
+  const reconciled = reconcileKubernetesResult(applied.run, lab)
+  if (reconciled.diagnostics.length) return { run, diagnostics: reconciled.diagnostics, lines: [] }
+  next = reconciled.run
+  if (phase.phase === 'port') {
+    const restarted = restartDeploymentResult(next, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, 'assistant', 'assistant', lab)
+    if (restarted.diagnostics.length) return { run, diagnostics: restarted.diagnostics, lines: [] }
+    next = restarted.run
+  }
   const cluster = next.runtime.kubernetes.clusters[CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID]
   const prior = cluster.connectivity.incident
   const nextPhase = CONNECTIVITY_INCIDENT_PHASES.find(item => item.phase === phase.next)

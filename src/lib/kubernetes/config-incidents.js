@@ -2,7 +2,7 @@ import { stringify } from 'yaml'
 import { saveProjectFile } from '../project/files.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects } from './objects.js'
-import { reconcileKubernetes, restartDeployment } from './reconcile.js'
+import { reconcileKubernetesResult, restartDeploymentResult } from './reconcile.js'
 import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_FILES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
 
 const message = (code, text) => ({ code, message: text, path: '', line: 1, column: 1 })
@@ -72,8 +72,14 @@ export function advanceConfigIncident(run, lab) {
   const parsed = parseKubernetesYaml(text, 'k8s/configmap.yaml')
   const applied = applyKubernetesObjects(next, parsed.documents, { clusterId: CONFIG_TROUBLESHOOTING_CLUSTER_ID, namespace: 'assistant' }, lab)
   if (applied.diagnostics.length) return { run, diagnostics: applied.diagnostics, lines: [] }
-  next = reconcileKubernetes(applied.run, lab)
-  if (phase.phase === 'reference') next = restartDeployment(next, CONFIG_TROUBLESHOOTING_CLUSTER_ID, 'assistant', 'assistant', lab)
+  const reconciled = reconcileKubernetesResult(applied.run, lab)
+  if (reconciled.diagnostics.length) return { run, diagnostics: reconciled.diagnostics, lines: [] }
+  next = reconciled.run
+  if (phase.phase === 'reference') {
+    const restarted = restartDeploymentResult(next, CONFIG_TROUBLESHOOTING_CLUSTER_ID, 'assistant', 'assistant', lab)
+    if (restarted.diagnostics.length) return { run, diagnostics: restarted.diagnostics, lines: [] }
+    next = restarted.run
+  }
   const sequence = next.nextSequence
   const transition = { sequence, from: phase.phase, to: phase.next, evidenceId: evidence.id, attemptId: run.attemptId }
   next = { ...next, nextSequence: sequence + 1,

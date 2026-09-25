@@ -1,9 +1,10 @@
 import { expect, it } from 'vitest'
 import { seedFoundation, act } from './helpers/aks.js'
-import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
+import { getDeploymentPods, restartDeploymentResult } from '../src/lib/kubernetes/reconcile.js'
 import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
 import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { initializeConnectivity, reconcileServices } from '../src/lib/kubernetes/services.js'
 
 function cluster(run, id) { return run.runtime.kubernetes.clusters[id] }
 
@@ -120,6 +121,38 @@ it('replaces a deleted Pod without changing its desired template', () => {
   expect(after.some(p => p.metadata.uid === before[0].metadata.uid)).toBe(false)
   expect(after.some(p => p.metadata.uid === before[1].metadata.uid)).toBe(true)
   expect(cluster(run, clusterId).receipts.some(x => x.deletedPodUid === before[0].metadata.uid && x.replacementPodUid)).toBe(true)
+})
+
+it('rejects a restart atomically when replacement Pods exceed the simulated Pod IP range', () => {
+  let { run, lab, clusterId } = seedFoundation()
+  run = initializeConnectivity(run, clusterId)
+  run = reconcileServices(run, clusterId)
+  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConnectivity: true } }
+  const state = cluster(run, clusterId)
+  state.connectivity.nextPodAddress = 4063
+  const before = structuredClone(run)
+  const result = restartDeploymentResult(run, clusterId, 'assistant', 'assistant', lab)
+  expect(result.diagnostics.map(item => item.code)).toContain('SIMULATOR_LIMIT')
+  expect(result.run.runtime.kubernetes).toEqual(before.runtime.kubernetes)
+  expect(result.run.nextSequence).toBe(before.nextSequence)
+  const action = applyRunAction(run, { type: 'command', line: 'kubectl rollout restart deployment/assistant -n assistant' }, lab)
+  expect(action.diagnostics.map(item => item.code), JSON.stringify(action.lines)).toContain('SIMULATOR_LIMIT')
+  expect(action.run.runtime.kubernetes).toEqual(before.runtime.kubernetes)
+})
+
+it('rejects a Deployment template apply atomically when replacement Pods exceed the simulated Pod IP range', () => {
+  let { run, lab, clusterId } = seedFoundation()
+  run = initializeConnectivity(run, clusterId)
+  run = reconcileServices(run, clusterId)
+  lab = { ...lab, capabilities: { ...lab.capabilities, kubernetesConnectivity: true } }
+  cluster(run, clusterId).connectivity.nextPodAddress = 4063
+  const text = run.project.savedFiles['k8s/deployment.yaml'].replace('value: training', 'value: staging')
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text }).run
+  const before = structuredClone(run)
+  const result = applyRunAction(run, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }, lab)
+  expect(result.diagnostics.map(item => item.code)).toContain('SIMULATOR_LIMIT')
+  expect(result.run.runtime.kubernetes).toEqual(before.runtime.kubernetes)
+  expect(result.run.nextSequence).toBe(before.nextSequence)
 })
 
 it('preserves earlier objects when a later object fails validation during apply', () => {

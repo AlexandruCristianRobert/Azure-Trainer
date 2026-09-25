@@ -1,5 +1,5 @@
 import { kubeObjectKey } from './objects.js'
-import { reconcileServices } from './services.js'
+import { reconcileServicesResult } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 
@@ -103,7 +103,8 @@ function recordReplacement(state, deleted, replacement, cause = 'template') {
   if (state.receipts.length > 100) state.receipts.splice(0, state.receipts.length - 100)
 }
 
-export function reconcileKubernetes(input, lab) {
+export function reconcileKubernetesResult(input, lab) {
+  const original = input
   let run = clone(input)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
@@ -152,20 +153,31 @@ export function reconcileKubernetes(input, lab) {
       }
     }
   }
-  for (const cluster of run.sandbox.aksClusters ?? []) run = reconcileServices(run, cluster.id)
-  return run
+  for (const cluster of run.sandbox.aksClusters ?? []) {
+    const result = reconcileServicesResult(run, cluster.id)
+    if (result.diagnostics.length) return { run: original, diagnostics: result.diagnostics }
+    run = result.run
+  }
+  return { run, diagnostics: [] }
 }
 
+export function reconcileKubernetes(input, lab) { return reconcileKubernetesResult(input, lab).run }
+
 export function restartDeployment(input, clusterId, namespace, name, lab) {
+  return restartDeploymentResult(input, clusterId, namespace, name, lab).run
+}
+
+export function restartDeploymentResult(input, clusterId, namespace, name, lab) {
   const next = clone(input)
   const state = next.runtime.kubernetes.clusters[clusterId]
   const deployment = state?.resources[kubeObjectKey('Deployment', namespace, name)]
-  if (!deployment) return next
+  if (!deployment) return { run: next, diagnostics: [] }
   deployment.spec.template.metadata.annotations = { ...(deployment.spec.template.metadata.annotations ?? {}),
     'kubectl.kubernetes.io/restarted-at': `sim-${next.runtime.simTimeMs}-${next.nextSequence}` }
   deployment.metadata.generation = (deployment.metadata.generation ?? 1) + 1
   deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
-  return reconcileKubernetes(next, lab)
+  const result = reconcileKubernetesResult(next, lab)
+  return result.diagnostics.length ? { run: input, diagnostics: result.diagnostics } : result
 }
 
 export function getPodTemplateHash(state, pod) {

@@ -1,6 +1,6 @@
 import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects, kubeObjectKey } from './objects.js'
-import { reconcileKubernetes, restartDeployment, getDeploymentPods, getPodTemplateHash } from './reconcile.js'
+import { reconcileKubernetesResult, restartDeploymentResult, getDeploymentPods, getPodTemplateHash } from './reconcile.js'
 import { validateKubernetesObject } from './schema.js'
 import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 import { runDiagnosticCommand } from './diagnostics.js'
@@ -8,7 +8,7 @@ import { runDiagnosticCommand } from './diagnostics.js'
 const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
 const namespaced = new Set(['Pod', 'Deployment', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
 const out = text => ({ text, kind: 'out' }), err = text => ({ text, kind: 'err' })
-const response = (sandbox, lines, effects) => ({ sandbox, lines, events: [], latencyMs: 0, ...(effects ? { effects } : {}) })
+const response = (sandbox, lines, effects, diagnostics = []) => ({ sandbox, lines, events: [], latencyMs: 0, ...(effects ? { effects } : {}), ...(diagnostics.length ? { diagnostics } : {}) })
 
 function flags(tokens, allowed) {
   const result = { positional: [], values: {} }
@@ -85,7 +85,9 @@ function apply(run, selection, options, lab) {
     return response(run.sandbox, [out(options.output === 'json' ? kubeJson(value) : kubeYaml(value))])
   }
   const result = applyKubernetesObjects(run, source.documents, { clusterId: selection.clusterId, namespace: options.namespace, locations: source.locations }, lab)
-  const next = reconcileKubernetes(result.run, lab)
+  const reconciled = reconcileKubernetesResult(result.run, lab)
+  if (reconciled.diagnostics.length) return response(run.sandbox, [...result.lines, err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
+  const next = reconciled.run
   const lines = result.diagnostics.length ? [...result.lines, err(`Error: ${result.diagnostics[0].message}`)] : result.lines
   return response(run.sandbox, lines, stateEffect(next))
 }
@@ -161,7 +163,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }
         for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] }
       }
-      return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(reconcileKubernetes(next, lab)))
+      const reconciled = reconcileKubernetesResult(next, lab)
+      if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
+      return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(reconciled.run))
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!['Pod', 'Deployment', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, or service NAME.')])
@@ -178,8 +182,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
       delete state.podSnapshots[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
     }
     else { const ids = new Set([item.metadata.uid]); let changed = true; while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }; for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] } }
-    const reconciled = reconcileKubernetes(next, lab)
-    return response(sandbox, [out(`${kind.toLowerCase()} "${name}" deleted`)], stateEffect(reconciled))
+    const reconciled = reconcileKubernetesResult(next, lab)
+    if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
+    return response(sandbox, [out(`${kind.toLowerCase()} "${name}" deleted`)], stateEffect(reconciled.run))
   }
   if (verb === 'rollout' && parsed.positional[0] === 'status' && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {
     const name = parsed.positional[1].slice(11), deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
@@ -193,8 +198,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
     if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
-    const reconciled = restartDeployment(run, selection.clusterId, selection.namespace, name, lab)
-    return response(sandbox, [out(`deployment.apps/${name} restarted`)], stateEffect(reconciled))
+    const reconciled = restartDeploymentResult(run, selection.clusterId, selection.namespace, name, lab)
+    if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
+    return response(sandbox, [out(`deployment.apps/${name} restarted`)], stateEffect(reconciled.run))
   }
   return response(sandbox, [err('Unsupported kubectl command.')])
 }
