@@ -47,7 +47,7 @@ export function simulateKubernetesRequest(run, scenario) {
     const externalService = route.externalService && run.runtime.kubernetes.clusters[clusterId].resources[`Service/${scenario.target.namespace}/${route.externalService}`]
     const hostname = route.hostname ?? externalService?.status?.loadBalancer?.ingress?.[0]?.ip
     const routed = routeServiceRequest(run, { origin: route.origin, hostname, port: route.port ?? 80,
-      method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null }, null)
+      method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null, integrationProfile: scenario.integrationProfile ?? 'healthy' }, null)
     const latest = routed.run.runtime.kubernetes.requests.at(-1)
     if (latest?.id === routed.outcome.requestId) latest.scenarioId = scenario.id
     const outcome = routed.outcome
@@ -61,7 +61,7 @@ export function simulateKubernetesRequest(run, scenario) {
       selectedPods: outcome.route.podUid ? [{ uid: outcome.route.podUid, matchesExpected: matches }] : [],
       runningReplicaCount: outcome.route.readyEndpointUids?.length ?? 0, requiredReplicas: 1,
       diagnosticCode: outcome.transport.ok ? outcome.diagnostic?.code ?? null : outcome.transport.reason,
-      request: scenario.request, dependencyTrace: outcome.dependencyTrace, transport: outcome.transport, route: outcome.route, simulated: true }
+      request: scenario.request, dependencyTrace: outcome.dependencyTrace, integrationTrace: outcome.integrationTrace ?? null, transport: outcome.transport, route: outcome.route, simulated: true }
     return { run: routed.run, outcome: matches, status: outcome.status, body: outcome.body, measurements, diagnostic: outcome.diagnostic }
   }
   const { clusterId, namespace, serviceName, deploymentName } = scenario.target
@@ -180,7 +180,7 @@ export function simulateKubernetesRequest(run, scenario) {
 }
 
 function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
-  const routed = routeServiceRequest(run, { origin, hostname, port, method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null }, null)
+  const routed = routeServiceRequest(run, { origin, hostname, port, method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null, integrationProfile: scenario.integrationProfile ?? 'healthy' }, null)
   const latest = routed.run.runtime.kubernetes.requests.at(-1)
   const state = routed.run.runtime.kubernetes.clusters[scenario.target.clusterId]
   const service = Object.values(state.resources).find(item => item.kind === 'Service' && item.metadata.uid === routed.outcome.route.serviceUid) ?? null
@@ -219,6 +219,6 @@ function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
     listenerPort: artifact?.appSpec?.listeningPort ?? null, deploymentName: scenario.target.deploymentName,
     selectedPodUid: outcome.route.podUid ?? null, podUid: outcome.route.podUid ?? null, artifactId: outcome.route.artifactId ?? null,
     selectedPods: (outcome.route.readyEndpointUids ?? []).map(uid => ({ uid, matchesExpected: matches })),
-    origin, hostname, dependencyTrace: outcome.dependencyTrace, transport: outcome.transport, route: outcome.route, simulated: true }
+    origin, hostname, dependencyTrace: outcome.dependencyTrace, integrationTrace: outcome.integrationTrace ?? null, transport: outcome.transport, route: outcome.route, simulated: true }
   return { run: routed.run, outcome: matches, status: outcome.status, body: outcome.body, measurements, diagnostic: outcome.diagnostic }
 }

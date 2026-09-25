@@ -58,7 +58,7 @@ function appResponse(run, cluster, pod, probe) {
   const route = app?.routes?.find(item => item.method === probe.method && item.path === probe.path)
   if (!snapshot || !artifact || !route) return { status: 404, body: { error: 'Not found.' }, dependencyTrace: [], diagnostic: { code: 'ROUTE_NOT_FOUND', message: 'The captured application route does not exist.' } }
   if (probe.path === '/api/ask') return app.integration?.graph?.version === 1
-    ? simulateIntegration(app, snapshot, probe, INTEGRATION_FIXTURES, 'healthy')
+    ? simulateIntegration(app, snapshot, probe, INTEGRATION_FIXTURES, probe.integrationProfile ?? 'healthy')
     : simulateAssistant(app, snapshot, probe, KNOWLEDGE_FIXTURES)
   const body = Object.fromEntries(Object.entries(route.response ?? {}).map(([key, expression]) => [key,
     expression.kind === 'config' ? (snapshot.environment?.[expression.key] ?? expression.defaultValue) : expression.value]))
@@ -141,7 +141,7 @@ export function routeServiceRequest(input, probe, lab) {
         else {
           outcome.transport = { ok: true, reason: null }
           const response = appResponse(run, state, pod, probe)
-          outcome.status = response.status; outcome.body = response.body; outcome.dependencyTrace = response.dependencyTrace ?? []; outcome.diagnostic = response.diagnostic ?? null
+          outcome.status = response.status; outcome.body = response.body; outcome.dependencyTrace = response.dependencyTrace ?? []; outcome.integrationTrace = response.integrationTrace ?? null; outcome.diagnostic = response.diagnostic ?? null
           if (outcome.diagnostic?.code === 'POSTGRES_CONNECTION') outcome.dependencyTrace = [...outcome.dependencyTrace, { operation: 'postgres-query', status: 'failed', reason: 'DNS_NOT_FOUND' }]
           const safeSummary = outcome.dependencyTrace.map(item => ({ operation: item.operation, status: item.status, ...(item.reason ? { reason: item.reason } : {}) }))
           const log = { requestId: id, sequence, podUid: pod.metadata.uid, podName: pod.metadata.name, namespace: pod.metadata.namespace,
@@ -156,7 +156,8 @@ export function routeServiceRequest(input, probe, lab) {
   if (!outcome.transport.ok && !outcome.transport.reason) outcome.transport.reason = 'NO_READY_ENDPOINTS'
   const requests = [...runtime.requests, { id, sequence, connectivity: true, scenarioId: null, transport: outcome.transport, status: outcome.status,
     route: outcome.route, namespace: outcome.route.namespace ?? clientNamespace, dependencyTrace: outcome.dependencyTrace, origin: probe.origin,
-    hostname: probe.hostname, port: probe.port, request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) } }].slice(-100)
+    hostname: probe.hostname, port: probe.port, integrationTrace: outcome.integrationTrace ?? null,
+    request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) } }].slice(-100)
   const retainedRequestIds = new Set(requests.map(request => request.id))
   for (const clusterState of Object.values(runtime.clusters)) if (clusterState.connectivity) {
     clusterState.connectivity.applicationLogs = clusterState.connectivity.applicationLogs.filter(log => retainedRequestIds.has(log.requestId))

@@ -12,6 +12,22 @@ const failure = (code, message) => ({ code, message })
 const asDependencyError = error => ({ dependency: true, code: error.code, http_status: error.status, public_message: error.message })
 const result = (status, body, dependencyTrace, diagnostic, integrationTrace) => ({ status, body, dependencyTrace, diagnostic, integrationTrace })
 const pythonFalsey = value => value === null || value === undefined || value === false || value === '' || (Array.isArray(value) && value.length === 0) || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value ?? {}).length === 0)
+const boundedText = value => typeof value === 'string' && value.length <= 128 ? value : '[redacted]'
+
+function safeQueryBindings(querySpec, parameters) {
+  const parameterFor = column => querySpec?.filters?.find(filter => filter.column === column)?.parameter
+  const vector = querySpec?.order?.vectorParameter
+  const cutoff = querySpec?.distance?.cutoffParameter
+  const pick = name => name && Object.hasOwn(parameters ?? {}, name) ? parameters[name] : '[redacted]'
+  return {
+    collection: boundedText(pick(parameterFor('collection'))),
+    audience: boundedText(pick(parameterFor('audience'))),
+    published: typeof pick(parameterFor('published')) === 'boolean' ? pick(parameterFor('published')) : '[redacted]',
+    vector: boundedText(pick(vector)),
+    cutoff: typeof pick(cutoff) === 'number' && Number.isFinite(pick(cutoff)) ? pick(cutoff) : '[redacted]',
+    limit: Number.isInteger(pick(querySpec?.limitParameter)) ? pick(querySpec.limitParameter) : '[redacted]',
+  }
+}
 
 function policyDescriptor(value) {
   const args = value?.args ?? {}
@@ -175,7 +191,7 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
           const parameterNode = nodes.get(node.args?.keywords?.params)
           const vectorNode = parameterNode?.entries?.[integration.querySpec?.order?.vectorParameter]
           integrationTrace.vectorProvenance = vectorNode ? evaluate(vectorNode).provenance : null
-          integrationTrace.queryBindings = params
+          integrationTrace.queryBindings = safeQueryBindings(integration.querySpec, params)
           const retrieval = dependency('postgres-query', policy, storedBudget, () => {
             if (!profile || client?.args?.host !== profile.PGHOST || client?.args?.database !== profile.PGDATABASE) throw failure('POSTGRES_CONNECTION', 'The configured PostgreSQL host is not available in this trainer.')
             if (client?.args?.user !== profile.PGUSER || client?.args?.password !== profile.PGPASSWORD) throw failure('POSTGRES_AUTH', 'The configured PostgreSQL credentials were not available in this trainer.')
@@ -192,13 +208,14 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
           const profile = configurationProfile(fixtureCatalog, podSnapshot?.environment?.AI_ENDPOINT)
           const context = args.context?.value
           const deployment = args.deployment?.value
+          const question = args.question?.value
           const answer = dependency('answer', policy, storedBudget, () => {
             if (!profile || client?.args?.endpoint !== profile.AI_ENDPOINT) throw failure('AI_ENDPOINT', 'The configured AI endpoint is not available in this trainer.')
             if (client?.args?.sdk_retries !== 0) throw failure('APP_CONFIGURATION', 'Adapter retries must be disabled.')
             if (deployment !== profile.ANSWER_DEPLOYMENT) throw failure('AI_DEPLOYMENT', 'The configured AI deployment is not available in this trainer.')
-            if (!Array.isArray(context) || !context.length || context.some(row => fixtureCatalog.documents?.[row.id]?.content !== row.content)) throw failure('UNSUPPORTED_FIXTURE_CONTEXT', 'This context is outside the local training fixture.')
-            const answer = fixtureCatalog.documents[context[0].id]?.answer
-            if (!answer) throw failure('UNSUPPORTED_FIXTURE_CONTEXT', 'This context is outside the local training fixture.')
+            const answers = fixtureCatalog.questions?.[question]?.answers
+            if (!Array.isArray(context) || !context.length || !answers || context.some(row => fixtureCatalog.documents?.[row.id]?.content !== row.content || !Object.hasOwn(answers, row.id))) throw failure('UNSUPPORTED_FIXTURE_CONTEXT', 'This context is outside the local training fixture.')
+            const answer = answers[context[0].id]
             return { answer }
           })
           output = tagged(answer, 'answer'); break

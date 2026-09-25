@@ -3,7 +3,9 @@ import { parsePythonIntegration } from '../src/lib/project/python-integration.js
 import { INTEGRATION_MANIFEST, INTEGRATION_SOLUTION_FILES } from '../src/data/templates/aks-python/integration.js'
 import { INTEGRATION_FIXTURES } from '../src/data/fixtures/aks/integration.js'
 import { simulateIntegration } from '../src/lib/kubernetes/integration.js'
+import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { makeTrainingSnapshot } from './helpers/aks.js'
+import { seedConnectivityTest } from './helpers/aks.js'
 
 const appSpec = parsePythonIntegration(INTEGRATION_SOLUTION_FILES, INTEGRATION_MANIFEST).appSpec
 const request = question => ({ method: 'POST', path: '/api/ask', body: { question } })
@@ -36,7 +38,7 @@ describe('compiled AKS assistant integration runtime', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('as_vector(vector)', 'as_vector([1, 0, 0])') }
     const literalApp = parsePythonIntegration(files, INTEGRATION_MANIFEST).appSpec
     const outcome = simulateIntegration(literalApp, snapshot(), request('Who provides support?'), INTEGRATION_FIXTURES, 'healthy')
-    expect(outcome.status).toBe(200)
+    expect(outcome).toMatchObject({ status: 422, body: { code: 'UNSUPPORTED_FIXTURE_CONTEXT' } })
     expect(outcome.integrationTrace.vectorProvenance).toBe('literal')
     expect(outcome.integrationTrace.selectedIds).toEqual(['training-backups'])
   })
@@ -46,5 +48,33 @@ describe('compiled AKS assistant integration runtime', () => {
     expect(outcome).toMatchObject({ status: 503, body: { code: 'DEPENDENCY_UNAVAILABLE' } })
     expect(outcome.dependencyTrace.at(-1).attempts).toHaveLength(3)
     expect(outcome.integrationTrace.elapsedMs).toBe(520)
+  })
+
+  it('rejects a context that is real fixture content but does not answer the authored question', () => {
+    const wrongContextApp = structuredClone(appSpec)
+    wrongContextApp.integration.graph.nodes.find(node => node.op === 'context-rows').fields.content = 'id'
+    const outcome = simulateIntegration(wrongContextApp, snapshot(), request('How long are backups kept?'), INTEGRATION_FIXTURES, 'healthy')
+    expect(outcome).toMatchObject({ status: 422, body: { code: 'UNSUPPORTED_FIXTURE_CONTEXT' } })
+  })
+
+  it('projects only bounded safe query bindings into the integration trace', () => {
+    const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('"collection": cfg["collection"],', '"collection": cfg["collection"],\n                "secret": cfg["pg_password"],') }
+    const tracedApp = parsePythonIntegration(files, INTEGRATION_MANIFEST).appSpec
+    const outcome = simulateIntegration(tracedApp, snapshot(), request('How long are backups kept?'), INTEGRATION_FIXTURES, 'healthy')
+    expect(outcome.integrationTrace.queryBindings).toEqual({ collection: 'training', audience: 'employee', published: true, vector: '[1,0,0]', cutoff: 0.2, limit: 1 })
+    expect(JSON.stringify(outcome.integrationTrace)).not.toContain('training-only-password')
+  })
+
+  it('carries a scenario-selected immutable profile and trace through Service routing', () => {
+    const seed = seedConnectivityTest()
+    const pod = Object.values(seed.run.runtime.kubernetes.clusters[seed.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant')
+    const artifactId = seed.run.runtime.kubernetes.clusters[seed.clusterId].podSnapshots[pod.metadata.uid].artifactId
+    seed.run.artifacts.buildsById[artifactId].appSpec = appSpec
+    seed.run.runtime.kubernetes.clusters[seed.clusterId].podSnapshots[pod.metadata.uid].environment.AUDIENCE = 'employee'
+    const routed = routeServiceRequest(seed.run, { origin: { kind: 'pod', clusterId: seed.clusterId, podUid: seed.diagnosticPodUid }, hostname: 'assistant-internal.assistant', port: 80,
+      method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' }, integrationProfile: 'embedding-throttle-once' }, seed.lab)
+    expect(routed.outcome.status).toBe(200)
+    expect(routed.outcome.integrationTrace).toMatchObject({ profileId: 'embedding-throttle-once', elapsedMs: 310 })
+    expect(routed.run.runtime.kubernetes.requests.at(-1).integrationTrace.profileId).toBe('embedding-throttle-once')
   })
 })
