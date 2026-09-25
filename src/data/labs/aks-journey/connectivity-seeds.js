@@ -1,6 +1,7 @@
 import { applyRunAction } from '../../../lib/labEngine/actions.js'
 import { initializeConnectivity, reconcileServices } from '../../../lib/kubernetes/services.js'
 import { CONNECTIVITY_FILES } from '../../templates/aks-python/connectivity.js'
+import { CONNECTIVITY_INDEPENDENT_FILES } from '../../templates/aks-python/connectivity.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER, CONNECTIVITY_TROUBLESHOOTING_GROUP, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID, CONNECTIVITY_TROUBLESHOOTING_REGISTRY } from './connectivity-troubleshooting-incidents.js'
 
 export const CONNECTIVITY_GROUP = 'rg-aks-connectivity-guided'
@@ -77,6 +78,41 @@ export function seedConnectivityTroubleshooting(run) {
   state.connectivity.diagnosticPodUids = [uid]
   state.connectivity.incident = { id: 'network-hops-v1', phase: 'selector', sequence: 1,
     observations: { selector: null, port: null, dependency: null }, recoveries: { selector: null, port: null, dependency: null } }
+  seeded = reconcileServices(seeded, clusterId)
+  return { sandbox: seeded.sandbox, artifacts: seeded.artifacts, runtime: seeded.runtime, nextSequence: seeded.nextSequence }
+}
+
+export const CONNECTIVITY_INDEPENDENT_GROUP = 'rg-aks-connectivity-independent'
+export const CONNECTIVITY_INDEPENDENT_REGISTRY = 'acraksnetworkindependent'
+export const CONNECTIVITY_INDEPENDENT_CLUSTER = 'aks-connectivity-independent'
+
+export function seedConnectivityIndependent(run) {
+  const lab = { id: run.labId, engineVersion: 2, contentVersion: run.contentVersion, manifestId: run.project.manifestId,
+    tasks: [], capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true } }
+  let seeded = run
+  const act = action => {
+    const result = applyRunAction(seeded, action, lab)
+    const errors = (result.lines ?? []).filter(line => line.kind === 'err')
+    if (result.diagnostics.length || errors.length) throw new Error(`Independent connectivity seed failed: ${JSON.stringify([...result.diagnostics, ...errors])}`)
+    seeded = result.run
+  }
+  for (const line of [
+    `az group create -n ${CONNECTIVITY_INDEPENDENT_GROUP} -l eastus`,
+    `az acr create -g ${CONNECTIVITY_INDEPENDENT_GROUP} -n ${CONNECTIVITY_INDEPENDENT_REGISTRY} --sku Basic`,
+    `az acr build -r ${CONNECTIVITY_INDEPENDENT_REGISTRY} -t assistant:shared .`,
+    `az aks create -g ${CONNECTIVITY_INDEPENDENT_GROUP} -n ${CONNECTIVITY_INDEPENDENT_CLUSTER} --enable-managed-identity --generate-ssh-keys --attach-acr ${CONNECTIVITY_INDEPENDENT_REGISTRY}`,
+    `az aks get-credentials -g ${CONNECTIVITY_INDEPENDENT_GROUP} -n ${CONNECTIVITY_INDEPENDENT_CLUSTER}`,
+  ]) act({ type: 'command', line })
+  for (const path of ['k8s/primary-namespace.yaml', 'k8s/primary-configmap.yaml', 'k8s/primary-secret.yaml', 'k8s/primary-deployment.yaml', 'k8s/primary-service-internal.yaml', 'k8s/primary-service-external.yaml', 'k8s/review-namespace.yaml', 'k8s/review-configmap.yaml', 'k8s/review-secret.yaml', 'k8s/review-deployment.yaml'])
+    act({ type: 'command', line: `kubectl apply -f ${path}` })
+  const clusterId = seeded.sandbox.aksClusters[0].id
+  seeded = reconcileServices(initializeConnectivity(seeded, clusterId), clusterId)
+  const state = seeded.runtime.kubernetes.clusters[clusterId]
+  state.resources['Namespace//diagnostics'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'diagnostics', uid: `fixture-${clusterId}-diagnostics-namespace`, resourceVersion: '1' } }
+  const uid = `diagnostic/${clusterId}`
+  state.resources['Pod/diagnostics/diagnostics'] = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'diagnostics', namespace: 'diagnostics', uid, resourceVersion: '1', labels: { app: 'diagnostics' } },
+    spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
+  state.connectivity.diagnosticPodUids = [uid]
   seeded = reconcileServices(seeded, clusterId)
   return { sandbox: seeded.sandbox, artifacts: seeded.artifacts, runtime: seeded.runtime, nextSequence: seeded.nextSequence }
 }
