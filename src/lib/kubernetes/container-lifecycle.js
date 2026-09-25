@@ -4,7 +4,7 @@ export function scheduleProbeRestart(container, pod, type, nowMs) {
   const backoff = Math.min(10 * 2 ** container.consecutiveRestarts, 300) * 1000
   container.ready = false
   container.terminatedAtMs = nowMs + grace
-  container.restartAtMs = nowMs + backoff
+  container.restartAtMs = container.terminatedAtMs + backoff
   container.restartDelayMs = backoff
   for (const check of Object.values(container.checks)) if (check) { check.nextAtMs = null; check.pending = null }
   container.restartReason = type === 'startup' ? 'StartupProbeFailed' : 'LivenessProbeFailed'
