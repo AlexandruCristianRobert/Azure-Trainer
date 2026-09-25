@@ -28,21 +28,27 @@ def live():
 const integrationApp = INTEGRATION_SOLUTION_FILES['app.py']
 const deployment = INTEGRATION_SOLUTION_FILES['k8s/deployment.yaml'].replace('          ports:', '          imagePullPolicy: Always\n          ports:')
 const probeFields = `          startupProbe:
-            httpGet: {path: /health/startup, port: http}
+            httpGet:
+              path: /health/startup
+              port: http
             initialDelaySeconds: 0
             periodSeconds: 5
             timeoutSeconds: 1
             failureThreshold: 6
             successThreshold: 1
           readinessProbe:
-            httpGet: {path: /health/ready, port: http}
+            httpGet:
+              path: /health/ready
+              port: http
             initialDelaySeconds: 0
             periodSeconds: 2
             timeoutSeconds: 1
             failureThreshold: 1
             successThreshold: 1
           livenessProbe:
-            httpGet: {path: /health/live, port: http}
+            httpGet:
+              path: /health/live
+              port: http
             initialDelaySeconds: 0
             periodSeconds: 5
             timeoutSeconds: 1
