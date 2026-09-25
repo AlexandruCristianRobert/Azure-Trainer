@@ -141,4 +141,21 @@ describe('guided AKS deployment Lab', () => {
     expect(store.taskStates.find(task => task.id === 'python-source').done).toBe(true)
     expect(store.isComplete).toBe(false)
   })
+
+  it('shows valid Tasks after Kubernetes state enters reactive Pinia', async () => {
+    const { createPinia, setActivePinia } = await import('pinia')
+    const { useLabRunStore } = await import('../src/stores/labRun.js')
+    const { behavioralRepository } = await import('./helpers/behavioralRepository.js')
+    const { fakeLocalStorage } = await import('./helpers/fakeLocalStorage.js')
+    globalThis.localStorage = fakeLocalStorage()
+    setActivePinia(createPinia())
+    const store = useLabRunStore()
+    await store.load(aksDeployGuidedLab.id, { repository: behavioralRepository(), lab: aksDeployGuidedLab })
+    const run = executeAll(createBehavioralRun(aksDeployGuidedLab, { attemptId: 'reactive-pods' }), { skip: ['info', 'replacement'] })
+    store.behavioralRun = run
+    expect(store.taskStates.map(task => [task.id, task.done])).toEqual(
+      evaluateLab(aksDeployGuidedLab, run).tasks.map(task => [task.id, task.done]),
+    )
+    expect(store.doneCount).toBe(6)
+  })
 })

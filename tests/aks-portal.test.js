@@ -2,6 +2,17 @@ import { expect, it } from 'vitest'
 import { projectKubernetesInspection } from '../src/lib/kubernetes/inspection.js'
 import { seedFoundation } from './helpers/aks.js'
 import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
+import { reactive } from 'vue'
+
+it('projects a reactive store run without leaking Vue proxies into inspection', () => {
+  const { run, clusterId } = seedFoundation()
+  const before = structuredClone(run)
+  const view = projectKubernetesInspection(reactive(run), clusterId)
+  expect(view.cluster.id).toBe(clusterId)
+  expect(view.pods).toHaveLength(2)
+  expect(run).toEqual(before)
+  expect(structuredClone(view)).toEqual(view)
+})
 
 it('projects only the selected cluster without mutating the run', () => {
   const { run, clusterId } = seedFoundation()

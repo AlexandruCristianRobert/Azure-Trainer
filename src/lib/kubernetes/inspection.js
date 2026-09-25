@@ -1,4 +1,6 @@
-const copy = value => structuredClone(value)
+// Store runs are reactive in the portal; inspection data is JSON-only and must
+// leave the view as plain, cloneable objects.
+const copy = value => JSON.parse(JSON.stringify(value))
 const byName = (left, right) => String(left.metadata?.name ?? left.name).localeCompare(String(right.metadata?.name ?? right.name))
 
 export function projectKubernetesInspection(run, clusterId) {

@@ -102,7 +102,7 @@ export const useLabRunStore = defineStore('labRun', {
     },
     taskStates() {
       if (!this.lab) return []
-      if (isBehavioral(this)) return evaluateLab(this.lab, this.behavioralRun).tasks
+      if (isBehavioral(this)) return evaluateLab(this.lab, toRaw(this.behavioralRun)).tasks
       const evaluation = evaluateLab(this.lab, { sandbox: this.sandbox })
       return this.lab.tasks.map((t, index) => ({ ...t, index, done: evaluation.tasks[index].done }))
     },
@@ -354,7 +354,7 @@ export const useLabRunStore = defineStore('labRun', {
             usePortalStore().notify('Lab completed', context.lab.title)
             usePortalStore().showToast('Lab completed', context.lab.title)
           }
-        } else if (!this.completedAt && evaluateLab(context.lab, this.behavioralRun).isComplete) {
+        } else if (!this.completedAt && evaluateLab(context.lab, toRaw(this.behavioralRun)).isComplete) {
           await this.completeBehavioral()
         }
         return settled
@@ -407,7 +407,7 @@ export const useLabRunStore = defineStore('labRun', {
           if (generation !== this.generation || !settled) return null
           projectBehavioral(this, settled)
           deliverBehavioralEffects(this, context, settled, { preserveDiagnostics: action.type === 'elapsed' })
-          if (!this.completedAt && evaluateLab(context.lab, this.behavioralRun).isComplete) await this.completeBehavioral()
+          if (!this.completedAt && evaluateLab(context.lab, toRaw(this.behavioralRun)).isComplete) await this.completeBehavioral()
           return settled
         } catch (error) {
           if (generation === this.generation) projectBehavioral(this, context.session.snapshot())
