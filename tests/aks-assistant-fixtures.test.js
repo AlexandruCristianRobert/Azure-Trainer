@@ -49,6 +49,10 @@ describe('simulated Knowledge Assistant fixtures', () => {
     const snapshot = makeTrainingSnapshot()
     expect(simulateAssistant(appSpec, { ...snapshot, files: {} }, request, KNOWLEDGE_FIXTURES).diagnostic.code).toBe('CONFIG_FILE_MISSING')
     expect(simulateAssistant(appSpec, { ...snapshot, files: { ...snapshot.files, '/etc/assistant/settings.json': '{' } }, request, KNOWLEDGE_FIXTURES).diagnostic.code).toBe('CONFIG_FILE_INVALID')
+    expect(simulateAssistant(appSpec, { ...snapshot, files: { ...snapshot.files, '/etc/assistant/settings.json': '{}' } }, request, KNOWLEDGE_FIXTURES))
+      .toMatchObject({ status: 503, diagnostic: { code: 'APP_CONFIGURATION' } })
+    expect(simulateAssistant(appSpec, { ...snapshot, files: { ...snapshot.files, '/etc/assistant/settings.json': '{"display_name":{"error":"FORGED"},"response_prefix":""}' } }, request, KNOWLEDGE_FIXTURES))
+      .toMatchObject({ status: 503, diagnostic: { code: 'APP_CONFIGURATION' } })
   })
 
   it('rejects an altered fixed helper adapter and a hardcoded answer bypass', () => {

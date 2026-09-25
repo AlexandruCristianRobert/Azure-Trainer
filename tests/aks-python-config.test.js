@@ -30,4 +30,11 @@ describe('AKS Python configuration projection', () => {
       .replace('        "pg_host": os.environ.get("PGHOST", ""),', '        # "pg_host": os.environ.get("PGHOST", "")\n        "pg_host": "",') }
     expect(parsePythonProject(forged, CONFIG_MANIFEST).diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
   })
+
+  it('rejects non-text service identity constants', () => {
+    const invalid = { ...CONFIG_SOLUTION_FILES, 'app.py': CONFIG_SOLUTION_FILES['app.py']
+      .replace('SERVICE_NAME = "knowledge-assistant"', 'SERVICE_NAME = 123') }
+    expect(parsePythonProject(invalid, CONFIG_MANIFEST).diagnostics)
+      .toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
+  })
 })

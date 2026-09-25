@@ -88,6 +88,8 @@ function parseAssistantProject(files, manifest, text, tree) {
     diagnostics.push(diag('PYTHON_UNSUPPORTED', 'This top-level Python statement is outside the supported teaching subset.', 'app.py', text, statement.from))
   }
   if (['import os', 'import json', 'from pathlib import Path', 'import training_runtime'].some(value => !imports.has(value))) diagnostics.push(diag('PYTHON_UNSUPPORTED', 'Import the supported settings and assistant helpers.', 'app.py', text))
+  if (typeof constants.SERVICE_NAME !== 'string' || typeof constants.SERVICE_VERSION !== 'string')
+    diagnostics.push(diag('PYTHON_UNSUPPORTED', 'Service name and version must be text literals.', 'app.py', text))
   if (!functions.settings || !functions.answer || !functions.info) diagnostics.push(diag('PYTHON_UNSUPPORTED', 'Define settings(), answer(question), and info().', 'app.py', text))
   if (functions.settings?.params && text.slice(functions.settings.params.from, functions.settings.params.to).replace(/[\s(),]/g, '') !== '') diagnostics.push(diag('PYTHON_UNSUPPORTED', 'settings() must be parameterless.', 'app.py', text, functions.settings.params.from))
   if (functions.answer?.params && text.slice(functions.answer.params.from, functions.answer.params.to).replace(/[\s(),]/g, '') !== 'question') diagnostics.push(diag('PYTHON_UNSUPPORTED', 'answer() must accept only question.', 'app.py', text, functions.answer.params.from))
@@ -129,7 +131,8 @@ function parseAssistantProject(files, manifest, text, tree) {
   return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT,
     routes: [{ method: 'GET', path: '/api/info', response: infoValues }, { method: 'POST', path: '/api/ask', response: { kind: 'assistant', settings: settingValues } }],
     assistant: { adapter: 'knowledge-fixture-v1', settingsFunction: 'settings', helperValid: true } }, diagnostics: [] }
-}export function parsePythonProject(files, manifest = {}) {
+}
+export function parsePythonProject(files, manifest = {}) {
   const text = files?.['app.py']; if (typeof text !== 'string') return { appSpec: null, diagnostics: [diag('MISSING_FILE', 'A required Python source file is missing.')] }
   const { tree, diagnostics } = syntax(text, manifest.maxTokens ?? 20_000); if (diagnostics.length) return { appSpec: null, diagnostics }
   if (manifest.assistant) return parseAssistantProject(files, manifest, text, tree)

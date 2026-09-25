@@ -1,13 +1,15 @@
 function result(status, code, message, trace = [], body = { error: 'The supplied assistant dependency is unavailable.' }) {
   return { status, body, dependencyTrace: trace, diagnostic: { code, message } }
 }
+const missingFile = Symbol('missing mounted settings file')
+const invalidFile = Symbol('invalid mounted settings file')
 function resolve(expression, snapshot) {
   if (expression?.kind === 'literal') return expression.value
   if (expression?.kind === 'config') return snapshot.environment?.[expression.key] ?? expression.defaultValue
   if (expression?.kind === 'file-json') {
     const source = snapshot.files?.[expression.path]
-    if (typeof source !== 'string') return { error: 'CONFIG_FILE_MISSING' }
-    try { return JSON.parse(source)?.[expression.key] } catch { return { error: 'CONFIG_FILE_INVALID' } }
+    if (typeof source !== 'string') return missingFile
+    try { return JSON.parse(source)?.[expression.key] } catch { return invalidFile }
   }
   return undefined
 }
@@ -24,8 +26,10 @@ export function simulateAssistant(appSpec, podSnapshot, request, fixtureCatalog)
   const question = typeof request.body?.question === 'string' ? request.body.question.trim() : ''
   if (!question) return result(400, 'QUESTION_REQUIRED', 'Enter a question before asking.', trace, { error: 'A question is required.' })
   const settings = Object.fromEntries(Object.entries(route.response.settings ?? {}).map(([key, expression]) => [key, resolve(expression, podSnapshot)]))
-  const fileError = Object.values(settings).find(value => value?.error)
-  if (fileError) return result(503, fileError.error, fileError.error === 'CONFIG_FILE_MISSING' ? 'The mounted settings file is missing.' : 'The mounted settings file is not valid JSON.', trace)
+  if (Object.values(settings).includes(missingFile)) return result(503, 'CONFIG_FILE_MISSING', 'The mounted settings file is missing.', trace)
+  if (Object.values(settings).includes(invalidFile)) return result(503, 'CONFIG_FILE_INVALID', 'The mounted settings file is not valid JSON.', trace)
+  if (typeof settings.display_name !== 'string' || typeof settings.response_prefix !== 'string')
+    return result(503, 'APP_CONFIGURATION', 'The mounted assistant settings require text display fields.', trace)
   const profile = Object.values(fixtureCatalog.profiles).find(item => item.AI_ENDPOINT === settings.ai_endpoint)
   if (!profile) return result(502, 'AI_ENDPOINT', 'The configured AI endpoint is unavailable.', trace)
   if (settings.embedding_deployment !== profile.EMBEDDING_DEPLOYMENT) return result(502, 'AI_DEPLOYMENT', 'The configured embedding deployment is unavailable.', trace)
