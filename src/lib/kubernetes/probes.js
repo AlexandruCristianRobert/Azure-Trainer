@@ -146,7 +146,9 @@ export function processProbeTimestamp(input, atMs, lab) {
     // become Ready.  Warmup is not part of a scenario's relative timeline.
     const elapsedSeconds = script && Number.isFinite(experiment.baselineReadyAtMs)
       ? (atMs - experiment.baselineReadyAtMs) / 1000 : -1
-    const activeFault = script && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
+    const terminatedFault = script?.endOnContainerTermination === true
+      && state.health.receipts?.some(item => item.cause === 'probe' && item.probeType === 'liveness')
+    const activeFault = script && !terminatedFault && elapsedSeconds >= (script.startAfterStartSeconds ?? Infinity)
       && (script.endAfterStartSeconds === undefined || elapsedSeconds < script.endAfterStartSeconds)
     const kind = String(script?.kind ?? '').toLowerCase()
     const dependencySignals = {
