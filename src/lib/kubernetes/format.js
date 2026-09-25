@@ -34,6 +34,8 @@ export function describeObject(resource, state) {
       && item.spec.containers.some(container => container.ports?.some(port => targetPort === port.containerPort || targetPort === port.name)))
     lines.push(`Type: ${resource.spec.type}`, `Endpoints: ${backends.map(item => item.metadata.name).join(', ') || '<none>'}`)
   }
+  if (resource.kind === 'ConfigMap') lines.push(`Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
+  if (resource.kind === 'Secret') lines.push(`Type: ${resource.type ?? 'Opaque'}`, `Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
   if (resource.kind === 'Pod') {
     lines.push(`Status: ${resource.status.phase}`, `Image: ${resource.spec.containers[0].image}`)
     const waiting = resource.status.containerStatuses?.find(item => item.state?.waiting)?.state.waiting

@@ -1,4 +1,5 @@
 import { validateKubernetesObject } from './schema.js'
+import { scheduleConfigurationProjection } from './configuration.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -7,7 +8,7 @@ const canonical = value => {
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
 }
-const desiredObject = value => ({ apiVersion: value.apiVersion, kind: value.kind, metadata: canonical({ name: value.metadata.name, ...(value.metadata.namespace ? { namespace: value.metadata.namespace } : {}), ...(value.metadata.labels ? { labels: value.metadata.labels } : {}) }), ...(value.spec ? { spec: canonical(value.spec) } : {}) })
+const desiredObject = value => ({ apiVersion: value.apiVersion, kind: value.kind, metadata: canonical({ name: value.metadata.name, ...(value.metadata.namespace ? { namespace: value.metadata.namespace } : {}), ...(value.metadata.labels ? { labels: value.metadata.labels } : {}) }), ...(value.spec ? { spec: canonical(value.spec) } : {}), ...(value.type ? { type: value.type } : {}), ...(value.data ? { data: canonical(value.data) } : {}) })
 
 export function applyKubernetesObjects(run, documents, options = {}, lab) {
   const clusterId = options.clusterId
@@ -15,7 +16,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
   let next = clone(run); const diagnostics = []; const lines = []
   if (!state) return { run, lines, diagnostics: [{ code: 'KUBE_CLUSTER_NOT_FOUND', message: 'The selected Kubernetes cluster is unavailable.' }] }
   for (let i = 0; i < documents.length; i++) {
-    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment') }, sourceLocation: options.locations?.[i] })
+    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
     const ns = object.metadata.namespace ?? ''
@@ -30,6 +31,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
     const generation = object.kind === 'Deployment' ? (old ? (JSON.stringify(old.spec) === JSON.stringify(object.spec) ? old.metadata.generation : (old.metadata.generation ?? 1) + 1) : 1) : undefined
     next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
+    if (object.kind === 'ConfigMap' || object.kind === 'Secret') next = scheduleConfigurationProjection(next, clusterId, key)
     lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} ${old ? 'configured' : 'created'}`, kind: 'out' })
   }
   return { run: next, lines, diagnostics }

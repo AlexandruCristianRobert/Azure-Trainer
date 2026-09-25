@@ -1,4 +1,5 @@
 import { kubeObjectKey } from './objects.js'
+import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 
 const clone = value => structuredClone(value)
@@ -24,8 +25,15 @@ function capturePod(run, pod, artifactId) {
   const source = run.artifacts.sourceSnapshotsByHash[artifact.sourceHash]
   if (!source) return
   run.runtime.kubernetes.clusters[pod.clusterId].podSnapshots[pod.metadata.uid] = {
-    artifactId, templateHash: hash(pod.template), environment: Object.fromEntries((c.env ?? []).map(x => [x.name, x.value])), files: clone(source.files), configRefs: [],
+    artifactId, templateHash: hash(pod.template), environment: { ...Object.fromEntries((c.env ?? []).map(x => [x.name, x.value])), ...pod.configuration.environment }, files: { ...clone(source.files), ...pod.configuration.files }, configRefs: pod.configuration.configRefs,
   }
+}
+
+function waitingConfiguration(state, pod, diagnostics) {
+  const issue = diagnostics[0]
+  const reason = issue.mount ? 'FailedMount' : 'CreateContainerConfigError'
+  pod.status = { phase: 'Pending', containerStatuses: [{ name: pod.spec.containers[0].name, state: { waiting: { reason } } }] }
+  addEvent(state, reason, `${issue.message}`, pod.metadata.namespace)
 }
 
 function createPod(run, cluster, deployment, replicaSet, ordinal) {
@@ -34,7 +42,8 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   const container = template.spec.containers[0]
   const artifactId = run.artifacts.publishedTags[container.image]
   const grant = hasKubeletPull(run.sandbox, cluster, container.image)
-  const reason = !grant ? 'RegistryAccessDenied' : !artifactId ? 'ImageNotFound' : null
+  const configuration = resolvePodConfiguration(state.resources, deployment.metadata.namespace, template.spec)
+  const reason = !grant ? 'RegistryAccessDenied' : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const uid = `kube-${run.nextSequence++}`
   const podName = `${deployment.metadata.name}-${hash(template)}-${ordinal}-${uid.slice(5)}`
   const value = {
@@ -42,8 +51,10 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
     spec: clone(template.spec), status: reason ? { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] } : { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
   }
   state.resources[kubeObjectKey('Pod', value.metadata.namespace, podName)] = value
-  if (reason) addEvent(state, reason, `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
-  else capturePod(run, { ...value, clusterId: cluster.id, template }, artifactId)
+  if (reason) {
+    if (configuration.diagnostics.length && grant && artifactId) waitingConfiguration(state, value, configuration.diagnostics)
+    else addEvent(state, reason, `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
+  } else capturePod(run, { ...value, clusterId: cluster.id, template, configuration }, artifactId)
   return value
 }
 
@@ -51,8 +62,9 @@ function retryPendingPod(run, cluster, deployment, pod) {
   if (pod.status?.phase !== 'Pending') return
   const container = pod.spec.containers[0]
   const artifactId = run.artifacts.publishedTags[container.image]
+  const configuration = resolvePodConfiguration(run.runtime.kubernetes.clusters[cluster.id].resources, deployment.metadata.namespace, deployment.spec.template.spec)
   const reason = !hasKubeletPull(run.sandbox, cluster, container.image) ? 'RegistryAccessDenied'
-    : !artifactId ? 'ImageNotFound' : null
+    : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const previous = pod.status.containerStatuses?.[0]?.state?.waiting?.reason
   if (reason === previous) return
   if (reason) {
@@ -61,7 +73,7 @@ function retryPendingPod(run, cluster, deployment, pod) {
       `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
   } else {
     pod.status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] }
-    capturePod(run, { ...pod, clusterId: cluster.id, template: deployment.spec.template }, artifactId)
+    capturePod(run, { ...pod, clusterId: cluster.id, template: deployment.spec.template, configuration }, artifactId)
   }
 }
 

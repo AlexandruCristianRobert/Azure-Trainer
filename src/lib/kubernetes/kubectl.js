@@ -4,8 +4,8 @@ import { reconcileKubernetes, getDeploymentPods, getPodTemplateHash } from './re
 import { validateKubernetesObject } from './schema.js'
 import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 
-const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', service: 'Service', services: 'Service', svc: 'Service', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
-const namespaced = new Set(['Pod', 'Deployment', 'Service', 'ReplicaSet', 'Event'])
+const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', service: 'Service', services: 'Service', svc: 'Service', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
+const namespaced = new Set(['Pod', 'Deployment', 'Service', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
 const out = text => ({ text, kind: 'out' }), err = text => ({ text, kind: 'err' })
 const response = (sandbox, lines, effects) => ({ sandbox, lines, events: [], latencyMs: 0, ...(effects ? { effects } : {}) })
 
@@ -77,7 +77,7 @@ function apply(run, selection, options, lab) {
   if (options.dryRun) {
     if (options.dryRun !== 'client' || !['json', 'yaml'].includes(options.output)) return response(run.sandbox, [err('Only --dry-run=client with -o json or -o yaml is supported.')])
     for (let i = 0; i < source.documents.length; i++) {
-      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, sourceLocation: source.locations[i] })
+      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true }, sourceLocation: source.locations[i] })
       if (checked.diagnostics.length) return response(run.sandbox, [err(`Error: ${checked.diagnostics[0].message}`)])
     }
     const value = source.documents.length === 1 ? source.documents[0] : source.documents
@@ -117,7 +117,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   }
   if (verb === 'describe') {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
-    if (!['Deployment', 'Pod', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('describe requires deployment, pod, or service NAME.')])
+    if (!['Deployment', 'Pod', 'Service', 'ConfigMap', 'Secret'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('describe requires deployment, pod, service, configmap, or secret NAME.')])
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const found = resources(selection.state, kind, selection.namespace).find(item => item.metadata.name === name)
     return found ? response(sandbox, [out(describeObject(found, selection.state))]) : response(sandbox, [err(`${kind} '${name}' was not found.`)])

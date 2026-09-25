@@ -37,7 +37,7 @@ function validClusterState(state, run) {
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
-  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1' }
+  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1' }
   for (const [key, resource] of resources) {
     if (!isPlainObject(resource) || typeof resource.apiVersion !== 'string' || typeof resource.kind !== 'string'
       || !isPlainObject(resource.metadata) || typeof resource.metadata.name !== 'string' || !resource.metadata.name
@@ -50,7 +50,7 @@ function validClusterState(state, run) {
     if (key !== `${resource.kind}/${namespace}/${resource.metadata.name}` || uids.has(resource.metadata.uid)) return false
     uids.add(resource.metadata.uid)
   }
-  const declaredObjects = resources.filter(([, resource]) => ['Namespace', 'Deployment', 'Service'].includes(resource.kind))
+  const declaredObjects = resources.filter(([, resource]) => ['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret'].includes(resource.kind))
   const deployments = declaredObjects.filter(([, resource]) => resource.kind === 'Deployment').map(([, resource]) => resource)
   for (const [, resource] of declaredObjects) {
     const desired = {
@@ -58,8 +58,10 @@ function validClusterState(state, run) {
       kind: resource.kind,
       metadata: { name: resource.metadata.name, ...(resource.metadata.namespace === undefined ? {} : { namespace: resource.metadata.namespace }), ...(resource.metadata.labels === undefined ? {} : { labels: resource.metadata.labels }) },
       ...(resource.spec === undefined ? {} : { spec: resource.spec }),
+      ...(resource.type === undefined ? {} : { type: resource.type }),
+      ...(resource.data === undefined ? {} : { data: resource.data }),
     }
-    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments } }).diagnostics.length) return false
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
   for (const [, resource] of resources) {
@@ -90,14 +92,14 @@ function validClusterState(state, run) {
     const image = pod?.spec?.containers?.[0]?.image
     const artifact = run.artifacts.buildsById?.[snapshot?.artifactId]
     const source = artifact && run.artifacts.sourceSnapshotsByHash?.[artifact.sourceHash]
-    const environment = Object.fromEntries((pod?.spec?.containers?.[0]?.env ?? []).map(item => [item.name, item.value]))
     const imageKeyMatches = artifact && `${artifact.image.loginServer}/${artifact.image.repository}:${artifact.image.tag}` === image
     if (!pod || pod.kind !== 'Pod' || pod.status?.phase !== 'Running' || !deployment || deployment.kind !== 'Deployment'
       || !isPlainObject(snapshot) || typeof snapshot.artifactId !== 'string' || typeof snapshot.templateHash !== 'string'
-      || !isPlainObject(snapshot.environment) || JSON.stringify(snapshot.environment) !== JSON.stringify(environment)
-      || !isPlainObject(snapshot.files) || !source || JSON.stringify(snapshot.files) !== JSON.stringify(source.files)
+      || !isPlainObject(snapshot.environment) || !Object.values(snapshot.environment).every(value => typeof value === 'string')
+      || !isPlainObject(snapshot.files) || !source || !Object.entries(source.files).every(([path, text]) => snapshot.files[path] === text)
       || !validCapturedArtifact(artifact, source, run)
-      || !imageKeyMatches || !Array.isArray(snapshot.configRefs)) return false
+      || !imageKeyMatches || !Array.isArray(snapshot.configRefs)
+      || !snapshot.configRefs.every(item => isPlainObject(item) && ['ConfigMap', 'Secret'].includes(item.kind) && typeof item.namespace === 'string' && typeof item.name === 'string' && typeof item.key === 'string' && ['env', 'file'].includes(item.mode) && typeof item.target === 'string')) return false
   }
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' && resource.status?.phase === 'Running' && !Object.hasOwn(state.podSnapshots, resource.metadata.uid)) return false
@@ -105,7 +107,7 @@ function validClusterState(state, run) {
   }
   return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
     && new Set(state.receipts.map(receipt => receipt.sequence)).size === state.receipts.length
-    && Object.values(state.projectionDue).every(value => Number.isFinite(value) && value >= 0)
+    && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
 function validCapturedArtifact(artifact, source, run) {

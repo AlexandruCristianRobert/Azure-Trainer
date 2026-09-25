@@ -1,4 +1,4 @@
-const allowedKinds = new Set(['Namespace', 'Deployment', 'Service'])
+const allowedKinds = new Set(['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret'])
 const namePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 const labelNamePattern = /^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/
 const validDnsName = value => typeof value === 'string' && value.length <= 63 && namePattern.test(value)
@@ -48,8 +48,16 @@ function metadata(value, root, namespaced, selectedNamespace) {
   return null
 }
 
-function validateContainer(container, root) {
-  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env']), root)
+function configurationReference(value, root, kind) {
+  const issue = allowed(value, new Set(['name', 'key', 'optional']), root)
+  if (issue) return issue
+  if (named(value?.name, root) || typeof value?.key !== 'string' || !value.key || value.key.includes('/')) return diag('INVALID_CONFIG_REFERENCE', value?.name, root, 'Configuration references require a name and key.')
+  if (value.optional !== undefined && typeof value.optional !== 'boolean') return diag('INVALID_CONFIG_OPTIONAL', value.optional, root, 'Configuration optional must be a boolean.')
+  return null
+}
+
+function validateContainer(container, root, configuration) {
+  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env', ...(configuration ? ['volumeMounts'] : [])]), root)
   if (issue) return issue
   issue = named(container?.name, root, 'container name')
   if (issue) return issue
@@ -66,17 +74,35 @@ function validateContainer(container, root) {
   if (!Number.isInteger(port.containerPort) || port.containerPort < 1 || port.containerPort > 65535) return diag('INVALID_CONTAINER_PORT', port?.containerPort, root)
   if (container.env !== undefined) {
     if (!Array.isArray(container.env)) return diag('INVALID_ENV', 'env', root)
+    const names = new Set()
     for (const entry of container.env) {
-      issue = allowed(entry, new Set(['name', 'value']), root)
+      issue = allowed(entry, new Set(['name', 'value', ...(configuration ? ['valueFrom'] : [])]), root)
       if (issue) return issue
-      if (typeof entry.name !== 'string' || !entry.name) return diag('INVALID_ENV_NAME', entry?.name, root)
-      if (typeof entry.value !== 'string') return diag('INVALID_ENV_VALUE', entry?.value, root, 'Environment values must be strings.')
+      if (typeof entry.name !== 'string' || !entry.name || names.has(entry.name)) return diag('INVALID_ENV_NAME', entry?.name, root, 'Environment names must be unique strings.')
+      names.add(entry.name)
+      if ((entry.value === undefined) === (entry.valueFrom === undefined)) return diag('INVALID_ENV_SOURCE', entry.name, root, 'Environment entries require exactly one literal value or valueFrom.')
+      if (entry.value !== undefined && typeof entry.value !== 'string') return diag('INVALID_ENV_VALUE', entry?.value, root, 'Environment values must be strings.')
+      if (entry.valueFrom !== undefined) {
+        issue = allowed(entry.valueFrom, new Set(['configMapKeyRef', 'secretKeyRef']), root)
+        if (issue || (entry.valueFrom.configMapKeyRef === undefined) === (entry.valueFrom.secretKeyRef === undefined)) return issue ?? diag('INVALID_ENV_SOURCE', entry.name, root, 'valueFrom requires exactly one supported key reference.')
+        issue = configurationReference(entry.valueFrom.configMapKeyRef ?? entry.valueFrom.secretKeyRef, root)
+        if (issue) return issue
+      }
+    }
+  }
+  if (container.volumeMounts !== undefined) {
+    if (!Array.isArray(container.volumeMounts)) return diag('INVALID_VOLUME_MOUNTS', 'volumeMounts', root)
+    const names = new Set(); const paths = new Set()
+    for (const mount of container.volumeMounts) {
+      issue = allowed(mount, new Set(['name', 'mountPath', 'readOnly']), root)
+      if (issue || named(mount?.name, root) || typeof mount?.mountPath !== 'string' || !mount.mountPath.startsWith('/') || mount.mountPath.includes('..') || mount.readOnly !== true || names.has(mount.name) || paths.has(mount.mountPath)) return issue ?? diag('INVALID_VOLUME_MOUNT', mount?.name, root, 'Volume mounts require a unique name, absolute path, and readOnly: true.')
+      names.add(mount.name); paths.add(mount.mountPath)
     }
   }
   return null
 }
 
-function validateDeployment(value, root) {
+function validateDeployment(value, root, configuration) {
   let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template']), root)
   if (issue) return issue
   if (!Number.isInteger(value.spec?.replicas) || value.spec.replicas < 1 || value.spec.replicas > 3) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
@@ -89,9 +115,45 @@ function validateDeployment(value, root) {
   for (const [key, label] of Object.entries(value.spec.selector.matchLabels)) {
     if (typeof label !== 'string' || value.spec.template.metadata.labels[key] !== label) return diag('KUBE_SELECTOR_MISMATCH', key, root, 'Deployment selector labels must match Pod-template labels.')
   }
-  issue = allowed(value.spec.template.spec, new Set(['containers']), root)
+  issue = allowed(value.spec.template.spec, new Set(['containers', ...(configuration ? ['volumes'] : [])]), root)
   if (issue || !Array.isArray(value.spec.template.spec?.containers) || value.spec.template.spec.containers.length !== 1) return issue ?? diag('INVALID_CONTAINERS', 'containers', root, 'Exactly one container is required.')
-  return validateContainer(value.spec.template.spec.containers[0], root)
+  issue = validateContainer(value.spec.template.spec.containers[0], root, configuration)
+  if (issue) return issue
+  if (value.spec.template.spec.volumes !== undefined) {
+    if (!Array.isArray(value.spec.template.spec.volumes)) return diag('INVALID_VOLUMES', 'volumes', root)
+    const names = new Set(); const mountNames = new Set(value.spec.template.spec.containers[0].volumeMounts?.map(item => item.name) ?? [])
+    for (const volume of value.spec.template.spec.volumes) {
+      issue = allowed(volume, new Set(['name', 'configMap', 'secret']), root)
+      if (issue || named(volume?.name, root) || names.has(volume.name) || !mountNames.has(volume.name) || (volume.configMap === undefined) === (volume.secret === undefined)) return issue ?? diag('INVALID_VOLUME', volume?.name, root, 'Volumes require a unique mounted ConfigMap or Secret.')
+      names.add(volume.name)
+      const source = volume.configMap ?? volume.secret
+      issue = allowed(source, new Set(['name', 'items']), root)
+      if (issue || named(source?.name, root)) return issue ?? diag('INVALID_VOLUME_SOURCE', source?.name, root)
+      if (source.items !== undefined) {
+        if (!Array.isArray(source.items)) return diag('INVALID_VOLUME_ITEMS', 'items', root)
+        const paths = new Set()
+        for (const item of source.items) {
+          issue = allowed(item, new Set(['key', 'path']), root)
+          if (issue || typeof item?.key !== 'string' || !item.key || typeof item?.path !== 'string' || !item.path || item.path.startsWith('/') || item.path.includes('..') || paths.has(item.path)) return issue ?? diag('INVALID_VOLUME_ITEM', item?.path, root, 'Volume items require safe unique key paths.')
+          paths.add(item.path)
+        }
+      }
+    }
+  }
+  return null
+}
+
+function validateConfigMap(value, root) {
+  if (!object(value.data) || !Object.values(value.data).every(item => typeof item === 'string')) return diag('INVALID_CONFIGMAP_DATA', 'data', root, 'ConfigMap data must be a string map.')
+  return null
+}
+
+function validBase64(value) { return typeof value === 'string' && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) }
+function validateSecret(value, root) {
+  if (value.type !== undefined && value.type !== 'Opaque') return diag('INVALID_SECRET_TYPE', value.type, root, 'Only Opaque Secrets are supported.')
+  if (value.data !== undefined && (!object(value.data) || !Object.values(value.data).every(validBase64))) return diag('INVALID_SECRET_DATA', 'data', root, 'Secret data must use valid base64 values.')
+  if (value.stringData !== undefined && (!object(value.stringData) || !Object.values(value.stringData).every(item => typeof item === 'string'))) return diag('INVALID_SECRET_STRING_DATA', 'stringData', root, 'Secret stringData must be a string map.')
+  return null
 }
 
 function matchingDeployment(deployments, service) {
@@ -125,9 +187,10 @@ function validateService(value, root, capabilities) {
 export function validateKubernetesObject(input, { namespace, capabilities = {}, sourceLocation } = {}) {
   const root = { sourceLocation }
   if (!object(input)) return { object: null, diagnostics: [diag('INVALID_OBJECT', 'A Kubernetes object is required.', root)] }
-  let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec']), root)
+  const configuration = capabilities.kubernetesConfiguration === true
+  let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
-  if (!allowedKinds.has(input.kind)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
+  if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
   const namespaced = input.kind !== 'Namespace'
   const resolvedNamespace = namespaced ? namespace ?? input.metadata?.namespace : undefined
   if (namespaced && !validDnsName(resolvedNamespace)) return { object: null, diagnostics: [diag('INVALID_NAMESPACE', resolvedNamespace, root)] }
@@ -137,11 +200,14 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   if (issue) return { object: null, diagnostics: [issue] }
   if (input.kind === 'Namespace') {
     if (input.spec !== undefined) return { object: null, diagnostics: [diag('UNSUPPORTED_FIELD', 'spec', root)] }
-  } else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
-  else if (input.kind === 'Deployment') issue = validateDeployment(input, root)
+  } else if (input.kind === 'ConfigMap') { if (input.spec !== undefined || input.type !== undefined || input.stringData !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateConfigMap(input, root) }
+  else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
+  else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
+  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration)
   else issue = validateService(input, root, capabilities)
   if (issue) return { object: null, diagnostics: [issue] }
   const output = clone(input)
+  if (output.kind === 'Secret') { output.type ??= 'Opaque'; output.data = { ...(output.data ?? {}), ...(output.stringData ? Object.fromEntries(Object.entries(output.stringData).map(([key, value]) => [key, btoa(value)])) : {}) }; delete output.stringData }
   if (namespaced && output.metadata.namespace === undefined) output.metadata.namespace = resolvedNamespace
   return { object: output, diagnostics: [] }
 }
