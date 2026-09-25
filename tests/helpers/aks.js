@@ -15,12 +15,28 @@ export function makeAksLab(overrides = {}) {
 
 export function act(run, lab, action) {
   const result = applyRunAction(run, action, lab)
-  const errors = (result.lines ?? []).filter(line => /^\s*(ERROR|Error:)/.test(String(line)))
-  if (result.diagnostics?.length || errors.length) throw new Error([...result.diagnostics.map(item => item.message), ...errors].join('\n'))
+  const errors = (result.lines ?? []).filter(line => typeof line === 'string' ? /^\s*(ERROR|Error:)/.test(line) : line.kind === 'err')
+  if (result.diagnostics?.length || errors.length) throw new Error([...result.diagnostics.map(item => item.message), ...errors.map(line => typeof line === 'string' ? line : line.text)].join('\n'))
   return result
 }
 
 export function createAksTestRun(overrides = {}) {
   const lab = makeAksLab(overrides)
   return { lab, run: createBehavioralRun(lab, { attemptId: 'test-aks' }) }
+}
+
+export function seedFoundation({ namespace = 'assistant', version = '1.0' } = {}) {
+  const { lab, run: initial } = createAksTestRun()
+  let run = initial
+  run = act(run, lab, { type: 'command', line: 'az group create -n rgaks01 -l eastus' }).run
+  run = act(run, lab, { type: 'command', line: 'az acr create -g rgaks01 -n acraks01 --sku Basic' }).run
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: run.project.draftFiles['app.py'].replace('"0.1"', `"${version}"`) }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/namespace.yaml', text: `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${namespace}\n` }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: run.project.draftFiles['k8s/deployment.yaml'].replaceAll('assistant', namespace).replace('acraksguided.azurecr.io/assistant:starter', 'acraks01.azurecr.io/assistant:v1').replace('replicas: 1', 'replicas: 2') }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/service.yaml', text: run.project.draftFiles['k8s/service.yaml'].replaceAll('assistant', namespace) }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraks01 -t assistant:v1 .' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks create -g rgaks01 -n aks01 --enable-managed-identity --generate-ssh-keys --attach-acr acraks01' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rgaks01 -n aks01' }).run
+  for (const path of ['k8s/namespace.yaml', 'k8s/deployment.yaml', 'k8s/service.yaml']) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  return { lab, run, clusterId: run.sandbox.aksClusters[0].id }
 }

@@ -20,7 +20,7 @@ import { capstoneStages, cleanupReady, createStageSeal, recoveryCheckpoint, stag
 import { injectCapstoneIncident } from './incident.js'
 import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
-import { emptyClusterState } from '../kubernetes/state.js'
+import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/state.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -87,6 +87,11 @@ export function applyCommandEffects(run, effects, lab) {
       const sameCluster = current?.clusterId === cluster.id
       const contexts = { ...next.runtime.kubernetes.contexts, [effect.name]: { clusterId: cluster.id, namespace: sameCluster ? current.namespace : 'default' } }
       next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext: effect.name } } }
+    } else if (effect.type === 'kubernetes-state') {
+      if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'kubernetes', 'nextSequence'].includes(key)) || !Number.isInteger(effect.nextSequence) || effect.nextSequence < next.nextSequence) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed or unavailable in this Lab.')
+      const candidate = { ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence }
+      if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate)) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed.')
+      next = candidate
     } else if (effect.type === 'publish-build') {
       if (!effect.artifacts || !Number.isInteger(effect.nextSequence) || effect.nextSequence <= next.nextSequence
         || typeof effect.artifacts.buildsById !== 'object' || typeof effect.artifacts.publishedTags !== 'object'
