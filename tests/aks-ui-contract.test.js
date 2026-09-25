@@ -30,3 +30,13 @@ it('labels Python/YAML project state and registers the AKS portal blade', async 
   expect(host).toContain('AksClusterBlade')
   expect(group).toContain("kind: 'aks-cluster'")
 })
+
+it('renders and copies AKS solution step kinds without serializing resolver functions', async () => {
+  const taskRow = await source('components/lab/TaskRow.vue')
+  expect(taskRow).toContain("step.kind === 'inspect'")
+  expect(taskRow).toContain("step.kind === 'scenario'")
+  expect(taskRow).toContain('step.resolver')
+  expect(taskRow).toContain("step.line ?? step.instruction")
+  expect(taskRow).toContain('Inspect')
+  expect(taskRow).toContain('Experiments')
+})

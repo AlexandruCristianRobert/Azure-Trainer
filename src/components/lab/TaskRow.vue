@@ -17,8 +17,15 @@ const emit = defineEmits(['toggle-exam-note', 'reveal-hint', 'reveal-solution'])
 const copied = ref(false)
 const nextHint = computed(() => props.hintsRevealed + 1)
 const steps = computed(() => typeof props.task.solution === 'string' ? null : props.task.solution?.steps ?? [])
-const stepText = (step) => step.kind === 'command' ? step.line : step.kind === 'file' ? `${step.path}\n${step.content}`
-  : step.kind === 'scenario' ? step.instruction : `Send ${step.request.method} ${step.request.path} to ${step.request.appId.split('/').at(-1)}. Expect HTTP ${step.expected?.status}.`
+const stepText = (step) => {
+  if (step.kind === 'command') return step.line ?? step.instruction ?? (step.resolver ? 'Run the resolved command in Cloud Shell.' : '')
+  if (step.kind === 'file') return `${step.path}\n${step.content}`
+  if (step.kind === 'inspect' || step.kind === 'scenario') return step.instruction ?? step.command ?? ''
+  return `Send ${step.request.method} ${step.request.path} to ${step.request.appId.split('/').at(-1)}. Expect HTTP ${step.expected?.status}.`
+}
+const stepLabel = (step) => step.kind === 'command' ? 'Cloud Shell' : step.kind === 'file' ? `Files · ${step.path}`
+  : step.kind === 'inspect' ? 'Inspect' : step.kind === 'scenario' ? 'Experiments' : 'Experiments'
+const stepCode = (step) => step.kind === 'file' ? step.content : step.kind === 'command' ? step.line ?? null : null
 async function copySolution() {
   const value = typeof props.task.solution === 'string' ? props.task.solution : steps.value.map(stepText).join('\n')
   try { await navigator.clipboard.writeText(value); copied.value = true; setTimeout(() => { copied.value = false }, 1500) } catch { /* clipboard unavailable */ }
@@ -43,7 +50,7 @@ async function copySolution() {
       <div v-if="solutionRevealed" class="solution task__indent">
         <div class="solution__head"><span class="solution__label">SOLUTION</span><button type="button" class="solution__copy" @click="copySolution">{{ copied ? 'Copied' : 'Copy' }}</button></div>
         <pre v-if="!steps" class="solution__code">{{ task.solution }}</pre>
-        <ol v-else class="solution__steps"><li v-for="(step, i) in steps" :key="i"><strong>{{ step.kind === 'command' ? 'Cloud Shell' : step.kind === 'file' ? `Files · ${step.path}` : 'Experiments' }}</strong><pre v-if="step.kind === 'command' || step.kind === 'file'">{{ step.line ?? step.content }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
+        <ol v-else class="solution__steps"><li v-for="(step, i) in steps" :key="i"><strong>{{ stepLabel(step) }}</strong><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
       </div>
       <div class="task__actions task__indent">
         <button v-if="hintsRevealed < task.hints.length" type="button" class="task__hint-link" :disabled="helpDisabled" @click="emit('reveal-hint')">Show hint {{ nextHint }}</button>
