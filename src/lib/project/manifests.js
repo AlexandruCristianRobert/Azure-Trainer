@@ -10,6 +10,7 @@ import { BICEP_INDEPENDENT_MANIFEST } from '../../data/templates/containerapps-d
 import { CAPSTONE_MANIFEST } from '../../data/templates/containerapps-dotnet/capstone.js'
 import { FOUNDATION_MANIFEST, INDEPENDENT_FOUNDATION_MANIFEST } from '../../data/templates/aks-python/foundation.js'
 import { CONFIG_MANIFEST } from '../../data/templates/aks-python/configuration.js'
+import { CONFIG_INDEPENDENT_MANIFEST } from '../../data/templates/aks-python/configuration-independent.js'
 
 const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROBE_MANIFEST.id]: PROBE_MANIFEST,
   [INDEPENDENT_PROBE_MANIFEST.id]: INDEPENDENT_PROBE_MANIFEST, [FOUNDRY_MANIFEST.id]: FOUNDRY_MANIFEST,
@@ -18,6 +19,7 @@ const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROB
   [BICEP_TROUBLESHOOTING_MANIFEST.id]: BICEP_TROUBLESHOOTING_MANIFEST,
   [BICEP_INDEPENDENT_MANIFEST.id]: BICEP_INDEPENDENT_MANIFEST,
   [CAPSTONE_MANIFEST.id]: CAPSTONE_MANIFEST, [FOUNDATION_MANIFEST.id]: FOUNDATION_MANIFEST, [CONFIG_MANIFEST.id]: CONFIG_MANIFEST,
-  [INDEPENDENT_FOUNDATION_MANIFEST.id]: INDEPENDENT_FOUNDATION_MANIFEST })
+  [INDEPENDENT_FOUNDATION_MANIFEST.id]: INDEPENDENT_FOUNDATION_MANIFEST,
+  [CONFIG_INDEPENDENT_MANIFEST.id]: CONFIG_INDEPENDENT_MANIFEST })
 
 export function getProjectManifest(manifestId) { return manifests[manifestId] ?? PROJECT_MANIFEST }
