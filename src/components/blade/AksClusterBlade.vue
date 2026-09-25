@@ -32,6 +32,10 @@ const podRows = rows(scoped('pods'), item => ({ name: item.metadata.name, status
 const serviceRows = computed(() => view.value.serviceEndpoints.filter(item => item.namespace === namespace.value).map(item => ({ name: item.name, status: item.type, endpoint: `${item.readyBackends.length} ready: ${item.readyBackends.map(backend => backend.name).join(', ') || 'none'} · ${item.targetPort ?? 'none'} → ${item.resolvedPort ?? 'unresolved'}` })))
 const imageEvents = computed(() => view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['RegistryAccessDenied', 'ImageNotFound'].includes(item.reason))
   .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message })))
+const configurationEvents = computed(() => configCapable.value
+  ? view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['CreateContainerConfigError', 'FailedMount'].includes(item.reason))
+    .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message }))
+  : [])
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -61,6 +65,7 @@ const imageEvents = computed(() => view.value.events.filter(item => item.metadat
     </section>
     <h3 class="blade__section-title">Services</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Type' }, { key: 'endpoint', label: 'Endpoint' }]" :rows="serviceRows" empty-text="No Services in this namespace" />
     <h3 class="blade__section-title">Image-pull events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="imageEvents" empty-text="No image-pull events in this namespace" />
+    <template v-if="configCapable"><h3 class="blade__section-title">Configuration events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="configurationEvents" empty-text="No configuration events in this namespace" /></template>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
 </div></section></template>
 

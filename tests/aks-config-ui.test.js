@@ -80,6 +80,27 @@ describe('AKS configuration inspection UI support', () => {
     expect(blade).not.toContain('training-only-password')
   })
 
+  it('shows configuration events for Pending Pods while retaining image-pull events', async () => {
+    const { run, lab, clusterId } = seedConfiguredAssistant()
+    const state = run.runtime.kubernetes.clusters[clusterId]
+    const pod = Object.values(state.resources).find(item => item.kind === 'Pod')
+    pod.status.phase = 'Pending'
+    delete state.podSnapshots[pod.metadata.uid]
+    state.events.push(
+      { kind: 'Event', metadata: { name: 'missing-key', namespace: 'assistant' }, reason: 'CreateContainerConfigError', message: "ConfigMap 'assistant-config' key 'PGHOST' was not found." },
+      { kind: 'Event', metadata: { name: 'missing-mount', namespace: 'assistant' }, reason: 'FailedMount', message: "MountVolume failed for volume 'settings'." },
+      { kind: 'Event', metadata: { name: 'missing-image', namespace: 'assistant' }, reason: 'ImageNotFound', message: "Image 'acr.example/assistant:v9' was not found." },
+    )
+    const cluster = run.sandbox.aksClusters.find(item => item.id === clusterId)
+    const blade = await render(AksClusterBlade, lab, run, { resourceGroup: cluster.resourceGroup, name: cluster.name })
+    expect(blade).toContain('Configuration events')
+    expect(blade).toContain('CreateContainerConfigError')
+    expect(blade).toContain('FailedMount')
+    expect(blade).toContain('missing-key')
+    expect(blade).toContain('Image-pull events')
+    expect(blade).toContain('ImageNotFound')
+  })
+
   it('includes ConfigMap and normalized Secret data in the applied-state fingerprint', async () => {
     const editor = await readFile(new URL('../src/components/lab/ProjectEditor.vue', import.meta.url), 'utf8')
     expect(editor).toContain('stringData')
