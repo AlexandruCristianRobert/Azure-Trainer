@@ -46,6 +46,41 @@ export function configurationDependencies(target, { historical = false } = {}) {
   }
 }
 
+// Connectivity proof is about the route that exists now.  Keep the whole
+// namespace candidate set because a label change can make a previously
+// irrelevant Pod a backend without changing the Service itself.
+export function connectivityDependencies(target, { historical = false } = {}) {
+  const { clusterId, namespace, serviceName, clientPodUid, sourceRequired = false } = target ?? {}
+  if (historical) return {
+    [`aks-connectivity-history:${clusterId}:${namespace}:${serviceName}`]: context => {
+      const state = context.runtime.kubernetes?.clusters?.[clusterId]
+      const service = state?.resources?.[`Service/${namespace}/${serviceName}`]
+      const deployment = Object.values(state?.resources ?? {}).find(item => item.kind === 'Deployment' && item.metadata.namespace === namespace && item.metadata.name === 'assistant')
+      return { clusterId, serviceUid: service?.metadata?.uid ?? null, deploymentUid: deployment?.metadata?.uid ?? null }
+    },
+  }
+  return {
+    [`aks-connectivity:${clusterId}:${namespace}:${serviceName}`]: context => {
+      const state = context.runtime.kubernetes?.clusters?.[clusterId]
+      const resources = state?.resources ?? {}
+      const service = resources[`Service/${namespace}/${serviceName}`] ?? null
+      const pods = Object.values(resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)
+        .map(pod => ({ uid: pod.metadata.uid, labels: pod.metadata.labels ?? {}, phase: pod.status?.phase ?? null,
+          ready: !!pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'),
+          podIP: pod.status?.podIP ?? null, snapshot: state?.podSnapshots?.[pod.metadata.uid] ?? null }))
+        .sort((a, b) => a.uid.localeCompare(b.uid))
+      const savedServiceFiles = Object.fromEntries(Object.entries(context.project.savedFiles).filter(([path, text]) =>
+        /^k8s\/service[^/]*\.ya?ml$/i.test(path) && typeof text === 'string' && text.includes(`name: ${serviceName}`)))
+      const diagnostic = clientPodUid ? Object.values(resources).find(item => item.kind === 'Pod' && item.metadata.uid === clientPodUid) ?? null : null
+      const result = { clusterId, service, pods, diagnostic, savedServiceFiles,
+        configuration: Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata.namespace === namespace)
+          .map(item => ({ kind: item.kind, name: item.metadata.name, resourceVersion: item.metadata.resourceVersion, data: item.data })) }
+      if (sourceRequired) result.source = { app: context.project.savedFiles['app.py'] ?? null, version: context.project.fileVersions['app.py'] ?? 0 }
+      return result
+    },
+  }
+}
+
 export function refreshKubernetesDependencies(previous, next, lab) {
   if (lab?.capabilities?.kubernetes !== true) return next
   const counters = { ...next.dependencyGenerations }; const changed = new Set()

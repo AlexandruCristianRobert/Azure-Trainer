@@ -23,7 +23,22 @@ function hasPodDeleteCommand(history, name) {
 }
 
 export function simulateKubernetesRequest(run, scenario) {
-  const route = scenario.connectivity ?? scenario.route
+  const connectivity = scenario.connectivity
+  if (run.runtime.kubernetes.clusters?.[scenario.target?.clusterId]?.connectivity && connectivity?.origin?.kind === 'diagnostic') {
+    const clusterId = scenario.target.clusterId
+    const state = run.runtime.kubernetes.clusters[clusterId]
+    const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.namespace === connectivity.origin.namespace
+      && item.metadata.name === connectivity.origin.name && state.connectivity.diagnosticPodUids.includes(item.metadata.uid))
+    if (!pod) return { run, outcome: false, status: null, body: null, measurements: { transport: { ok: false, reason: 'INVALID_ORIGIN' } }, diagnostic: diagnostic('INVALID_ORIGIN', 'The supplied diagnostic Pod is unavailable.') }
+    return simulateConnectivityScenario(run, scenario, { kind: 'pod', clusterId, podUid: pod.metadata.uid }, connectivity.hostname, connectivity.port)
+  }
+  if (run.runtime.kubernetes.clusters?.[scenario.target?.clusterId]?.connectivity && connectivity?.origin?.kind === 'external') {
+    const clusterId = scenario.target.clusterId
+    const service = run.runtime.kubernetes.clusters[clusterId].resources[`Service/${connectivity.service.namespace}/${connectivity.service.name}`]
+    if (!service || service.spec.type !== 'LoadBalancer' || !service.status?.loadBalancer?.ingress?.[0]?.ip) return { run, outcome: false, status: null, body: null, measurements: { transport: { ok: false, reason: 'UNKNOWN_ADDRESS' } }, diagnostic: diagnostic('UNKNOWN_ADDRESS', 'The declared external Service has no allocated LoadBalancer address.') }
+    return simulateConnectivityScenario(run, scenario, { kind: 'external', clusterId }, service.status.loadBalancer.ingress[0].ip, connectivity.port)
+  }
+  const route = scenario.route ?? scenario.connectivity
   if (run.runtime.kubernetes.clusters?.[scenario.target?.clusterId]?.connectivity
     && route && typeof route === 'object' && route.origin && (typeof route.hostname === 'string' || typeof route.externalService === 'string')) {
     const clusterId = scenario.target.clusterId
@@ -154,4 +169,37 @@ export function simulateKubernetesRequest(run, scenario) {
   const nextRun = { ...run, nextSequence: requestSequence + 1,
     runtime: { ...run.runtime, kubernetes: { ...runtime, requests } } }
   return { run: nextRun, outcome, status, body, measurements: measurement, diagnostic: issue }
+}
+
+function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
+  const routed = routeServiceRequest(run, { origin, hostname, port, method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null }, null)
+  const latest = routed.run.runtime.kubernetes.requests.at(-1)
+  const state = routed.run.runtime.kubernetes.clusters[scenario.target.clusterId]
+  const service = Object.values(state.resources).find(item => item.kind === 'Service' && item.metadata.uid === routed.outcome.route.serviceUid) ?? null
+  const selectedPod = routed.outcome.route.podUid && state.resources && Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === routed.outcome.route.podUid)
+  const snapshot = selectedPod && state.podSnapshots[selectedPod.metadata.uid]
+  const artifact = snapshot && routed.run.artifacts.buildsById[snapshot.artifactId]
+  if (latest?.id === routed.outcome.requestId) {
+    latest.scenarioId = scenario.id
+    latest.route = { ...latest.route, originKind: origin.kind, originPodUid: origin.podUid ?? null, hostname,
+      canonicalName: service ? `${service.metadata.name}.${service.metadata.namespace}.svc.cluster.local` : null,
+      address: origin.kind === 'external' ? service?.status?.loadBalancer?.ingress?.[0]?.ip ?? null : service?.spec?.clusterIP ?? null,
+      servicePort: service?.spec?.ports?.[0]?.port ?? null, targetPort: routed.outcome.route.backendPort ?? null,
+      listenerPort: artifact?.appSpec?.listeningPort ?? null }
+  }
+  const outcome = routed.outcome
+  const expectedTransport = scenario.expected.transport ?? { ok: true, reason: null }
+  const matches = outcome.status === scenario.expected.status && canonicalize(outcome.body) === canonicalize(scenario.expected.body)
+    && canonicalize(outcome.transport) === canonicalize(expectedTransport) && (!scenario.expected.route || Object.entries(scenario.expected.route).every(([key, value]) => canonicalize(outcome.route[key]) === canonicalize(value)))
+  const clusterId = scenario.target.clusterId
+  const measurements = { status: outcome.status, body: outcome.body, requestSequence: run.nextSequence, clusterId,
+    namespace: outcome.route.namespace ?? scenario.target.namespace, serviceName: outcome.route.serviceName ?? scenario.target.serviceName,
+    serviceUid: outcome.route.serviceUid ?? null, servicePort: service?.spec?.ports?.[0]?.port ?? null, targetPort: outcome.route.backendPort ?? null,
+    canonicalName: service ? `${service.metadata.name}.${service.metadata.namespace}.svc.cluster.local` : null,
+    address: origin.kind === 'external' ? service?.status?.loadBalancer?.ingress?.[0]?.ip ?? null : service?.spec?.clusterIP ?? null,
+    listenerPort: artifact?.appSpec?.listeningPort ?? null, deploymentName: scenario.target.deploymentName,
+    selectedPodUid: outcome.route.podUid ?? null, podUid: outcome.route.podUid ?? null, artifactId: outcome.route.artifactId ?? null,
+    selectedPods: (outcome.route.readyEndpointUids ?? []).map(uid => ({ uid, matchesExpected: matches })),
+    origin, hostname, dependencyTrace: outcome.dependencyTrace, transport: outcome.transport, route: outcome.route, simulated: true }
+  return { run: routed.run, outcome: matches, status: outcome.status, body: outcome.body, measurements, diagnostic: outcome.diagnostic }
 }
