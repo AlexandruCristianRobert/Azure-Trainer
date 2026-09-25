@@ -23,7 +23,7 @@ it('does not mutate for conflicting cluster creation or help', () => {
   run = act(run, lab, { type: 'command', line: 'az group create -n rg-aks-test -l eastus' }).run
   run = act(run, lab, { type: 'command', line: 'az aks create -g rg-aks-test -n AKS-Test --enable-managed-identity --generate-ssh-keys' }).run
   const before = structuredClone(run)
-  const failed = act(run, lab, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --node-count 3 --enable-managed-identity --generate-ssh-keys' })
+  const failed = applyRunAction(run, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --node-count 3 --enable-managed-identity --generate-ssh-keys' }, lab)
   expect(failed.run.sandbox).toEqual(before.sandbox)
   expect(act(run, lab, { type: 'command', line: 'az aks create --help' }).run.sandbox).toEqual(run.sandbox)
 })
@@ -43,7 +43,7 @@ it('does not adopt a pre-existing deterministic node resource group', () => {
   let { run, lab } = createAksTestRun()
   run = act(run, lab, { type: 'command', line: 'az group create -n rg-aks-test -l eastus' }).run
   run = act(run, lab, { type: 'command', line: 'az group create -n MC_rg-aks-test_aks-test_eastus -l eastus' }).run
-  const result = act(run, lab, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --enable-managed-identity --generate-ssh-keys' })
+  const result = applyRunAction(run, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --enable-managed-identity --generate-ssh-keys' }, lab)
   expect(result.run.sandbox.aksClusters).toEqual([])
   expect(result.run.sandbox.resourceGroups.some(group => group.name === 'MC_rg-aks-test_aks-test_eastus')).toBe(true)
 })

@@ -2,6 +2,12 @@ import { validateKubernetesObject } from './schema.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
+const canonical = value => {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
+}
+const desiredObject = value => ({ apiVersion: value.apiVersion, kind: value.kind, metadata: canonical({ name: value.metadata.name, ...(value.metadata.namespace ? { namespace: value.metadata.namespace } : {}), ...(value.metadata.labels ? { labels: value.metadata.labels } : {}) }), ...(value.spec ? { spec: canonical(value.spec) } : {}) })
 
 export function applyKubernetesObjects(run, documents, options = {}, lab) {
   const clusterId = options.clusterId
@@ -17,8 +23,8 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       return { run: next, lines, diagnostics: [{ code: 'KUBE_NAMESPACE_NOT_FOUND', message: `Namespace '${ns}' was not found.` }] }
     }
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
-    const desired = JSON.stringify(object)
-    if (old && JSON.stringify({ apiVersion: old.apiVersion, kind: old.kind, metadata: { name: old.metadata.name, ...(old.metadata.namespace ? { namespace: old.metadata.namespace } : {}) }, ...(old.spec ? { spec: old.spec } : {}) }) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
+    const desired = JSON.stringify(desiredObject(object))
+    if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(old.spec.selector) !== JSON.stringify(object.spec.selector)) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
     const uid = old?.metadata.uid ?? `kube-${next.nextSequence++}`
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
