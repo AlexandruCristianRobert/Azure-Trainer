@@ -140,7 +140,8 @@ function validClusterState(state, run, lab, clusterId) {
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
-    || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40)) return false
+    || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
+    || !Array.isArray(state.health.events) || state.health.events.length > 1000)) return false
   if (!probesEnabled && state.health !== undefined) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
@@ -171,7 +172,7 @@ function validClusterState(state, run, lab, clusterId) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
-  if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs)) return false
+  if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
@@ -221,7 +222,30 @@ function validClusterState(state, run, lab, clusterId) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validHealthState(health, byUid, nowMs) {
+function validHealthState(health, byUid, nowMs, lab, clusterId) {
+  if (!health.events.every(item => isPlainObject(item) && typeof item.type === 'string'
+    && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= nowMs)) return false
+  const experiment = health.experiment
+  if (experiment !== null) {
+    const scenario = lab.scenarios?.[experiment.scenarioId]
+    if (!scenario || scenario.kind !== 'aks-probe' || scenario.version !== experiment.scenarioVersion
+      || experiment.version !== 1 || experiment.status !== 'active' || experiment.clusterId !== clusterId
+      || JSON.stringify(experiment.target) !== JSON.stringify(scenario.target)
+      || JSON.stringify(experiment.script) !== JSON.stringify({ ...scenario.script, kind: experiment.scenarioId })
+      || !Number.isFinite(experiment.startedAtMs) || experiment.startedAtMs < 0 || experiment.startedAtMs > nowMs
+      || !Number.isFinite(experiment.endsAtMs) || experiment.endsAtMs < experiment.startedAtMs
+      || experiment.endsAtMs > experiment.startedAtMs + 390_000
+      || (experiment.baselineReadyAtMs !== null && (!Number.isFinite(experiment.baselineReadyAtMs)
+        || experiment.baselineReadyAtMs < experiment.startedAtMs || experiment.baselineReadyAtMs > nowMs))
+      || !Array.isArray(experiment.podUids) || experiment.podUids.length !== 2
+      || new Set(experiment.podUids).size !== 2
+      || !experiment.podUids.every(uid => byUid.get(uid)?.kind === 'Pod' && Object.hasOwn(health.containers, uid))
+      || !isPlainObject(experiment.containerIds) || Object.keys(experiment.containerIds).sort().join(',') !== [...experiment.podUids].sort().join(',')
+      || !Array.isArray(experiment.samples) || experiment.samples.length > 100
+      || !experiment.samples.every(item => isPlainObject(item) && Number.isFinite(item.atMs)
+        && item.atMs >= experiment.startedAtMs && item.atMs <= nowMs)
+      || !isPlainObject(experiment.summary) || experiment.summary.sampleCount !== experiment.samples.length) return false
+  }
   const ids = new Set()
   const managedRunning = [...byUid.values()].filter(pod => pod.kind === 'Pod' && pod.status?.phase === 'Running' && pod.metadata.ownerReferences?.[0])
   return managedRunning.every(pod => Object.hasOwn(health.containers, pod.metadata.uid)) && Object.entries(health.containers).every(([uid, value]) => {
