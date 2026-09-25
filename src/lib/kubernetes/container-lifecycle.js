@@ -4,7 +4,8 @@ export function scheduleProbeRestart(container, pod, type, nowMs) {
   const backoff = Math.min(10 * 2 ** container.consecutiveRestarts, 300) * 1000
   container.ready = false
   container.terminatedAtMs = nowMs + grace
-  container.restartAtMs = container.terminatedAtMs + backoff
+  container.restartAtMs = nowMs + backoff
+  container.restartDelayMs = backoff
   for (const check of Object.values(container.checks)) if (check) { check.nextAtMs = null; check.pending = null }
   container.restartReason = type === 'startup' ? 'StartupProbeFailed' : 'LivenessProbeFailed'
 }
@@ -12,10 +13,14 @@ export function scheduleProbeRestart(container, pod, type, nowMs) {
 export function processContainerLifecycle(run, atMs, lab) {
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) for (const [uid, container] of Object.entries(state.health?.containers ?? {})) {
+    if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
+      container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason }
+      container.currentLogs = []
+      container.terminatedAtMs = null
+    }
     if (container.restartAtMs === null || container.restartAtMs > atMs) continue
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     if (!pod || pod.status?.phase !== 'Running') continue
-    const old = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason }
     const restartCount = container.restartCount + 1
     const startedAtMs = container.restartAtMs
     const duration = lab.healthFixture.initializationSeconds * 1000
@@ -28,7 +33,7 @@ export function processContainerLifecycle(run, atMs, lab) {
         startup: probes.startupProbe ? { nextAtMs: startedAtMs + probes.startupProbe.initialDelaySeconds * 1000, pending: null, successes: 0, failures: 0 } : null,
         readiness: probes.readinessProbe ? { nextAtMs: null, pending: null, successes: 0, failures: 0 } : null,
         liveness: probes.livenessProbe ? { nextAtMs: null, pending: null, successes: 0, failures: 0 } : null,
-      }, currentLogs: [], previous: old, restartReason: undefined,
+      }, currentLogs: [], previous: container.previous, restartReason: null, restartDelayMs: null,
     }
   }
   return run
