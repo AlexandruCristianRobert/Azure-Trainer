@@ -13,7 +13,7 @@ const current = computed(() => run.behavioralRun?.project)
 const manifest = computed(() => getProjectManifest(current.value?.manifestId ?? run.lab?.manifestId))
 const files = computed(() => manifest.value.files)
 const fixed = computed(() => Object.hasOwn(manifest.value.fixedFiles ?? {}, path.value))
-const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError)
+const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
 const saved = computed(() => current.value?.savedFiles?.[path.value] ?? '')
 const dirty = computed(() => text.value !== saved.value)
 const version = computed(() => current.value?.fileVersions?.[path.value] ?? 0)
@@ -21,7 +21,17 @@ const published = computed(() => Object.values(run.behavioralRun?.artifacts?.bui
 const isKubernetes = computed(() => manifest.value?.runtimeFamily === 'aks' || manifest.value?.language === 'python')
 function semanticManifest(value, defaultNamespace = '') {
   const namespace = value.kind === 'Namespace' ? '' : value.metadata?.namespace ?? defaultNamespace
-  return { apiVersion: value.apiVersion, kind: value.kind, metadata: { name: value.metadata?.name, ...(namespace ? { namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }, ...(value.spec ? { spec: value.spec } : {}) }
+  const metadata = { name: value.metadata?.name, ...(namespace ? { namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }
+  if (value.kind === 'ConfigMap' || value.kind === 'Secret') {
+    const data = { ...(value.data ?? {}) }
+    if (value.kind === 'Secret') for (const [key, content] of Object.entries(value.stringData ?? {})) {
+      const bytes = new TextEncoder().encode(content); let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      data[key] = btoa(binary)
+    }
+    return { apiVersion: value.apiVersion, kind: value.kind, metadata, ...(value.kind === 'Secret' ? { type: value.type ?? 'Opaque' } : {}), data }
+  }
+  return { apiVersion: value.apiVersion, kind: value.kind, metadata, ...(value.spec ? { spec: value.spec } : {}) }
 }
 const applied = computed(() => {
   if (!isKubernetes.value || !path.value.startsWith('k8s/')) return 'Not a Kubernetes manifest.'
