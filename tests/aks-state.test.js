@@ -61,3 +61,22 @@ it('rejects a cluster state missing its required default namespaces', () => {
   delete corrupt.runtime.kubernetes.clusters[corrupt.sandbox.aksClusters[0].id].resources['Namespace//kube-system']
   expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
 })
+
+it('rejects persisted Kubernetes resources with unknown kinds or missing namespaces', () => {
+  const { lab, run: initial } = createAksTestRun()
+  let run = act(initial, lab, { type: 'command', line: 'az group create -n rg-state -l eastus' }).run
+  run = act(run, lab, { type: 'command', line: 'az aks create -g rg-state -n aks-state --enable-managed-identity --generate-ssh-keys' }).run
+  const clusterId = run.sandbox.aksClusters[0].id
+
+  const unknownKind = structuredClone(run)
+  unknownKind.runtime.kubernetes.clusters[clusterId].resources['CronJob/default/example'] = {
+    apiVersion: 'batch/v1', kind: 'CronJob', metadata: { name: 'example', namespace: 'default', uid: 'forged-1', resourceVersion: '1' }, spec: {},
+  }
+  expect(() => validateBehavioralRun(unknownKind, lab)).toThrow(/Kubernetes/)
+
+  const missingNamespace = structuredClone(run)
+  missingNamespace.runtime.kubernetes.clusters[clusterId].resources['Service/absent/example'] = {
+    apiVersion: 'v1', kind: 'Service', metadata: { name: 'example', namespace: 'absent', uid: 'forged-2', resourceVersion: '1' }, spec: {},
+  }
+  expect(() => validateBehavioralRun(missingNamespace, lab)).toThrow(/Kubernetes/)
+})

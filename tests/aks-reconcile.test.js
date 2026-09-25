@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import { seedFoundation, act } from './helpers/aks.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
+import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 function cluster(run, id) { return run.runtime.kubernetes.clusters[id] }
@@ -127,4 +128,31 @@ it('preserves earlier objects when a later object fails validation during apply'
   const result = applyRunAction(run, { type: 'command', line: 'kubectl apply -f k8s/namespace.yaml' }, lab)
   expect(result.lines.at(-1).text).toMatch(/Namespace 'absent'/)
   expect(result.run.runtime.kubernetes.clusters[result.run.sandbox.aksClusters[0].id].resources['Namespace//retained']).toBeTruthy()
+})
+
+it('allows an effective Deployment update when immutable selector keys are reordered', () => {
+  let { run, lab, clusterId } = seedFoundation()
+  const deployment = cluster(run, clusterId).resources['Deployment/assistant/assistant']
+  deployment.spec.selector.matchLabels.tier = 'web'
+  deployment.spec.template.metadata.labels.tier = 'web'
+  const makeObject = (selector, replicas) => ({
+    apiVersion: 'apps/v1', kind: 'Deployment',
+    metadata: { name: 'assistant', namespace: 'assistant' },
+    spec: {
+      replicas,
+      selector: { matchLabels: selector },
+      template: {
+        metadata: { labels: { ...deployment.spec.template.metadata.labels } },
+        spec: deployment.spec.template.spec,
+      },
+    },
+  })
+  const first = applyKubernetesObjects(run, [makeObject({ app: 'assistant', tier: 'web' }, 2)], { clusterId }, lab)
+  expect(first.diagnostics).toEqual([])
+  run = first.run
+  const beforeGeneration = cluster(run, clusterId).resources['Deployment/assistant/assistant'].metadata.generation
+  const reordered = applyKubernetesObjects(run, [makeObject({ tier: 'web', app: 'assistant' }, 1)], { clusterId }, lab)
+  expect(reordered.diagnostics).toEqual([])
+  expect(cluster(reordered.run, clusterId).resources['Deployment/assistant/assistant'].spec.replicas).toBe(1)
+  expect(cluster(reordered.run, clusterId).resources['Deployment/assistant/assistant'].metadata.generation).toBe(beforeGeneration + 1)
 })

@@ -25,7 +25,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
     const desired = JSON.stringify(desiredObject(object))
     if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
-    if (old?.kind === 'Deployment' && JSON.stringify(old.spec.selector) !== JSON.stringify(object.spec.selector)) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
+    if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
     const uid = old?.metadata.uid ?? `kube-${next.nextSequence++}`
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
     const generation = object.kind === 'Deployment' ? (old ? (JSON.stringify(old.spec) === JSON.stringify(object.spec) ? old.metadata.generation : (old.metadata.generation ?? 1) + 1) : 1) : undefined

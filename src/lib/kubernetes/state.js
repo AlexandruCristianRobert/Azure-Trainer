@@ -1,4 +1,5 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
+import { validateKubernetesObject } from './schema.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -25,15 +26,29 @@ function validClusterState(state, run) {
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
+  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1' }
   for (const [key, resource] of resources) {
     if (!isPlainObject(resource) || typeof resource.apiVersion !== 'string' || typeof resource.kind !== 'string'
       || !isPlainObject(resource.metadata) || typeof resource.metadata.name !== 'string' || !resource.metadata.name
       || resource.metadata.name.includes('/') || typeof resource.metadata.uid !== 'string' || !resource.metadata.uid
       || typeof resource.metadata.resourceVersion !== 'string' || !/^\d+$/.test(resource.metadata.resourceVersion)) return false
+    if (!Object.hasOwn(supportedVersions, resource.kind) || resource.apiVersion !== supportedVersions[resource.kind]) return false
     const namespace = resource.metadata.namespace ?? ''
     if (namespace !== '' && (typeof namespace !== 'string' || !namespace || namespace.includes('/'))) return false
+    if (['Namespace', 'Node', 'Event'].includes(resource.kind) ? namespace !== '' : !state.resources[`Namespace//${namespace}`]) return false
     if (key !== `${resource.kind}/${namespace}/${resource.metadata.name}` || uids.has(resource.metadata.uid)) return false
     uids.add(resource.metadata.uid)
+  }
+  const declaredObjects = resources.filter(([, resource]) => ['Namespace', 'Deployment', 'Service'].includes(resource.kind))
+  const deployments = declaredObjects.filter(([, resource]) => resource.kind === 'Deployment').map(([, resource]) => resource)
+  for (const [, resource] of declaredObjects) {
+    const desired = {
+      apiVersion: resource.apiVersion,
+      kind: resource.kind,
+      metadata: { name: resource.metadata.name, ...(resource.metadata.namespace === undefined ? {} : { namespace: resource.metadata.namespace }), ...(resource.metadata.labels === undefined ? {} : { labels: resource.metadata.labels }) },
+      ...(resource.spec === undefined ? {} : { spec: resource.spec }),
+    }
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
   for (const [, resource] of resources) {
