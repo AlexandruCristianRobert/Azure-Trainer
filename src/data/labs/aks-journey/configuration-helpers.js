@@ -27,4 +27,12 @@ export function configurationDeploymentReady(context) {
     && pods.every(pod => pod.status?.phase === 'Running' && !!state.podSnapshots[pod.metadata.uid])
 }
 
+export function configurationEnvironmentRefreshed(context) {
+  const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
+  const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]
+  const pods = cluster ? getDeploymentPods({ runtime: context.runtime }, cluster.id, 'assistant', 'assistant') : []
+  return configurationDeploymentReady(context) && pods.length === 2 && pods.every(pod => state.podSnapshots[pod.metadata.uid]?.environment?.APP_ENV === 'training-updated')
+    && state.receipts?.some(receipt => receipt.replacementPodUid)
+}
+
 export const configurationSolutionFiles = CONFIG_SOLUTION_FILES
