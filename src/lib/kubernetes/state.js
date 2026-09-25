@@ -401,8 +401,12 @@ function validHistoricalConnectivityLog(log, request, run, state, lab) {
   if (request.scenarioId === null) {
     const origin = request.origin
     const diagnostic = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === origin?.podUid)
-    return origin?.kind === 'pod' && typeof origin.clusterId === 'string' && state.connectivity?.diagnosticPodUids.includes(origin.podUid)
+    if (origin?.kind === 'pod') return typeof origin.clusterId === 'string' && state.connectivity?.diagnosticPodUids.includes(origin.podUid)
       && validDiagnosticPod(diagnostic, origin.clusterId) && request.status === log.status
+    return lab?.capabilities?.kubernetesProbes === true && origin?.kind === 'external'
+      && [...(state.health?.receipts ?? []), state.health?.experiment].filter(Boolean).some(receipt => receipt.clusterId === origin.clusterId
+        && receipt.samples?.some(sample => sample.response?.requestId === request.id && sample.response.status === log.status
+          && sample.response.route?.podUid === log.podUid && sample.response.route?.artifactId === log.artifactId))
   }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence
