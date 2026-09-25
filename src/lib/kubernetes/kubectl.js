@@ -13,7 +13,7 @@ const response = (sandbox, lines, effects, diagnostics = []) => ({ sandbox, line
 function flags(tokens, allowed) {
   const result = { positional: [], values: {} }
   const values = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '-o': 'output', '--output': 'output', '-f': 'file', '--dry-run': 'dryRun', '-l': 'label' }
-  const booleans = { '-A': 'allNamespaces', '--all-namespaces': 'allNamespaces', '--current': 'current', '--show-labels': 'showLabels' }
+  const booleans = { '-A': 'allNamespaces', '--all-namespaces': 'allNamespaces', '--current': 'current', '--show-labels': 'showLabels', '--previous': 'previous' }
   for (let i = 0; i < tokens.length; i++) {
     let token = tokens[i], key = values[token], inline
     if (!key && token.startsWith('--dry-run=')) { key = 'dryRun'; inline = token.slice(10) }
@@ -109,7 +109,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (command === 'set-context' && parsed.values.current && parsed.values.namespace && !parsed.positional.length) { const name = run.runtime.kubernetes.currentContext; if (!name) return response(sandbox, [err('No current Kubernetes context is configured.')]); const contexts = structuredClone(run.runtime.kubernetes.contexts); contexts[name].namespace = parsed.values.namespace; return response(sandbox, [out(`Context namespace set to ${parsed.values.namespace}.`)], [{ type: 'kubernetes-state', kubernetes: { ...run.runtime.kubernetes, contexts }, nextSequence: run.nextSequence }]) }
     return response(sandbox, [err('Unsupported kubectl config command.')])
   }
-  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
+  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : verb === 'logs' ? new Set(['namespace', 'context', 'previous']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
   if (parsed.error) return response(sandbox, [err(parsed.error)])
   const selection = target(run, parsed.values)
   if (selection.error) return response(sandbox, [err(`Error: ${selection.error}`)])
@@ -144,6 +144,10 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (!pod) return response(sandbox, [err(`Pod '${name}' was not found.`)])
     const snapshot = selection.state.podSnapshots[pod.metadata.uid]
     if (!snapshot) return response(sandbox, [err(`Pod '${name}' has no running container logs.`)])
+    const health = lab.capabilities.kubernetesProbes === true ? selection.state.health?.containers?.[pod.metadata.uid] : null
+    if (parsed.values.previous) return health?.previous
+      ? response(sandbox, [out(health.previous.logs.join('\n') || 'The previous container has no application logs.')])
+      : response(sandbox, [err(`Pod '${name}' has no previous terminated container logs.`)])
     const application = (selection.state.connectivity?.applicationLogs ?? []).filter(item => item.podUid === pod.metadata.uid)
       .map(item => `request=${item.requestId} ${item.method} ${item.path} status=${item.status} dependencies=${item.dependencySummary.map(hop => `${hop.operation}:${hop.status}${hop.reason ? `(${hop.reason})` : ''}`).join(',')}`)
     return response(sandbox, [out([`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...application].join('\n'))])

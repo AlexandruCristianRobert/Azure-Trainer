@@ -44,6 +44,8 @@ describe('AKS container restart lifecycle', () => {
     expect(after.containerId).not.toBe(before.containerId)
     expect(after.restartCount).toBe(1)
     expect(after.previous).toMatchObject({ containerId: before.containerId, logs: ['container started'] })
+    const priorLogs = act(restarted, lab, { type: 'command', line: `kubectl logs ${currentPod.metadata.name} -n assistant --previous` })
+    expect(priorLogs.lines.map(item => item.text).join('\n')).toContain('container started')
     expect(after.startedAtMs).toBeGreaterThan(before.startedAtMs)
     expect(getServiceBackends(failed, target).readyEndpoints.map(item => item.podUid)).not.toContain(podUid)
   })
@@ -62,6 +64,18 @@ describe('AKS container restart lifecycle', () => {
       expect(healthContainer(current, clusterId, podUid).restartCount).toBe(delays.length)
     }
     expect(delays).toEqual([10_000, 20_000, 40_000])
+  })
+
+  it('resets restart backoff after ten minutes of continuous container runtime', () => {
+    const { lab, run: initial, clusterId, podUids } = restartSeed()
+    const podUid = podUids[0]
+    let current = advanceHealth(initial, lab, 1)
+    current = restartAtDeadline(startHealthFault(failLiveness({ lab, run: current, clusterId, podUid }), clusterId, podUid, 'hung', false), lab, clusterId, podUid)
+    current = advanceHealth(current, lab, 300)
+    current = advanceHealth(current, lab, 300)
+    const failed = failLiveness({ lab, run: current, clusterId, podUid })
+    const container = healthContainer(failed, clusterId, podUid)
+    expect(container.restartAtMs - container.terminatedAtMs).toBe(10_000)
   })
 
   it('does not restart for readiness failures and withdraws then restores the EndpointSlice endpoint', () => {
@@ -124,6 +138,22 @@ describe('AKS container restart lifecycle', () => {
     expect(replacements.every(item => item.metadata.uid !== podUid)).toBe(true)
     expect(replacements.every(item => stateFor(changed, clusterId).podSnapshots[item.metadata.uid].artifactId !== originalArtifact)).toBe(true)
     expect(replacements.every(item => stateFor(changed, clusterId).podSnapshots[item.metadata.uid].environment.PGHOST === 'pg-v2.example')).toBe(true)
+  })
+
+  it('captures updated ConfigMap values when liveness restarts the same Pod container', () => {
+    const { lab, run: initial, clusterId, podUids } = restartSeed()
+    const podUid = podUids[0]
+    let current = advanceHealth(initial, lab, 1)
+    const before = structuredClone(stateFor(current, clusterId).podSnapshots[podUid])
+    current = act(current, lab, { type: 'save-file', path: 'k8s/configmap.yaml',
+      text: current.project.savedFiles['k8s/configmap.yaml'].replace('PGHOST: pg-training.example', 'PGHOST: pg-restarted.example') }).run
+    current = act(current, lab, { type: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }).run
+    expect(stateFor(current, clusterId).podSnapshots[podUid].environment.PGHOST).toBe(before.environment.PGHOST)
+    const failed = failLiveness({ lab, run: current, clusterId, podUid })
+    const restarted = restartAtDeadline(failed, lab, clusterId, podUid)
+    expect(stateFor(restarted, clusterId).podSnapshots[podUid].environment.PGHOST).toBe('pg-restarted.example')
+    expect(healthContainer(restarted, clusterId, podUid).restartCount).toBe(1)
+    expect(stateFor(restarted, clusterId).health.receipts.at(-1)).toMatchObject({ cause: 'probe', podUid })
   })
 
   it('round-trips restart state through behavioral run validation', () => {
