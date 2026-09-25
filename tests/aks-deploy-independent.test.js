@@ -42,10 +42,10 @@ function alternateManifests() {
 }
 
 describe('independent AKS deployment lab', () => {
-  it('routes the first three AKS Labs in order and stops after Lab 3', () => {
+  it('routes the deployment Labs into the first configuration Lab', () => {
     expect(nextLabFor(labById('aks-deploy-guided'))?.id).toBe('aks-deploy-troubleshooting')
     expect(nextLabFor(labById('aks-deploy-troubleshooting'))).toBe(aksDeployIndependentLab)
-    expect(nextLabFor(aksDeployIndependentLab)).toBeNull()
+    expect(nextLabFor(aksDeployIndependentLab)?.id).toBe('aks-config-guided')
   })
 
   it('does not accept the primary response as proof of the new instance', () => {
