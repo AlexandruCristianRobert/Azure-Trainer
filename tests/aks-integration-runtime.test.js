@@ -65,6 +65,14 @@ describe('compiled AKS assistant integration runtime', () => {
     expect(JSON.stringify(outcome.integrationTrace)).not.toContain('training-only-password')
   })
 
+  it('redacts a Secret-derived value even when it is bound under an allowed query field', () => {
+    const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('"collection": cfg["collection"]', '"collection": cfg["pg_password"]') }
+    const secretBoundApp = parsePythonIntegration(files, INTEGRATION_MANIFEST).appSpec
+    const outcome = simulateIntegration(secretBoundApp, snapshot(), request('How long are backups kept?'), INTEGRATION_FIXTURES, 'healthy')
+    expect(outcome.integrationTrace.queryBindings.collection).toBe('[redacted]')
+    expect(JSON.stringify(outcome)).not.toContain('training-only-password')
+  })
+
   it('carries a scenario-selected immutable profile and trace through Service routing', () => {
     const seed = seedConnectivityTest()
     const pod = Object.values(seed.run.runtime.kubernetes.clusters[seed.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.namespace === 'assistant')

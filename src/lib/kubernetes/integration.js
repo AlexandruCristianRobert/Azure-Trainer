@@ -12,13 +12,33 @@ const failure = (code, message) => ({ code, message })
 const asDependencyError = error => ({ dependency: true, code: error.code, http_status: error.status, public_message: error.message })
 const result = (status, body, dependencyTrace, diagnostic, integrationTrace) => ({ status, body, dependencyTrace, diagnostic, integrationTrace })
 const pythonFalsey = value => value === null || value === undefined || value === false || value === '' || (Array.isArray(value) && value.length === 0) || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value ?? {}).length === 0)
-const boundedText = value => typeof value === 'string' && value.length <= 128 ? value : '[redacted]'
+const sensitiveKey = key => /(?:password|secret|token|credential|api[_-]?key|connection)/i.test(key ?? '')
+const credentialUrl = value => typeof value === 'string' && /[a-z][a-z+.-]*:\/\/[^/\s]*?(?::[^@/\s]+)?@/i.test(value)
+const boundedText = value => typeof value === 'string' && value.length <= 128 && !credentialUrl(value) ? value : '[redacted]'
 
-function safeQueryBindings(querySpec, parameters) {
+function safeQueryBindings(querySpec, parameters, podSnapshot, parameterNode, nodes) {
   const parameterFor = column => querySpec?.filters?.find(filter => filter.column === column)?.parameter
   const vector = querySpec?.order?.vectorParameter
   const cutoff = querySpec?.distance?.cutoffParameter
-  const pick = name => name && Object.hasOwn(parameters ?? {}, name) ? parameters[name] : '[redacted]'
+  const sensitiveValues = new Set(Object.entries(podSnapshot?.environment ?? {})
+    .filter(([key]) => sensitiveKey(key)).map(([, value]) => value).filter(value => typeof value === 'string' && value.length > 0))
+  for (const ref of podSnapshot?.configRefs ?? []) if (ref.kind === 'Secret' && ref.mode === 'env') {
+    const value = podSnapshot?.environment?.[ref.target]
+    if (typeof value === 'string' && value.length > 0) sensitiveValues.add(value)
+  }
+  const sensitiveOrigin = id => {
+    const node = nodes?.get(id)
+    if (!node) return true
+    if (node.op === 'config') return sensitiveKey(node.key) || sensitiveKey(node.environment)
+    if (node.op === 'binding' || node.op === 'vector-format' || node.op === 'strip') return sensitiveOrigin(node.value ?? node.input)
+    return false
+  }
+  const pick = name => {
+    if (!name || !Object.hasOwn(parameters ?? {}, name)) return '[redacted]'
+    const value = parameters[name]
+    const ref = parameterNode?.entries?.[name]
+    return sensitiveValues.has(value) || sensitiveOrigin(ref) ? '[redacted]' : value
+  }
   return {
     collection: boundedText(pick(parameterFor('collection'))),
     audience: boundedText(pick(parameterFor('audience'))),
@@ -191,7 +211,7 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
           const parameterNode = nodes.get(node.args?.keywords?.params)
           const vectorNode = parameterNode?.entries?.[integration.querySpec?.order?.vectorParameter]
           integrationTrace.vectorProvenance = vectorNode ? evaluate(vectorNode).provenance : null
-          integrationTrace.queryBindings = safeQueryBindings(integration.querySpec, params)
+          integrationTrace.queryBindings = safeQueryBindings(integration.querySpec, params, podSnapshot, parameterNode, nodes)
           const retrieval = dependency('postgres-query', policy, storedBudget, () => {
             if (!profile || client?.args?.host !== profile.PGHOST || client?.args?.database !== profile.PGDATABASE) throw failure('POSTGRES_CONNECTION', 'The configured PostgreSQL host is not available in this trainer.')
             if (client?.args?.user !== profile.PGUSER || client?.args?.password !== profile.PGPASSWORD) throw failure('POSTGRES_AUTH', 'The configured PostgreSQL credentials were not available in this trainer.')
