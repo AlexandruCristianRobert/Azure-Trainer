@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { createAksTestRun, act } from './helpers/aks.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 it('creates a kubelet grant and keeps it separate from application access', () => {
   let { run, lab } = createAksTestRun()
@@ -45,4 +46,26 @@ it('does not adopt a pre-existing deterministic node resource group', () => {
   const result = act(run, lab, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --enable-managed-identity --generate-ssh-keys' })
   expect(result.run.sandbox.aksClusters).toEqual([])
   expect(result.run.sandbox.resourceGroups.some(group => group.name === 'MC_rg-aks-test_aks-test_eastus')).toBe(true)
+})
+
+it('resets a colliding context namespace only when overwrite is requested', () => {
+  let { run, lab } = createAksTestRun()
+  for (const line of ['az group create -n rg-one -l eastus', 'az group create -n rg-two -l eastus',
+    'az aks create -g rg-one -n shared --enable-managed-identity --generate-ssh-keys',
+    'az aks create -g rg-two -n shared --enable-managed-identity --generate-ssh-keys',
+    'az aks get-credentials -g rg-one -n shared']) run = act(run, lab, { type: 'command', line }).run
+  run.runtime.kubernetes.contexts.shared.namespace = 'assistant'
+  const collision = applyRunAction(run, { type: 'command', line: 'az aks get-credentials -g rg-two -n shared' }, lab)
+  expect(collision.diagnostics[0].code).toBe('CONTEXT_CONFLICT')
+  run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rg-two -n shared --overwrite-existing' }).run
+  expect(run.runtime.kubernetes.contexts.shared).toMatchObject({ clusterId: run.sandbox.aksClusters[1].id, namespace: 'default' })
+})
+
+it('cleans an AKS cluster when its owned node resource group is deleted', () => {
+  let { run, lab } = createAksTestRun()
+  for (const line of ['az group create -n rg-aks-test -l eastus', 'az aks create -g rg-aks-test -n aks-test --enable-managed-identity --generate-ssh-keys']) run = act(run, lab, { type: 'command', line }).run
+  const nodeGroup = run.sandbox.aksClusters[0].nodeResourceGroup
+  run = act(run, lab, { type: 'command', line: `az group delete -n ${nodeGroup} --yes` }).run
+  expect(run.sandbox.aksClusters).toEqual([])
+  expect(run.runtime.kubernetes.clusters).toEqual({})
 })

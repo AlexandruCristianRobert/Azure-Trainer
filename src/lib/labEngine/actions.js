@@ -84,7 +84,8 @@ export function applyCommandEffects(run, effects, lab) {
       if (!cluster) fail('INVALID_EFFECT', 'AKS context references an unavailable cluster.')
       const current = next.runtime.kubernetes?.contexts?.[effect.name]
       if (current && current.clusterId.toLowerCase() !== cluster.id.toLowerCase() && !effect.overwrite) { diagnostics.push(diagnostic('CONTEXT_CONFLICT', 'A context with this name points to a different cluster.')); continue }
-      const contexts = { ...next.runtime.kubernetes.contexts, [effect.name]: { clusterId: cluster.id, namespace: current?.namespace ?? 'default' } }
+      const sameCluster = current?.clusterId === cluster.id
+      const contexts = { ...next.runtime.kubernetes.contexts, [effect.name]: { clusterId: cluster.id, namespace: sameCluster ? current.namespace : 'default' } }
       next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext: effect.name } } }
     } else if (effect.type === 'publish-build') {
       if (!effect.artifacts || !Number.isInteger(effect.nextSequence) || effect.nextSequence <= next.nextSequence

@@ -10,7 +10,7 @@ it('initializes versioned Kubernetes state only for Kubernetes Labs', () => {
   expect(validateBehavioralRun(run, lab)).toBe(run)
 })
 
-it('keeps legacy runs without optional AKS fields valid', () => {
+it('keeps legacy non-AKS runs without optional AKS fields valid', () => {
   const { lab, run } = createAksTestRun({ capabilities: { acrBuild: true } })
   const legacy = structuredClone(run)
   delete legacy.runtime.kubernetes
@@ -19,9 +19,24 @@ it('keeps legacy runs without optional AKS fields valid', () => {
   expect(migrateBehavioralRun(legacy, lab).runtime.kubernetes).toBeUndefined()
 })
 
-it('rejects a Kubernetes Lab whose runtime extension is missing', () => {
+it('does not migrate a Kubernetes Lab whose runtime extension is missing', () => {
   const { lab, run } = createAksTestRun()
   const corrupt = structuredClone(run)
   delete corrupt.runtime.kubernetes
+  expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+  expect(() => migrateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+})
+
+it('rejects malformed Kubernetes cluster state instead of healing it', () => {
+  const { lab, run } = createAksTestRun()
+  const corrupt = structuredClone(run)
+  corrupt.runtime.kubernetes.clusters = { forged: {} }
+  expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+})
+
+it('rejects malformed Kubernetes resource collections and request records', () => {
+  const { lab, run } = createAksTestRun()
+  const corrupt = structuredClone(run)
+  corrupt.runtime.kubernetes.requests = ['forged']
   expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
 })

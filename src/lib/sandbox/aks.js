@@ -79,6 +79,6 @@ export function deleteAksCluster(sandbox, { resourceGroup, name }) {
 }
 export function deleteAksClustersInGroup(sandbox, resourceGroup) {
   let next = sandbox
-  for (const cluster of listAksClusters(sandbox).filter(item => same(item.resourceGroup, resourceGroup))) next = deleteAksCluster(next, { resourceGroup: cluster.resourceGroup, name: cluster.name }).sandbox
+  for (const cluster of listAksClusters(sandbox).filter(item => same(item.resourceGroup, resourceGroup) || same(item.nodeResourceGroup, resourceGroup))) next = deleteAksCluster(next, { resourceGroup: cluster.resourceGroup, name: cluster.name }).sandbox
   return next
 }
