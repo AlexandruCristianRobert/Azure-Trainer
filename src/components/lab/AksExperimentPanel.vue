@@ -4,6 +4,7 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
 import { configIncidentEvidenceForPhase, isConfigIncidentFileDraftClean, CONFIG_INCIDENT_PHASES } from '../../lib/kubernetes/config-incidents.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
+import { inspectIntegration, INTEGRATION_PROFILE_LABELS } from '../../lib/kubernetes/integration-inspection.js'
 import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 
@@ -30,6 +31,9 @@ const canIntroduceConnectivityIncident = computed(() => {
     && !!connectivityIncidentEvidenceForPhase(run.behavioralRun, run.lab, 'recoveries', phase.phase)
 })
 const questionScenarios = computed(() => scenarios.value.filter(([, scenario]) => scenario.request?.method === 'POST' && scenario.request?.path === '/api/ask' && typeof scenario.request?.body?.question === 'string'))
+const integrationCapable = computed(() => run.lab?.capabilities?.kubernetesAiIntegration === true)
+const integrationChoices = computed(() => questionScenarios.value.filter(([, scenario]) => INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]))
+const integrationInspection = computed(() => integrationCapable.value && choice.value ? inspectIntegration(run.behavioralRun, run.lab, choice.value) : null)
 const fixtureProfiles = computed(() => Object.entries(KNOWLEDGE_FIXTURES.profiles).map(([name, profile]) => ({ name, settings: Object.fromEntries(Object.entries(profile).filter(([key]) => key !== 'PGPASSWORD')) })))
 const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
 const selectedScenario = computed(() => run.lab?.scenarios?.[choice.value] ?? null)
@@ -109,7 +113,7 @@ async function copyLogCommand(command) {
   <section class="experiment-tool" aria-label="AKS experiment controls">
     <header><h2>Verify a Kubernetes service</h2><p>Requests use the current Service and the Pods' captured image. Results transition immediately because this is a simulation.</p></header>
     <div class="experiment-tool__controls">
-      <label>Declared verification<select v-model="choice" :disabled="locked || !scenarios.length"><option v-for="[id, scenario] in scenarios" :key="id" :value="id">{{ scenario.request?.method ?? 'GET' }} {{ scenario.request?.path ?? id }}</option></select></label>
+      <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
       <button class="btn btn--primary" type="button" :disabled="locked || !choice" @click="send">Send simulated request</button>
     </div>
     <section v-if="connectivityView" class="aks-connectivity-trace" aria-labelledby="aks-connectivity-trace-title">
@@ -122,6 +126,18 @@ async function copyLogCommand(command) {
       <p v-else>No request trace has been recorded for this Service.</p>
       <div v-if="latestRequest?.logsCommand" class="aks-connectivity-trace__log"><span v-if="latestLog">Application log recorded for request {{ latestRequest.requestId }}</span><span v-else>No application handler log was recorded for request {{ latestRequest.requestId }}. Pod logs:</span><code>{{ latestLog?.command ?? latestRequest.logsCommand }}</code><button type="button" class="btn" @click="copyLogCommand(latestLog?.command ?? latestRequest.logsCommand)">Copy kubectl logs command</button></div>
       <p>Routing, addresses and responses are deterministic training simulations. No network packet, DNS server, load balancer or dependency service runs.</p>
+    </section>
+    <section v-if="integrationCapable && integrationInspection" class="aks-integration-inspection" aria-label="Assistant integration inspection">
+      <h3>Question and fixture profile</h3>
+      <p><strong>{{ integrationInspection.profile?.label }}</strong> · {{ integrationInspection.question }}</p>
+      <p v-if="!integrationInspection.hasTrace">No request trace has been recorded for this declared scenario.</p>
+      <template v-else>
+        <p>Input: {{ integrationInspection.validation.disposition }} · HTTP {{ integrationInspection.validation.status ?? 'no response' }}. Vector: {{ integrationInspection.vector.dimension ?? 'unknown' }} dimensions · {{ integrationInspection.vector.provenance ?? 'no provenance' }}.</p>
+        <h4>Bound retrieval values</h4><dl class="aks-integration-inspection__bindings"><template v-for="[key, value] in Object.entries(integrationInspection.bindings)" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
+        <h4>Ranked documents, context and sources</h4><p>Ranked: <span v-for="(item, index) in integrationInspection.rankedDocuments" :key="item.id">{{ index ? ', ' : '' }}{{ item.id }} · distance {{ item.distance ?? 'unavailable' }}</span><span v-if="!integrationInspection.rankedDocuments.length">none</span></p>
+        <p>Context IDs: {{ integrationInspection.contextIds.join(', ') || 'none' }} · Source IDs: {{ integrationInspection.sourceIds.join(', ') || 'none' }}</p>
+        <h4>Dependency attempts · request time {{ integrationInspection.elapsedMs ?? 0 }} ms</h4><div class="aks-integration-inspection__operations"><article v-for="operation in integrationInspection.operations" :key="operation.name"><strong>{{ operation.name }}</strong><span>{{ operation.status }}</span><ol v-if="operation.attempts.length"><li v-for="attempt in operation.attempts" :key="attempt.attemptNumber">Attempt {{ attempt.attemptNumber }} · {{ attempt.durationMs }} ms<span v-if="attempt.waitMs"> · wait {{ attempt.waitMs }} ms</span><span v-if="attempt.errorCode"> · {{ attempt.errorCode }}</span></li></ol><small v-else>No attempts</small></article></div>
+      </template>
     </section>
     <section v-if="configCapable" class="aks-config-controls" aria-label="Configuration fixture controls">
       <h3>Supplied assistant profiles</h3>
@@ -165,6 +181,17 @@ async function copyLogCommand(command) {
 .aks-connectivity-controls { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
 .aks-connectivity-controls h3 { margin: 0 0 10px; font-size: 15px; }
 .aks-connectivity-controls p { max-width: 70ch; line-height: 1.5; }
+.aks-integration-inspection { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
+.aks-integration-inspection h3 { margin: 0 0 10px; }
+.aks-integration-inspection h4 { margin: 16px 0 8px; }
+.aks-integration-inspection__bindings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 0; }
+.aks-integration-inspection__bindings dt { color: var(--text-2); }
+.aks-integration-inspection__bindings dd { margin: 0; overflow-wrap: anywhere; }
+.aks-integration-inspection__operations { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.aks-integration-inspection__operations article { min-width: 0; padding: 10px; background: var(--surface); overflow-wrap: anywhere; }
+.aks-integration-inspection__operations article > * { display: block; margin-bottom: 4px; }
+.aks-integration-inspection__operations ol { padding-left: 20px; }
+@media (max-width: 520px) { .aks-integration-inspection__bindings { grid-template-columns: 1fr; } }
 .aks-connectivity-trace > p { max-width: 80ch; line-height: 1.5; }
 .aks-connectivity-trace code { overflow-wrap: anywhere; }
 .aks-connectivity-trace__hops { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0; list-style: none; }

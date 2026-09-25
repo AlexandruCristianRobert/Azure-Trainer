@@ -67,13 +67,17 @@ function validIntegrationTrace(trace) {
     if (key === 'cutoff') return Number.isFinite(item) && item >= 0 && item <= 2
     return Number.isInteger(item) && item >= 1 && item <= 3
   })
-  return isPlainObject(trace) && trace.version === 1 && Object.keys(trace).every(key => ['version', 'graphHash', 'queryHash', 'fixtureVersion', 'profileId', 'inputDisposition', 'vectorProvenance', 'queryBindings', 'selectedIds', 'contextIds', 'sourceProvenance', 'elapsedMs', 'attempts'].includes(key))
+  return isPlainObject(trace) && trace.version === 1 && Object.keys(trace).every(key => ['version', 'graphHash', 'queryHash', 'fixtureVersion', 'profileId', 'inputDisposition', 'vectorProvenance', 'queryBindings', 'selectedIds', 'rankedDistances', 'contextIds', 'sourceProvenance', 'elapsedMs', 'attempts'].includes(key))
     && typeof trace.graphHash === 'string' && typeof trace.queryHash === 'string' && Number.isInteger(trace.fixtureVersion)
     && profileIds.has(trace.profileId) && ['accepted', 'rejected'].includes(trace.inputDisposition)
     && (trace.vectorProvenance === null || typeof trace.vectorProvenance === 'string')
     && (trace.sourceProvenance === null || typeof trace.sourceProvenance === 'string')
     && (trace.queryBindings === null || safeBindings(trace.queryBindings))
     && Array.isArray(trace.selectedIds) && trace.selectedIds.every(value => typeof value === 'string')
+    && Array.isArray(trace.rankedDistances) && trace.rankedDistances.length <= 3
+    && trace.rankedDistances.every(item => isPlainObject(item) && Object.keys(item).every(key => ['id', 'distance'].includes(key))
+      && typeof item.id === 'string' && item.id.length <= 96 && Number.isFinite(item.distance) && item.distance >= 0 && item.distance <= 2)
+    && trace.rankedDistances.length === trace.selectedIds.length && trace.rankedDistances.every((item, index) => item.id === trace.selectedIds[index])
     && Array.isArray(trace.contextIds) && trace.contextIds.every(value => typeof value === 'string')
     && Number.isFinite(trace.elapsedMs) && trace.elapsedMs >= 0 && trace.elapsedMs <= 5000
     && Array.isArray(trace.attempts) && trace.attempts.length <= 9 && trace.attempts.every(validAttempt)

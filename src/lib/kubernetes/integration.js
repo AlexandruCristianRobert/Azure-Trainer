@@ -91,7 +91,7 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
   const trace = []
   const integrationTrace = { version: 1, graphHash: digest(graph ?? null), queryHash: digest(integration?.querySpec ?? null), fixtureVersion: fixtureCatalog?.version ?? null,
     profileId: typeof scenarioProfile === 'string' ? scenarioProfile : null, inputDisposition: null, vectorProvenance: null,
-    queryBindings: null, selectedIds: [], contextIds: [], sourceProvenance: null, elapsedMs: 0, attempts: [] }
+    queryBindings: null, selectedIds: [], rankedDistances: [], contextIds: [], sourceProvenance: null, elapsedMs: 0, attempts: [] }
   if (request?.method !== 'POST' || request?.path !== '/api/ask') return result(404, { error: 'Not found.' }, trace, failure('ROUTE_NOT_FOUND', 'The supplied route does not exist.'), integrationTrace)
   if (!integration || integration.adapter !== 'integration-fixture-v1' || graph?.version !== 1 || !Array.isArray(graph.nodes) || graph.nodes.length > 256 || !Array.isArray(graph.roots?.answer))
     return result(503, { error: 'The supplied assistant dependency is unavailable.' }, trace, publicDiagnostic('INTEGRATION_GRAPH_INVALID'), integrationTrace)
@@ -219,6 +219,7 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
             const rows = retrieveFixtureRows(integration.querySpec, params, fixtureCatalog.documents)
             if (rows.diagnostic) throw failure(rows.diagnostic.code === 'SQL_VECTOR_INVALID' ? 'VECTOR_DIMENSION' : 'QUERY_PARAMETERS', 'The retrieval query has invalid or missing parameters.')
             integrationTrace.selectedIds = rows.selectedIds
+            integrationTrace.rankedDistances = rows.distances
             return rows.rows
           })
           output = tagged(retrieval, 'rows'); break

@@ -19,6 +19,7 @@ const dirty = computed(() => text.value !== saved.value)
 const version = computed(() => current.value?.fileVersions?.[path.value] ?? 0)
 const published = computed(() => Object.values(run.behavioralRun?.artifacts?.buildsById ?? {}).at(-1))
 const isKubernetes = computed(() => manifest.value?.runtimeFamily === 'aks' || manifest.value?.language === 'python')
+const integrationProject = computed(() => manifest.value?.integration === true)
 function semanticManifest(value, defaultNamespace = '') {
   const namespace = value.kind === 'Namespace' ? '' : value.metadata?.namespace ?? defaultNamespace
   const metadata = { name: value.metadata?.name, ...(namespace ? { namespace } : {}), ...(value.metadata?.labels ? { labels: value.metadata.labels } : {}) }
@@ -49,6 +50,11 @@ function selectFile(next) {
   text.value = current.value?.draftFiles?.[next] ?? ''
   message.value = ''
 }
+function openDiagnostic(item) {
+  if (!files.value.includes(item.path)) return
+  selectFile(item.path)
+  message.value = item.line ? `Showing ${item.path}, reported near line ${item.line}.` : `Showing ${item.path}.`
+}
 watch(() => `${run.labId}:${run.behavioralRun?.attemptId ?? ''}:${current.value?.manifestId ?? ''}`, () => {
   selectFile(files.value.includes(path.value) ? path.value : files.value[0])
 }, { immediate: true })
@@ -76,11 +82,21 @@ async function save() {
       <div class="project-tool__editor">
         <div class="project-tool__file-head"><strong>{{ path }}</strong><span>{{ dirty ? 'Draft differs from saved' : 'Saved version' }} {{ version }}</span></div>
         <p v-if="isKubernetes" class="project-tool__state">Saved: edits become build/apply input only after Save. Built: {{ published ? published.id : 'no image yet' }}. Applied: {{ applied }}</p>
+        <aside v-if="integrationProject && ['app.py', 'retrieval.sql'].includes(path)" class="project-tool__syntax" aria-label="Integration fixture adapter and supported syntax">
+          <strong>Local fixture adapter · integration-fixture-v1</strong>
+          <p>Python supports the taught request handlers, input checks, client construction, named calls, dictionaries, loops, guards, and returns shown in this project. SQL supports the declared documents table, equality metadata filters, cosine distance cutoff, ordering, and LIMIT with named parameters. Requests use deterministic local fixtures; no Python SDK or database connects.</p>
+        </aside>
         <label class="project-tool__label" for="project-source">File contents</label>
         <textarea id="project-source" :value="text" :disabled="locked || fixed" :readonly="fixed" spellcheck="false" @input="edit" />
         <div class="project-tool__actions"><span role="status">{{ fixed ? 'Fixed helper · read-only' : message || (run.unsaved ? 'Saving draft…' : dirty ? 'Unsaved draft' : 'Saved source') }}</span><button type="button" class="btn btn--primary" :disabled="locked || fixed || run.busy || !dirty" @click="save">Save file</button></div>
-        <ul v-if="run.diagnostics?.length" class="project-tool__diagnostics" aria-label="Diagnostics"><li v-for="(item, i) in run.diagnostics" :key="i">{{ item.path || path }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}: {{ item.code }} — {{ item.message }}</li></ul>
+        <ul v-if="run.diagnostics?.length" class="project-tool__diagnostics" aria-label="Diagnostics"><li v-for="(item, i) in run.diagnostics" :key="i"><button v-if="files.includes(item.path)" type="button" class="project-tool__diagnostic-link" @click="openDiagnostic(item)">{{ item.path }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</button><span v-else>{{ item.path || path }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</span>: {{ item.code }} — {{ item.message }}</li></ul>
       </div>
     </div>
   </section>
 </template>
+
+<style scoped>
+.project-tool__syntax { margin: 10px 0; padding: 12px; border-left: 3px solid var(--accent); background: var(--surface-subtle, var(--surface)); }
+.project-tool__syntax p { max-width: 80ch; margin: 6px 0 0; color: var(--text-2); line-height: 1.5; }
+.project-tool__diagnostic-link { padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+</style>

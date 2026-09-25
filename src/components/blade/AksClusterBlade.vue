@@ -4,6 +4,7 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
 import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
+import { inspectIntegration } from '../../lib/kubernetes/integration-inspection.js'
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
@@ -41,6 +42,13 @@ const configurationEvents = computed(() => configCapable.value
   ? view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['CreateContainerConfigError', 'FailedMount'].includes(item.reason))
     .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message }))
   : [])
+const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIntegration === true
+  ? [...new Map((run.behavioralRun?.runtime?.kubernetes?.requests ?? []).filter(item => item.clusterId === cluster.value?.id && item.integrationTrace)
+    .slice().reverse().map(item => [item.scenarioId, item])).values()].flatMap(item => {
+      const view = inspectIntegration(run.behavioralRun, run.lab, item.scenarioId)
+      return view.available ? [{ id: item.id, question: view.question, profile: view.profile.label, status: item.status,
+        elapsedMs: view.elapsedMs, operations: view.operations.filter(operation => operation.status !== 'not-reached').map(operation => `${operation.name}: ${operation.status}`) }] : []
+    }) : [])
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -75,6 +83,11 @@ const configurationEvents = computed(() => configCapable.value
     </section>
     <h3 class="blade__section-title">Image-pull events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="imageEvents" empty-text="No image-pull events in this namespace" />
     <template v-if="configCapable"><h3 class="blade__section-title">Configuration events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="configurationEvents" empty-text="No configuration events in this namespace" /></template>
+    <section v-if="run.lab?.capabilities?.kubernetesAiIntegration" class="aks-ai-inspection" aria-labelledby="aks-ai-inspection-title">
+      <h3 id="aks-ai-inspection-title" class="blade__section-title">Latest assistant requests</h3>
+      <p>Read-only summaries show the latest request for each declared scenario. Request timing is separate from simulated cluster time.</p>
+      <EntityTable :columns="[{ key: 'question', label: 'Declared question', grow: 2 }, { key: 'profile', label: 'Fixture profile' }, { key: 'status', label: 'HTTP' }, { key: 'elapsedMs', label: 'Request ms' }, { key: 'operations', label: 'Reached operations', grow: 2 }]" :rows="integrationRequests" empty-text="No assistant integration requests have been recorded" />
+    </section>
     </div>
     <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">
       <h3 class="blade__section-title">Services and selected backends</h3>
@@ -96,6 +109,8 @@ const configurationEvents = computed(() => configCapable.value
 
 <style scoped>
 .aks-config-inspection { margin: 22px 0; padding: 16px; border-left: 3px solid var(--accent); background: var(--surface-subtle, var(--surface)); }
+.aks-ai-inspection { margin: 22px 0; }
+.aks-ai-inspection > p { max-width: 70ch; color: var(--text-2); line-height: 1.5; }
 .aks-config-inspection header p { max-width: 70ch; color: var(--text-2); line-height: 1.5; }
 .aks-config-inspection label { display: inline-flex; align-items: center; gap: 8px; margin: 4px 0 14px; }
 .aks-config-inspection select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border-input); background: var(--surface); color: var(--text); font: inherit; }
