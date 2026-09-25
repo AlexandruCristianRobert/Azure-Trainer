@@ -3,13 +3,14 @@ import { computed, ref, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
+import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspection.js'
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
 
 const props = defineProps({ resourceGroup: String, name: String })
-const run = useLabRunStore(); const portal = usePortalStore(); const namespace = ref('')
+const run = useLabRunStore(); const portal = usePortalStore(); const namespace = ref(''); const bladeTab = ref('overview')
 const cluster = computed(() => run.sandbox.aksClusters?.find(item => item.resourceGroup.toLowerCase() === props.resourceGroup.toLowerCase() && item.name.toLowerCase() === props.name.toLowerCase()) ?? null)
 const view = computed(() => projectKubernetesInspection(run.behavioralRun, cluster.value?.id))
 const namespaces = computed(() => view.value.namespaces.map(item => item.metadata.name))
@@ -27,9 +28,11 @@ const essentials = computed(() => cluster.value ? [
   { label: 'Node resource group', value: cluster.value.nodeResourceGroup }, { label: 'Kubernetes version', value: 'Modeled training cluster' },
 ] : [])
 const rows = (items, mapper) => computed(() => items.value.map(mapper))
+function selectBladeTab(tab) { bladeTab.value = tab; document.getElementById(`aks-${tab}-tab`)?.focus() }
 const deploymentRows = rows(scoped('deployments'), item => ({ name: item.metadata.name, status: `${item.spec.replicas} desired`, image: item.spec.template.spec.containers[0]?.image ?? '' }))
 const podRows = rows(scoped('pods'), item => ({ name: item.metadata.name, status: item.status?.phase ?? 'Unknown', image: item.spec.containers[0]?.image ?? '' }))
-const serviceRows = computed(() => view.value.serviceEndpoints.filter(item => item.namespace === namespace.value).map(item => ({ name: item.name, status: item.type, endpoint: `${item.readyBackends.length} ready: ${item.readyBackends.map(backend => backend.name).join(', ') || 'none'} · ${item.targetPort ?? 'none'} → ${item.resolvedPort ?? 'unresolved'}` })))
+const connectivityViews = computed(() => view.value.services.filter(item => item.metadata?.namespace === namespace.value)
+  .map(item => ({ service: item, view: inspectConnectivity(run.behavioralRun, { clusterId: cluster.value?.id, namespace: namespace.value, serviceName: item.metadata.name }) })))
 const imageEvents = computed(() => view.value.events.filter(item => item.metadata?.namespace === namespace.value && ['RegistryAccessDenied', 'ImageNotFound'].includes(item.reason))
   .map(item => ({ name: item.metadata.name, reason: item.reason, message: item.message })))
 const configurationEvents = computed(() => configCapable.value
@@ -41,8 +44,13 @@ const configurationEvents = computed(() => configCapable.value
 <template><section class="blade"><div class="blade__content blade__content--full">
   <BladeHeader :crumbs="[{ label: 'Home', route: '/' }, { label: 'Resource groups', blade: { kind: 'resource-groups' } }, { label: resourceGroup, blade: { kind: 'resource-group', name: resourceGroup } }, { label: name }]" :title="name" subtitle="Kubernetes service" icon="aks" :commands="[{ label: 'Refresh', icon: 'arrow-sync' }]" @navigate="portal.showBlade($event)" />
   <template v-if="cluster"><EssentialsGrid :items="essentials" @navigate="portal.showBlade($event)" /><p class="aks-blade__notice">Workloads and request results are read-only. State changes are modeled immediately for this Lab.</p>
-    <h3 class="blade__section-title">Nodes</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'vmSize', label: 'VM size' }]" :rows="view.nodes" empty-text="No nodes are modeled" />
     <div class="aks-blade__scope"><label>Namespace <select v-model="namespace"><option v-for="item in namespaces" :key="item">{{ item }}</option></select></label></div>
+    <div class="aks-inspection-tabs" role="tablist" aria-label="Cluster inspection">
+      <button id="aks-overview-tab" role="tab" type="button" :tabindex="bladeTab === 'overview' ? 0 : -1" :aria-selected="bladeTab === 'overview'" aria-controls="aks-overview-panel" @click="bladeTab = 'overview'" @keydown.right.prevent="selectBladeTab('services')" @keydown.left.prevent="selectBladeTab('services')">Overview</button>
+      <button id="aks-services-tab" role="tab" type="button" :tabindex="bladeTab === 'services' ? 0 : -1" :aria-selected="bladeTab === 'services'" aria-controls="aks-services-panel" @click="bladeTab = 'services'" @keydown.right.prevent="selectBladeTab('overview')" @keydown.left.prevent="selectBladeTab('overview')">Services</button>
+    </div>
+    <div v-if="bladeTab === 'overview'" id="aks-overview-panel" role="tabpanel" aria-labelledby="aks-overview-tab">
+    <h3 class="blade__section-title">Nodes</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'vmSize', label: 'VM size' }]" :rows="view.nodes" empty-text="No nodes are modeled" />
     <h3 class="blade__section-title">Deployments</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Replicas' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="deploymentRows" empty-text="No deployments in this namespace" />
     <h3 class="blade__section-title">Pods</h3><EntityTable :columns="[{ key: 'name', label: 'Name', grow: 1.5 }, { key: 'status', label: 'Status' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="podRows" empty-text="No Pods in this namespace" />
     <section v-if="configCapable" class="aks-config-inspection" aria-labelledby="aks-config-inspection-title">
@@ -63,9 +71,21 @@ const configurationEvents = computed(() => configCapable.value
 
 
     </section>
-    <h3 class="blade__section-title">Services</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Type' }, { key: 'endpoint', label: 'Endpoint' }]" :rows="serviceRows" empty-text="No Services in this namespace" />
     <h3 class="blade__section-title">Image-pull events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="imageEvents" empty-text="No image-pull events in this namespace" />
     <template v-if="configCapable"><h3 class="blade__section-title">Configuration events</h3><EntityTable :columns="[{ key: 'name', label: 'Event' }, { key: 'reason', label: 'Reason' }, { key: 'message', label: 'Message', grow: 2 }]" :rows="configurationEvents" empty-text="No configuration events in this namespace" /></template>
+    </div>
+    <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">
+      <h3 class="blade__section-title">Services and selected backends</h3>
+      <p>Addresses and endpoints are simulated from the applied Service and current Pods.</p>
+      <p v-if="!connectivityViews.length">No Services in this namespace.</p>
+      <article v-for="item in connectivityViews" :key="item.service.metadata.uid" class="aks-service-card">
+        <h4>{{ item.service.metadata.name }} <span>{{ item.service.spec.type }}</span></h4>
+        <dl><dt>Namespace</dt><dd>{{ item.service.metadata.namespace }}</dd><dt>Address</dt><dd>ClusterIP {{ item.service.spec.clusterIP }}<template v-if="item.service.status?.loadBalancer?.ingress?.[0]?.ip"> · External {{ item.service.status.loadBalancer.ingress[0].ip }}</template></dd><dt>Port mapping</dt><dd>{{ item.service.spec.ports?.[0]?.port }} → {{ item.service.spec.ports?.[0]?.targetPort }}</dd><dt>Selector</dt><dd>{{ JSON.stringify(item.service.spec.selector) }}</dd></dl>
+        <h5>Selected Pods and endpoints</h5>
+        <div class="aks-services-tab__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Readiness</th><th scope="col">Endpoint</th><th scope="col">Backend port</th><th scope="col">Application listener</th></tr></thead><tbody><tr v-for="backend in item.view.backends" :key="backend.podUid"><th scope="row">{{ backend.name }}</th><td>{{ backend.ready ? 'Ready' : 'Not ready' }}</td><td>{{ backend.address ?? 'Not assigned' }}</td><td>{{ backend.endpointPort ?? 'Unresolved' }}</td><td>{{ backend.listenerPort ?? 'Unknown' }}</td></tr></tbody></table></div>
+        <p v-if="!item.view.backends.length">No selected Pods.</p>
+      </article>
+    </div>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
 </div></section></template>
 
@@ -78,4 +98,16 @@ const configurationEvents = computed(() => configCapable.value
 .aks-config-inspection th, .aks-config-inspection td { padding: 7px 9px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .aks-config-inspection th { color: var(--text-2); font-weight: 600; }
 @media (max-width: 640px) { .aks-config-inspection { overflow-x: auto; } .aks-config-inspection table { min-width: 560px; } }
+.aks-inspection-tabs { display: flex; gap: 8px; margin: 20px 0 12px; border-bottom: 1px solid var(--border); }
+.aks-inspection-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.aks-inspection-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: 650; }
+.aks-inspection-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.aks-service-card { margin: 16px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
+.aks-service-card h4 { display: flex; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.aks-service-card dl { display: grid; grid-template-columns: minmax(110px, .5fr) minmax(0, 1.5fr); gap: 6px 12px; }
+.aks-service-card dd { margin: 0; overflow-wrap: anywhere; }
+.aks-services-tab__table { overflow-x: auto; }
+.aks-services-tab__table table { width: 100%; min-width: 620px; border-collapse: collapse; text-align: left; }
+.aks-services-tab__table th, .aks-services-tab__table td { padding: 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+@media (max-width: 640px) { .aks-service-card dl { grid-template-columns: 1fr; gap: 3px; } .aks-service-card dd { margin: 0 0 8px; } }
 </style>
