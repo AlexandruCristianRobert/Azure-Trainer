@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { migrateBehavioralRun } from '../src/lib/labEngine/migrations.js'
 import { emptyKubernetesRuntime } from '../src/lib/kubernetes/state.js'
-import { createAksTestRun } from './helpers/aks.js'
+import { createAksTestRun, act } from './helpers/aks.js'
 
 it('initializes versioned Kubernetes state only for Kubernetes Labs', () => {
   const { lab, run } = createAksTestRun()
@@ -38,5 +38,26 @@ it('rejects malformed Kubernetes resource collections and request records', () =
   const { lab, run } = createAksTestRun()
   const corrupt = structuredClone(run)
   corrupt.runtime.kubernetes.requests = ['forged']
+  expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+})
+
+it('rejects an invalid Kubernetes context namespace', () => {
+  const { lab, run } = createAksTestRun()
+  let created = act(run, lab, { type: 'command', line: 'az group create -n rg-context -l eastus' }).run
+  created = act(created, lab, { type: 'command', line: 'az aks create -g rg-context -n aks-context --enable-managed-identity --generate-ssh-keys' }).run
+  const corrupt = structuredClone(created)
+  corrupt.runtime.kubernetes.contexts.current = { clusterId: corrupt.sandbox.aksClusters[0].id, namespace: 'bad name' }
+  corrupt.runtime.kubernetes.currentContext = 'current'
+  expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+})
+
+it('rejects a cluster state missing its required default namespaces', () => {
+  const { lab, run } = createAksTestRun()
+  let created = run
+  // Create state through the reducer so the test has a real cluster record.
+  created = act(created, lab, { type: 'command', line: 'az group create -n rg-aks-test -l eastus' }).run
+  created = act(created, lab, { type: 'command', line: 'az aks create -g rg-aks-test -n aks-test --enable-managed-identity --generate-ssh-keys' }).run
+  const corrupt = structuredClone(created)
+  delete corrupt.runtime.kubernetes.clusters[corrupt.sandbox.aksClusters[0].id].resources['Namespace//kube-system']
   expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
 })
