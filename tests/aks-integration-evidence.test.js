@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { integrationDependencies } from '../src/lib/kubernetes/evidence.js'
 import { act, seedIntegrationTest } from './helpers/aks.js'
 
 describe('AKS assistant integration evidence', () => {
@@ -29,11 +30,30 @@ describe('AKS assistant integration evidence', () => {
     expect(changed.dependencyGenerations).not.toEqual(observed.dependencyGenerations)
   })
 
+  it('stales proof after a Secret change is applied and captured without exporting its value', () => {
+    const { run, lab, clusterId } = seedIntegrationTest()
+    const observed = act(run, lab, { type: 'aks-request', scenarioId: 'ai-healthy' }).run
+    const selector = Object.values(integrationDependencies({ clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-public' }))[0]
+    const before = selector({ ...observed, run: observed })
+    const secret = observed.project.savedFiles['k8s/secret.yaml'].replace('training-only-password', 'rotated-training-password')
+    let changed = act(observed, lab, { type: 'save-file', path: 'k8s/secret.yaml', text: secret }).run
+    changed = act(changed, lab, { type: 'command', line: 'kubectl apply -f k8s/secret.yaml' }).run
+    changed = act(changed, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant -n assistant' }).run
+    const after = selector({ ...changed, run: changed })
+    expect(after.pods[0].secretDigest).not.toBe(before.pods[0].secretDigest)
+    expect(JSON.stringify(after)).not.toContain('rotated-training-password')
+    expect(changed.dependencyGenerations).not.toEqual(observed.dependencyGenerations)
+  })
+
   it('rejects persisted integration traces with unsafe bindings or impossible timing', () => {
     const { run, lab } = seedIntegrationTest()
     const observed = act(run, lab, { type: 'aks-request', scenarioId: 'ai-healthy' }).run
     const corrupted = structuredClone(observed)
     corrupted.runtime.kubernetes.requests[0].integrationTrace.queryBindings = { password: 'leaked' }
     expect(() => validateBehavioralRun(corrupted, lab)).toThrow()
+
+    const malformed = structuredClone(observed)
+    malformed.runtime.kubernetes.requests[0].integrationTrace.queryBindings = { collection: { leaked: true } }
+    expect(() => validateBehavioralRun(malformed, lab)).toThrow()
   })
 })

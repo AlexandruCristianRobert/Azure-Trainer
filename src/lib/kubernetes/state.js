@@ -51,12 +51,23 @@ function validIntegrationTrace(trace) {
     && Number.isInteger(attempt.attemptNumber) && attempt.attemptNumber >= 1 && attempt.attemptNumber <= 3
     && ['startMs', 'durationMs', 'timeoutMs', 'delayBeforeNextMs'].every(key => Number.isFinite(attempt[key]) && attempt[key] >= 0 && attempt[key] <= 5000)
     && (attempt.errorCode === null || typeof attempt.errorCode === 'string')
+  const safeText = value => typeof value === 'string' && value.length <= 128
+    && !/[a-z][a-z+.-]*:\/\/[^/\s]*?(?::[^@/\s]+)?@/i.test(value)
+  const safeBindings = value => isPlainObject(value) && Object.entries(value).every(([key, item]) => {
+    if (!safeBindingKeys.has(key)) return false
+    if (item === '[redacted]') return true
+    if (key === 'collection' || key === 'audience') return safeText(item)
+    if (key === 'published') return typeof item === 'boolean'
+    if (key === 'vector') return typeof item === 'string' && /^\[-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?\]$/.test(item)
+    if (key === 'cutoff') return Number.isFinite(item) && item >= 0 && item <= 1
+    return Number.isInteger(item) && item >= 0 && item <= 100
+  })
   return isPlainObject(trace) && trace.version === 1 && Object.keys(trace).every(key => ['version', 'graphHash', 'queryHash', 'fixtureVersion', 'profileId', 'inputDisposition', 'vectorProvenance', 'queryBindings', 'selectedIds', 'contextIds', 'sourceProvenance', 'elapsedMs', 'attempts'].includes(key))
     && typeof trace.graphHash === 'string' && typeof trace.queryHash === 'string' && Number.isInteger(trace.fixtureVersion)
     && profileIds.has(trace.profileId) && ['accepted', 'rejected'].includes(trace.inputDisposition)
     && (trace.vectorProvenance === null || typeof trace.vectorProvenance === 'string')
     && (trace.sourceProvenance === null || typeof trace.sourceProvenance === 'string')
-    && (trace.queryBindings === null || isPlainObject(trace.queryBindings) && Object.keys(trace.queryBindings).every(key => safeBindingKeys.has(key)))
+    && (trace.queryBindings === null || safeBindings(trace.queryBindings))
     && Array.isArray(trace.selectedIds) && trace.selectedIds.every(value => typeof value === 'string')
     && Array.isArray(trace.contextIds) && trace.contextIds.every(value => typeof value === 'string')
     && Number.isFinite(trace.elapsedMs) && trace.elapsedMs >= 0 && trace.elapsedMs <= 5000

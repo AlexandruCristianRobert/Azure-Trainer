@@ -2,6 +2,13 @@ import { canonicalize } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { parseKubernetesYaml } from './yaml.js'
 
+function redactedDigest(value) {
+  const text = JSON.stringify(value)
+  let hash = 2166136261
+  for (const character of text) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  return `sha256:${(hash >>> 0).toString(16)}`
+}
+
 export function kubernetesDependencies(clusterId, namespace, deploymentName, serviceName, { sourceSensitive = false } = {}) {
   const base = context => {
     const state = context.runtime.kubernetes?.clusters?.[clusterId]
@@ -64,17 +71,26 @@ export function integrationDependencies(target) {
       const manifest = getProjectManifest(context.project.manifestId)
       const buildFiles = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, context.project.savedFiles[path] ?? null]))
       const capturedFiles = artifact ? context.artifacts.sourceSnapshotsByHash?.[artifact.sourceHash]?.files ?? null : null
+      const configuration = Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata.namespace === namespace)
+        .map(item => ({ kind: item.kind, name: item.metadata.name, uid: item.metadata.uid, resourceVersion: item.metadata.resourceVersion,
+          keys: Object.keys(item.data ?? {}).sort() })).sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`))
       const pods = Object.values(resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace)
-        .map(pod => ({ uid: pod.metadata.uid, phase: pod.status?.phase ?? null,
-          artifactId: state?.podSnapshots?.[pod.metadata.uid]?.artifactId ?? null,
-          templateHash: state?.podSnapshots?.[pod.metadata.uid]?.templateHash ?? null,
-          environment: Object.fromEntries(Object.entries(state?.podSnapshots?.[pod.metadata.uid]?.environment ?? {})
-            .filter(([key]) => !/(?:password|secret|token|credential|api[_-]?key)/i.test(key))),
-        })).sort((a, b) => a.uid.localeCompare(b.uid))
+        .map(pod => {
+          const snapshot = state?.podSnapshots?.[pod.metadata.uid]
+          const environment = Object.entries(snapshot?.environment ?? {})
+          const secretEntries = environment.filter(([key]) => /(?:password|secret|token|credential|api[_-]?key)/i.test(key)).sort(([a], [b]) => a.localeCompare(b))
+          return { uid: pod.metadata.uid, phase: pod.status?.phase ?? null, artifactId: snapshot?.artifactId ?? null,
+            templateHash: snapshot?.templateHash ?? null,
+            environment: Object.fromEntries(environment.filter(([key]) => !/(?:password|secret|token|credential|api[_-]?key)/i.test(key))),
+            configRefs: (snapshot?.configRefs ?? []).map(ref => ({ kind: ref.kind, namespace: ref.namespace, name: ref.name, key: ref.key,
+              resourceVersion: ref.resourceVersion, mode: ref.mode, target: ref.target })).sort((a, b) => `${a.kind}/${a.name}/${a.key}`.localeCompare(`${b.kind}/${b.name}/${b.key}`)),
+            secretDigest: redactedDigest(secretEntries),
+          }
+        }).sort((a, b) => a.uid.localeCompare(b.uid))
       return { version: 1, clusterId, namespace, deploymentName, serviceName,
         route: service ? { uid: service.metadata?.uid ?? null, version: service.metadata?.resourceVersion ?? null, spec: service.spec ?? null } : null,
         image, artifact: artifact ? { id: artifact.id, image: artifact.image, sourceHash: artifact.sourceHash } : null,
-        capturedFiles, savedBuildFiles: buildFiles, pods }
+        capturedFiles, savedBuildFiles: buildFiles, configuration, pods }
     },
   }
 }
