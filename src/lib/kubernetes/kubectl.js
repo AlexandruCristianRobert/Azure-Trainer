@@ -1,6 +1,6 @@
 import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects, kubeObjectKey } from './objects.js'
-import { reconcileKubernetes, getDeploymentPods, getPodTemplateHash } from './reconcile.js'
+import { reconcileKubernetes, restartDeployment, getDeploymentPods, getPodTemplateHash } from './reconcile.js'
 import { validateKubernetesObject } from './schema.js'
 import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 
@@ -176,11 +176,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   if (verb === 'rollout' && parsed.positional[0] === 'restart' && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {
     const name = parsed.positional[1].slice(11)
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
-    const next = structuredClone(run); const deployment = next.runtime.kubernetes.clusters[selection.clusterId].resources[kubeObjectKey('Deployment', selection.namespace, name)]
+    const deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
     if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
-    deployment.spec.template.metadata.annotations = { ...(deployment.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': `sim-${run.runtime.simTimeMs}-${run.nextSequence}` }
-    deployment.metadata.generation += 1; deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
-    const reconciled = reconcileKubernetes(next, lab)
+    const reconciled = restartDeployment(run, selection.clusterId, selection.namespace, name, lab)
     return response(sandbox, [out(`deployment.apps/${name} restarted`)], stateEffect(reconciled))
   }
   return response(sandbox, [err('Unsupported kubectl command.')])

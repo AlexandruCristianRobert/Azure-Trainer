@@ -154,6 +154,18 @@ export function reconcileKubernetes(input, lab) {
   return run
 }
 
+export function restartDeployment(input, clusterId, namespace, name, lab) {
+  const next = clone(input)
+  const state = next.runtime.kubernetes.clusters[clusterId]
+  const deployment = state?.resources[kubeObjectKey('Deployment', namespace, name)]
+  if (!deployment) return next
+  deployment.spec.template.metadata.annotations = { ...(deployment.spec.template.metadata.annotations ?? {}),
+    'kubectl.kubernetes.io/restarted-at': `sim-${next.runtime.simTimeMs}-${next.nextSequence}` }
+  deployment.metadata.generation = (deployment.metadata.generation ?? 1) + 1
+  deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
+  return reconcileKubernetes(next, lab)
+}
+
 export function getPodTemplateHash(state, pod) {
   const snapshotHash = state.podSnapshots[pod.metadata.uid]?.templateHash
   if (snapshotHash) return snapshotHash

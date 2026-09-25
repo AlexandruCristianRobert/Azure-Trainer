@@ -4,6 +4,7 @@ import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
 import { parsePythonDockerfile } from '../project/python-dockerfile.js'
+import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -26,11 +27,43 @@ export function validateKubernetesRuntime(runtime, run) {
       && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace)))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
+  if (!validConfigIncident(runtime, run)) return false
   const clusterIds = new Set((run.sandbox.aksClusters ?? []).map(cluster => cluster.id))
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
     && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run))
+}
+
+function validConfigIncident(runtime, run) {
+  const incident = runtime.configIncident
+  if (run.labId !== CONFIG_TROUBLESHOOTING_LAB_ID) return incident === undefined
+  if (!isPlainObject(incident) || incident.version !== 1 || incident.labId !== CONFIG_TROUBLESHOOTING_LAB_ID
+    || Object.keys(incident).sort().join(',') !== 'labId,phase,transitions,version'
+    || !Array.isArray(incident.transitions) || incident.transitions.length > 2) return false
+  const expectedPhase = ['reference', 'key', 'stale'][incident.transitions.length]
+  if (incident.phase !== expectedPhase) return false
+  let priorSequence = 0
+  for (let index = 0; index < incident.transitions.length; index++) {
+    const transition = incident.transitions[index]
+    const previous = CONFIG_INCIDENT_PHASES[index]
+    const next = CONFIG_INCIDENT_PHASES[index + 1]
+    const evidence = run.evidence?.experimentsById?.[transition?.evidenceId]
+    if (!isPlainObject(transition) || Object.keys(transition).sort().join(',') !== 'attemptId,evidenceId,from,sequence,to'
+      || !Number.isSafeInteger(transition.sequence) || transition.sequence <= priorSequence || transition.sequence >= run.nextSequence
+      || transition.from !== previous.phase || transition.to !== next.phase || transition.attemptId !== run.attemptId
+      || typeof transition.evidenceId !== 'string' || !evidence || evidence.id !== transition.evidenceId
+      || evidence.attemptId !== run.attemptId || evidence.labId !== CONFIG_TROUBLESHOOTING_LAB_ID
+      || evidence.taskId !== previous.taskId || evidence.scenarioId !== previous.scenarioId
+      || evidence.outcome !== 'passed' || evidence.completed !== true
+      || evidence.sequence <= priorSequence || evidence.sequence >= transition.sequence
+      || evidence.measurements?.clusterId !== CONFIG_TROUBLESHOOTING_CLUSTER_ID
+      || evidence.measurements?.namespace !== 'assistant' || evidence.measurements?.deploymentName !== 'assistant'
+      || evidence.measurements?.serviceName !== 'assistant'
+      || evidence.measurements?.artifactId !== run.artifacts.publishedTags[CONFIG_TROUBLESHOOTING_IMAGE]) return false
+    priorSequence = transition.sequence
+  }
+  return true
 }
 
 function validClusterState(state, run) {

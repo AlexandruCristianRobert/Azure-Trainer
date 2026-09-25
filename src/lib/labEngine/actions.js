@@ -24,6 +24,7 @@ import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/stat
 import { applyAksAction } from '../kubernetes/actions.js'
 import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
 import { reconcileKubernetes } from '../kubernetes/reconcile.js'
+import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -558,6 +559,12 @@ export function applyRunAction(run, action, lab) {
       result = injected ? envelope(injected, [], [], [diagnostic('CAPSTONE_INCIDENT_INJECTED',
         'Simulated live FOUNDRY_DEPLOYMENT drift was injected into the Capstone app.')])
         : actionError(run, 'Seal the healthy Capstone stage and retain its running app before injecting the one-shot incident.')
+      break
+    }
+    case 'aks-config-next-incident': {
+      if (Object.keys(action).length !== 1) return actionError(run, 'Incident continuation accepts no caller-supplied phase or configuration.')
+      const incident = advanceConfigIncident(run, lab)
+      result = envelope(incident.run, incident.lines, [], incident.diagnostics)
       break
     }
     case 'advance-stage': {
