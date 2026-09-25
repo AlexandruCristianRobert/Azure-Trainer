@@ -21,6 +21,8 @@ import { injectCapstoneIncident } from './incident.js'
 import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
 import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/state.js'
+import { applyAksAction } from '../kubernetes/actions.js'
+import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -536,6 +538,13 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
+  if (action.type === 'aks-request') {
+    const aks = applyAksAction(run, action, lab)
+    const refreshed = refreshKubernetesDependencies(run, aks.run, lab)
+    const result = { ...aks, run: refreshed }
+    validateBehavioralRun(result.run, lab)
+    return result
+  }
   let result
   switch (action.type) {
     case 'inject-incident': {
@@ -646,6 +655,7 @@ export function applyRunAction(run, action, lab) {
         sealedStages: result.run.stages.sealedStages.slice(0, 5), cleanupCheckpoint: null } }
     }
   }
+  result.run = refreshKubernetesDependencies(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result
 }

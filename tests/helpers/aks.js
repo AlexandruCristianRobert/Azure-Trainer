@@ -1,6 +1,7 @@
 import { applyRunAction } from '../../src/lib/labEngine/actions.js'
 import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
+import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 
 export function makeAksLab(overrides = {}) {
   return {
@@ -38,5 +39,15 @@ export function seedFoundation({ namespace = 'assistant', version = '1.0' } = {}
   run = act(run, lab, { type: 'command', line: 'az aks create -g rgaks01 -n aks01 --enable-managed-identity --generate-ssh-keys --attach-acr acraks01' }).run
   run = act(run, lab, { type: 'command', line: 'az aks get-credentials -g rgaks01 -n aks01' }).run
   for (const path of ['k8s/namespace.yaml', 'k8s/deployment.yaml', 'k8s/service.yaml']) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
-  return { lab, run, clusterId: run.sandbox.aksClusters[0].id }
+  const clusterId = run.sandbox.aksClusters[0].id
+  const dependencies = kubernetesDependencies(clusterId, namespace, 'assistant', 'assistant', { sourceSensitive: true })
+  const scenario = { kind: 'aks-request', version: 1,
+    target: { clusterId, namespace, serviceName: 'assistant', deploymentName: 'assistant' },
+    request: { method: 'GET', path: '/api/info' },
+    expected: { status: 200, body: { service: 'knowledge-assistant', version, environment: 'training' } },
+    requireReplacement: false }
+  const evidenceLab = { ...lab, scenarios: { info: scenario, replacement: { ...scenario, requireReplacement: true } },
+    tasks: [{ id: 'info-task', verification: { scenarioId: 'info', scenarioVersion: 1 }, dependencies, check: () => false },
+      { id: 'replacement-task', verification: { scenarioId: 'replacement', scenarioVersion: 1 }, dependencies, check: () => false }] }
+  return { lab: evidenceLab, run, clusterId }
 }

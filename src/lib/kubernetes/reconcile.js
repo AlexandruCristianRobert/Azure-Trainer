@@ -103,6 +103,7 @@ export function reconcileKubernetes(input, lab) {
         if (!replacement) break
         receipt.replacementPodUid = replacement.metadata.uid
         receipt.replacementPodName = replacement.metadata.name
+        receipt.replacementReplicaSetUid = replacement.metadata.ownerReferences?.[0]?.uid ?? null
       }
       if (replicaSet.spec.replicas !== deployment.spec.replicas) {
         replicaSet.spec.replicas = deployment.spec.replicas

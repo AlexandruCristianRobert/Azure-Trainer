@@ -12,7 +12,12 @@ export function emptyClusterState(clusterId) {
 
 export function validateKubernetesRuntime(runtime, run) {
   if (!isPlainObject(runtime) || runtime.version !== 1 || (runtime.currentContext !== null && typeof runtime.currentContext !== 'string')
-    || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100 || !runtime.requests.every(item => isPlainObject(item)) || !isJsonValue(runtime)) return false
+    || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
+    || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string' && /^aks-request-\d+$/.test(item.id)
+      && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence <= run.nextSequence
+      && typeof item.scenarioId === 'string' && Number.isInteger(item.status) && typeof item.namespace === 'string'
+      && item.request?.method === 'GET' && item.request?.path === '/api/info')
+    || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   const clusterIds = new Set((run.sandbox.aksClusters ?? []).map(cluster => cluster.id))
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
