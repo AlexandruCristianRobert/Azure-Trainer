@@ -47,8 +47,10 @@ function target(run, options) {
 function resources(state, kind, namespace, allNamespaces) {
   if (kind === 'Node') return state.nodes ?? []
   if (kind === 'Event') return state.events.map((event, index) => ({ ...event, metadata: { ...event.metadata, name: event.metadata?.name ?? `event-${index + 1}` } }))
+    .filter(event => allNamespaces || event.metadata.namespace === namespace)
   return Object.values(state.resources).filter(item => item.kind === kind && (!namespaced.has(kind) || allNamespaces || item.metadata.namespace === namespace))
 }
+function namespaceMissing(state, namespace) { return !state.resources[kubeObjectKey('Namespace', '', namespace)] }
 function render(items, kind, format) {
   const value = items.length === 1 ? items[0] : { apiVersion: 'v1', kind: `${kind}List`, items }
   return format === 'json' ? kubeJson(value) : format === 'yaml' ? kubeYaml(value) : kubeTable(items, kind, format === 'wide')
@@ -93,13 +95,13 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   if (verb === 'config') {
     const command = rest[0], parsed = flags(rest.slice(1), command === 'set-context' ? new Set(['namespace', 'current']) : new Set())
     if (parsed.error) return response(sandbox, [err(parsed.error)])
-    if (command === 'current-context') return response(sandbox, [out(run.runtime.kubernetes.currentContext ?? '')])
-    if (command === 'get-contexts') return response(sandbox, [out(Object.entries(run.runtime.kubernetes.contexts).map(([name, item]) => `${name === run.runtime.kubernetes.currentContext ? '*' : ' '} ${name}\t${item.clusterId}\t${item.namespace}`).join('\n') || 'No contexts configured.')])
+    if (command === 'current-context') return parsed.positional.length ? response(sandbox, [err('current-context does not accept arguments.')]) : response(sandbox, [out(run.runtime.kubernetes.currentContext ?? '')])
+    if (command === 'get-contexts') return parsed.positional.length ? response(sandbox, [err('get-contexts does not accept arguments.')]) : response(sandbox, [out(Object.entries(run.runtime.kubernetes.contexts).map(([name, item]) => `${name === run.runtime.kubernetes.currentContext ? '*' : ' '} ${name}\t${item.clusterId}\t${item.namespace}`).join('\n') || 'No contexts configured.')])
     if (command === 'use-context' && parsed.positional.length === 1) { const name = parsed.positional[0]; if (!run.runtime.kubernetes.contexts[name]) return response(sandbox, [err(`Context '${name}' was not found.`)]); return response(sandbox, [out(`Switched to context "${name}".`)], [{ type: 'kubernetes-state', kubernetes: { ...run.runtime.kubernetes, currentContext: name }, nextSequence: run.nextSequence }]) }
     if (command === 'set-context' && parsed.values.current && parsed.values.namespace && !parsed.positional.length) { const name = run.runtime.kubernetes.currentContext; if (!name) return response(sandbox, [err('No current Kubernetes context is configured.')]); const contexts = structuredClone(run.runtime.kubernetes.contexts); contexts[name].namespace = parsed.values.namespace; return response(sandbox, [out(`Context namespace set to ${parsed.values.namespace}.`)], [{ type: 'kubernetes-state', kubernetes: { ...run.runtime.kubernetes, contexts }, nextSequence: run.nextSequence }]) }
     return response(sandbox, [err('Unsupported kubectl config command.')])
   }
-  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : new Set(['namespace', 'context', 'allNamespaces', 'output']))
+  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : new Set(['namespace', 'context', 'allNamespaces', 'output']))
   if (parsed.error) return response(sandbox, [err(parsed.error)])
   const selection = target(run, parsed.values)
   if (selection.error) return response(sandbox, [err(`Error: ${selection.error}`)])
@@ -108,6 +110,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!kind || parsed.positional.length > 2) return response(sandbox, [err('Unsupported resource type.')])
     if (name && parsed.values.allNamespaces) return response(sandbox, [err('A named resource cannot use --all-namespaces.')])
+    if (namespaced.has(kind) && !parsed.values.allNamespaces && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const derivedNodes = kind === 'Node' ? Array.from({ length: run.sandbox.aksClusters.find(cluster => cluster.id === selection.clusterId)?.nodeCount ?? 0 }, (_, index) => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: `nodepool1-${index}`, uid: `node-${selection.clusterId}-${index}` }, status: { phase: 'Ready' } })) : null
     const found = (derivedNodes ?? resources(selection.state, kind, selection.namespace, parsed.values.allNamespaces)).filter(item => !name || item.metadata.name === name)
     return name && !found.length ? response(sandbox, [err(`${kind} '${name}' was not found.`)]) : response(sandbox, [out(render(found, kind, parsed.values.output))])
@@ -115,12 +118,14 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   if (verb === 'describe') {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!['Deployment', 'Pod', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('describe requires deployment, pod, or service NAME.')])
+    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const found = resources(selection.state, kind, selection.namespace).find(item => item.metadata.name === name)
     return found ? response(sandbox, [out(describeObject(found, selection.state))]) : response(sandbox, [err(`${kind} '${name}' was not found.`)])
   }
   if (verb === 'logs') {
     const name = parsed.positional[0]
     if (!name || parsed.positional.length !== 1 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('logs requires POD.')])
+    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const pod = resources(selection.state, 'Pod', selection.namespace).find(item => item.metadata.name === name)
     if (!pod) return response(sandbox, [err(`Pod '${name}' was not found.`)])
     const snapshot = selection.state.podSnapshots[pod.metadata.uid]
@@ -145,6 +150,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!['Pod', 'Deployment', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, or service NAME.')])
+    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId], item = state.resources[kubeObjectKey(kind, selection.namespace, name)]
     if (!item) return response(sandbox, [err(`${kind} '${name}' was not found.`)])
     if (kind === 'Pod') { state.receipts.push({ cause: 'pod-delete', deletedPodUid: item.metadata.uid, deletedPodName: item.metadata.name, replacementPodUid: null, replacementPodName: null }); delete state.podSnapshots[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)] }
@@ -154,9 +160,10 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   }
   if (verb === 'rollout' && parsed.positional[0] === 'status' && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {
     const name = parsed.positional[1].slice(11), deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
+    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
     const pods = getDeploymentPods(run, selection.clusterId, selection.namespace, name)
-    return response(sandbox, [out(pods.every(pod => pod.status.phase === 'Running') ? `deployment "${name}" successfully rolled out (simulated).` : `deployment "${name}" has pending Pods (simulated).`)])
+    return response(sandbox, [out(pods.length === deployment.spec.replicas && pods.every(pod => pod.status.phase === 'Running') ? `deployment "${name}" successfully rolled out (simulated).` : `deployment "${name}" has pending Pods (simulated).`)])
   }
   return response(sandbox, [err('Unsupported kubectl command.')])
 }
