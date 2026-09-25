@@ -2,6 +2,8 @@ import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../temp
 import { configurationDependencies } from '../../../lib/kubernetes/evidence.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
+import { parseKubernetesYaml } from '../../../lib/kubernetes/yaml.js'
+import { canonicalize } from '../../../lib/labEngine/evidence.js'
 import { CONFIG_CLUSTER, CONFIG_GROUP, CONFIG_IMAGE, CONFIG_REGISTRY, configurationDeploymentReady, configurationEnvironmentRefreshed, configurationSourceReady } from './configuration-helpers.js'
 import { seedConfigurationGuided } from './configuration-seeds.js'
 
@@ -50,8 +52,21 @@ const learnerObjectsApplied = context => {
   const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
   const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]
   const config = state?.resources['ConfigMap/assistant/assistant-config']; const secret = state?.resources['Secret/assistant/assistant-credentials']
-  return ['training', 'training-updated'].includes(config?.data?.APP_ENV) && config.data?.PGHOST === 'pg-training.example' && (config.data?.['settings.json']?.includes('Training assistant') || config.data?.['settings.json']?.includes('Updated assistant'))
-    && secret?.type === 'Opaque' && Object.hasOwn(secret.data ?? {}, 'PGPASSWORD')
+  const parsedConfig = parseKubernetesYaml(context.project.savedFiles['k8s/configmap.yaml'] ?? '', 'k8s/configmap.yaml')
+  const parsedSecret = parseKubernetesYaml(context.project.savedFiles['k8s/secret.yaml'] ?? '', 'k8s/secret.yaml')
+  const savedConfig = parsedConfig.diagnostics.length ? null : parsedConfig.documents[0]
+  const savedSecret = parsedSecret.diagnostics.length ? null : parsedSecret.documents[0]
+  const expected = parseKubernetesYaml(CONFIG_SOLUTION_FILES['k8s/configmap.yaml'], 'k8s/configmap.yaml').documents[0].data
+  const settings = (() => { try { return JSON.parse(config?.data?.['settings.json'] ?? '') } catch { return null } })()
+  return config?.metadata?.namespace === 'assistant' && secret?.metadata?.namespace === 'assistant'
+    && ['training', 'training-updated'].includes(config.data?.APP_ENV)
+    && Object.keys(config.data ?? {}).sort().join(',') === Object.keys(expected).sort().join(',')
+    && Object.entries(expected).every(([key, value]) => ['APP_ENV', 'settings.json'].includes(key) || config.data[key] === value)
+    && ['Training assistant', 'Updated assistant'].includes(settings?.display_name) && settings?.response_prefix === ''
+    && savedConfig?.kind === 'ConfigMap' && canonicalize(savedConfig.data) === canonicalize(config.data)
+    && secret?.type === 'Opaque' && secret.data?.PGPASSWORD === 'dHJhaW5pbmctb25seS1wYXNzd29yZA=='
+    && savedSecret?.kind === 'Secret' && (savedSecret.stringData?.PGPASSWORD === 'training-only-password'
+      || savedSecret.data?.PGPASSWORD === secret.data.PGPASSWORD)
     && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
 }
 const mountedBeforeApplied = context => {

@@ -69,3 +69,14 @@ it('requires an actual pending file projection for the mounted-before observatio
   expect(record.measurements).toMatchObject({ projectionPending: true, mountedConfigMismatch: true })
   expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'mounted-before').done).toBe(true)
 })
+
+it('keeps the object task pending when saved configuration differs from applied state', () => {
+  let run = createBehavioralRun(aksConfigGuidedLab, { attemptId: 'saved-not-applied' })
+  for (const task of aksConfigGuidedLab.tasks.slice(0, 3)) run = executeAksSolution(run, aksConfigGuidedLab, task)
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'objects').done).toBe(true)
+  const changed = run.project.savedFiles['k8s/configmap.yaml'].replace('PGHOST: pg-training.example', 'PGHOST: other.example')
+  run = act(run, aksConfigGuidedLab, { type: 'save-file', path: 'k8s/configmap.yaml', text: changed }).run
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'objects').done).toBe(false)
+  run = act(run, aksConfigGuidedLab, { type: 'command', line: 'kubectl apply -f k8s/configmap.yaml' }).run
+  expect(evaluateLab(aksConfigGuidedLab, run).tasks.find(task => task.id === 'objects').done).toBe(false)
+})
