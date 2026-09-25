@@ -55,7 +55,17 @@ export function executeAksSolution(run, lab, task) {
       if (!action) throw new Error(`Unknown AKS solution command resolver: ${step.resolver ?? '(missing)'}`)
       run = act(run, lab, action).run
     } else if (step.kind === 'scenario') {
-      run = act(run, lab, { type: 'aks-request', scenarioId: step.scenarioId }).run
+      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
+        run = act(run, lab, { type: 'aks-probe-start', scenarioId: step.scenarioId }).run
+        for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
+        let advances = 0
+        while (Object.values(run.runtime.kubernetes?.clusters ?? {}).some(state => state.health?.experiment?.scenarioId === step.scenarioId)) {
+          if (++advances > 40) throw new Error(`Probe experiment ${step.scenarioId} exceeded its bounded Solution advances`)
+          run = act(run, lab, { type: 'aks-advance', seconds: 30 }).run
+        }
+      } else run = act(run, lab, { type: 'aks-request', scenarioId: step.scenarioId }).run
+    } else if (step.kind === 'advance') {
+      run = act(run, lab, { type: 'aks-advance', seconds: step.seconds }).run
     } else if (step.kind !== 'inspect') {
       throw new Error(`Unsupported AKS solution step: ${step.kind}`)
     }
