@@ -88,7 +88,8 @@ export function routeServiceRequest(input, probe, lab) {
     && Number.isInteger(probe.port) && probe.port >= 1 && probe.port <= 65535
     && (probe.method === 'GET' && probe.path === '/api/info' && (probe.body === null || probe.body === undefined)
       || probe.method === 'POST' && probe.path === '/api/ask' && typeof probe.body?.question === 'string'
-        && Object.keys(probe.body).length === 1 && Object.hasOwn(KNOWLEDGE_FIXTURES.questions, probe.body.question))
+        && Object.keys(probe.body).length === 1 && (Object.hasOwn(KNOWLEDGE_FIXTURES.questions, probe.body.question)
+          || Object.hasOwn(INTEGRATION_FIXTURES.questions, probe.body.question) || probe.body.question.trim() === ''))
   if (!validHttpProbe) {
     outcome.transport.reason = 'INVALID_PROBE'
     return { run: input, outcome }

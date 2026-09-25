@@ -40,7 +40,7 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
-    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab?.capabilities?.kubernetesConnectivity === true, id))
+    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id))
 }
 
 function validIntegrationTrace(trace) {
@@ -114,7 +114,8 @@ function validConfigIncident(runtime, run) {
   return true
 }
 
-function validClusterState(state, run, connectivityEnabled, clusterId) {
+function validClusterState(state, run, lab, clusterId) {
+  const connectivityEnabled = lab?.capabilities?.kubernetesConnectivity === true
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
@@ -147,7 +148,7 @@ function validClusterState(state, run, connectivityEnabled, clusterId) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
-  if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId)) return false
+  if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
   for (const [, resource] of resources) {
     if (resource.kind === 'Pod' || resource.kind === 'ReplicaSet') {
       if (resource.kind === 'Pod' && state.connectivity?.diagnosticPodUids.includes(resource.metadata.uid)) continue
@@ -196,7 +197,7 @@ function validClusterState(state, run, connectivityEnabled, clusterId) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId) {
+function validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab) {
   if (!connectivityEnabled) return state.connectivity === undefined && !resources.some(([, resource]) => resource.kind === 'EndpointSlice')
   if (state.connectivity === undefined) return false
   const value = state.connectivity
@@ -205,7 +206,7 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
     || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
     || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
     || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid), clusterId)) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
-    || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run))
+    || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run, lab))
     || new Set(value.applicationLogs.map(log => log.requestId)).size !== value.applicationLogs.length
     || value.applicationLogs.some((log, index, logs) => index > 0 && logs[index - 1].sequence >= log.sequence)
     || !validConnectivityIncident(value.incident, run)) return false
@@ -285,7 +286,7 @@ function validConnectivityIncident(incident, run) {
   return true
 }
 
-function validApplicationLog(log, byUid, state, run) {
+function validApplicationLog(log, byUid, state, run, lab) {
   const keys = ['requestId', 'sequence', 'podUid', 'podName', 'namespace', 'image', 'method', 'path', 'status', 'artifactId', 'dependencySummary']
   if (!isPlainObject(log) || Object.keys(log).sort().join(',') !== keys.sort().join(',')
     || !Number.isSafeInteger(log.sequence) || log.sequence < 1 || log.sequence >= run.nextSequence
@@ -297,7 +298,7 @@ function validApplicationLog(log, byUid, state, run) {
   const request = run.runtime?.kubernetes?.requests?.find(item => item.id === log.requestId && item.sequence === log.sequence)
   if (pod ? pod.kind !== 'Pod' || pod.metadata.name !== log.podName || pod.metadata.namespace !== log.namespace
     || pod.spec.containers[0]?.image !== log.image || state.podSnapshots[pod.metadata.uid]?.artifactId !== log.artifactId
-    : !validHistoricalConnectivityLog(log, request, run, state)) return false
+    : !validHistoricalConnectivityLog(log, request, run, state, lab)) return false
   if (!log.dependencySummary.every(item => isPlainObject(item) && Object.keys(item).every(key => ['operation', 'status', 'reason'].includes(key))
     && ['embedding', 'postgres-query', 'answer'].includes(item.operation) && ['succeeded', 'failed'].includes(item.status)
     && (item.reason === undefined || ['DNS_NOT_FOUND', 'AUTHENTICATION_FAILED', 'UNAVAILABLE'].includes(item.reason)))) return false
@@ -305,8 +306,10 @@ function validApplicationLog(log, byUid, state, run) {
     && request.route?.namespace === log.namespace && request.route?.artifactId === log.artifactId && request.status === log.status
 }
 
-function validHistoricalConnectivityLog(log, request, run, state) {
-  if (!isPlainObject(request) || !isPlainObject(request.route) || !['aks-connectivity-guided', CONNECTIVITY_TROUBLESHOOTING_LAB_ID, 'aks-connectivity-independent'].includes(run.labId)
+function validHistoricalConnectivityLog(log, request, run, state, lab) {
+  const supportsIntegrationConnectivity = lab?.capabilities?.kubernetesConnectivity === true && lab?.capabilities?.kubernetesAiIntegration === true
+  const supportsLegacyConnectivity = ['aks-connectivity-guided', CONNECTIVITY_TROUBLESHOOTING_LAB_ID, 'aks-connectivity-independent'].includes(run.labId)
+  if (!isPlainObject(request) || !isPlainObject(request.route) || !(supportsIntegrationConnectivity || supportsLegacyConnectivity)
     || request.route?.podUid !== log.podUid || request.route?.podName !== log.podName
     || request.route?.namespace !== log.namespace || request.route?.artifactId !== log.artifactId) return false
   if (request.scenarioId === null) {

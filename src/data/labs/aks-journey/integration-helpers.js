@@ -8,6 +8,7 @@ export const AI_GUIDED_IMAGE = `${AI_GUIDED_REGISTRY}.azurecr.io/assistant:integ
 export const integrationScenario = ({ id, clusterId, question, expected }) => ({
   kind: 'aks-request', version: 1,
   target: { clusterId, namespace: 'assistant', serviceName: 'assistant-public', deploymentName: 'assistant' },
+  connectivity: { origin: { kind: 'external' }, service: { namespace: 'assistant', name: 'assistant-public' }, port: 80 },
   request: { method: 'POST', path: '/api/ask', body: { question } },
   expected, integrationProfile: 'healthy',
 })

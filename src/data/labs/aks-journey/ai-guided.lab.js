@@ -36,29 +36,52 @@ const origin = (context, id) => {
   return item?.op === 'binding' ? origin(context, item.value) : item
 }
 const invoke = (context, method) => graph(context)?.nodes?.find(item => item.op === 'invoke' && item.method === method && Object.keys(item.args?.keywords ?? {}).length > 0)
+const literal = (context, id, value) => {
+  const item = origin(context, id)
+  return item?.op === 'literal' && item.value === value
+}
 const sourceReady = context => !!parsed(context)
   && graphHas(context, node => node.op === 'strip')
   && graphHas(context, node => node.op === 'context-rows' && node.fields?.id === 'id' && node.fields?.content === 'content')
   && graphHas(context, node => node.op === 'source-ids' && node.field === 'id')
 const embeddingReady = context => {
   const call = invoke(context, 'embed')
+  const query = parsed(context)?.integration?.querySpec
+  const params = origin(context, invoke(context, 'execute')?.args?.keywords?.params)
+  const vector = origin(context, params?.entries?.[query?.order?.vectorParameter])
   const question = origin(context, call?.args?.keywords?.question)
   return sourceReady(context) && question?.op === 'strip' && origin(context, question.input)?.op === 'input'
     && origin(context, call?.args?.keywords?.deployment)?.op === 'config'
     && origin(context, call?.args?.keywords?.deployment)?.key === 'embedding_deployment'
+    && vector?.op === 'vector-format' && origin(context, vector.input)?.id === call?.id
 }
 const retrievalReady = context => {
   const query = parsed(context)?.integration?.querySpec
   const filters = Object.fromEntries((query?.filters ?? []).map(item => [item.column, item.parameter]))
+  const embedding = invoke(context, 'embed')
   const params = origin(context, invoke(context, 'execute')?.args?.keywords?.params)
-  const collection = origin(context, params?.entries?.collection)
-  const audience = origin(context, params?.entries?.audience)
-  return sourceReady(context) && filters.collection === 'collection' && filters.audience === 'audience' && filters.published === 'published'
-    && query?.distance?.parameter === 'embedding' && query.distance.cutoffParameter === 'max_distance'
-    && query.order?.vectorParameter === 'embedding' && query.limitParameter === 'limit'
+  const collection = origin(context, params?.entries?.[filters.collection])
+  const audience = origin(context, params?.entries?.[filters.audience])
+  const vector = origin(context, params?.entries?.[query?.order?.vectorParameter])
+  const vectorInput = origin(context, vector?.input)
+  return sourceReady(context) && filters.collection && filters.audience && filters.published && query?.distance?.parameter === query.order?.vectorParameter
+    && query?.distance?.cutoffParameter && query?.limitParameter
     && collection?.op === 'config' && collection.key === 'collection' && audience?.op === 'config' && audience.key === 'audience'
+    && literal(context, params?.entries?.[filters.published], true) && vector?.op === 'vector-format' && vectorInput?.id === embedding?.id
+    && literal(context, params?.entries?.[query.distance.cutoffParameter], 0.2) && literal(context, params?.entries?.[query.limitParameter], 1)
 }
-const contextReady = context => sourceReady(context) && graphHas(context, node => node.op === 'invoke' && node.method === 'generate')
+const contextReady = context => {
+  const execute = invoke(context, 'execute')
+  const generate = invoke(context, 'generate')
+  const contextRows = origin(context, generate?.args?.keywords?.context)
+  const source = graph(context)?.nodes?.find(item => item.op === 'source-ids')
+  const rows = graph(context)?.nodes?.find(item => item.op === 'binding' && item.name === 'rows')
+  const answer = graph(context)?.nodes?.find(item => item.op === 'config' && item.key === 'answer' && origin(context, item.object)?.id === generate?.id)
+  const responseBody = graph(context)?.nodes?.find(item => item.op === 'dictionary' && item.entries?.answer === answer?.id && item.entries?.sources === source?.id)
+  return sourceReady(context) && origin(context, rows?.value)?.id === execute?.id
+    && contextRows?.op === 'context-rows' && contextRows.rows === rows?.id
+    && source?.op === 'source-ids' && source.rows === rows?.id && answer?.op === 'config' && !!responseBody
+}
 const deployed = context => {
   const state = context.runtime.kubernetes?.clusters?.[clusterId]
   const artifactId = context.artifacts.publishedTags?.[AI_GUIDED_IMAGE]
