@@ -22,7 +22,7 @@ const learnerObjectsApplied = context => {
   const cluster = context.sandbox.aksClusters?.find(item => item.name === CONFIG_CLUSTER)
   const state = cluster && context.runtime.kubernetes?.clusters?.[cluster.id]
   const config = state?.resources['ConfigMap/assistant/assistant-config']; const secret = state?.resources['Secret/assistant/assistant-credentials']
-  return config?.data?.APP_ENV === 'training' && config.data?.PGHOST === 'pg-training.example' && config.data?.['settings.json']?.includes('Training assistant')
+  return ['training', 'training-updated'].includes(config?.data?.APP_ENV) && config.data?.PGHOST === 'pg-training.example' && (config.data?.['settings.json']?.includes('Training assistant') || config.data?.['settings.json']?.includes('Updated assistant'))
     && secret?.type === 'Opaque' && Object.hasOwn(secret.data ?? {}, 'PGPASSWORD')
     && ['kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml'].every(line => context.history?.includes(line))
 }
