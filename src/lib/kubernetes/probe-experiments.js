@@ -1,6 +1,7 @@
 import { recordVerification } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { restartDeploymentResult } from './reconcile.js'
+import { routeServiceRequest } from './connectivity.js'
 const clone = value => structuredClone(value)
 function digest(value) {
   let hash = 2166136261
@@ -57,17 +58,45 @@ function sampleOffsets(script) {
   return Array.from({ length: Math.min(20, script.maxSamples ?? 0) }, (_, index) => script.firstSampleAfterStartSeconds + index * script.sampleIntervalSeconds)
 }
 
-function captureSample(state, experiment, nowMs) {
-  if (!Number.isFinite(experiment.baselineReadyAtMs) || experiment.samples.length >= 100) return
+function requestForSample(experiment, offset) {
+  const kind = scenarioType({ script: experiment.script })
+  const ask = () => ({ method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } })
+  if (kind === 'readiness') return offset === 9 ? { method: 'GET', path: '/api/info', body: null } : ask()
+  if (kind === 'hang') return { method: 'GET', path: '/api/info', body: null }
+  if (experiment.script?.sampleAtSeconds?.length === 3) return offset === 10 ? { method: 'GET', path: '/api/info', body: null } : ask()
+  return ask()
+}
+
+function captureSample(run, clusterId, experiment, nowMs, final = false) {
+  let state = run.runtime.kubernetes.clusters[clusterId]
+  if (!Number.isFinite(experiment.baselineReadyAtMs) || experiment.samples.length >= 100) return run
   const offset = (nowMs - experiment.baselineReadyAtMs) / 1000
-  if (!sampleOffsets(experiment.script).includes(offset) || experiment.samples.some(item => item.atMs === nowMs)) return
+  if ((!final && !sampleOffsets(experiment.script).includes(offset)) || experiment.samples.some(item => item.atMs === nowMs)) return run
   const containers = experiment.podUids.map(uid => state.health.containers[uid]).filter(Boolean)
   const sample = { atMs: nowMs, second: offset, offsetSeconds: offset, readyPodUids: experiment.podUids.filter(uid => state.health.containers[uid]?.ready === true),
     restartCounts: Object.fromEntries(containers.map(item => [item.containerId, item.restartCount])),
     readyBackendCount: containers.filter(item => item.ready).length, readyEndpoints: containers.filter(item => item.ready).length }
-  experiment.samples.push(sample)
-  experiment.summary.sampleCount = experiment.samples.length
-  experiment.summary.restartReceipts = state.health.receipts.filter(item => item.cause === 'probe' && experiment.podUids.includes(item.podUid)).slice(-40)
+  const request = final ? { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } } : requestForSample(experiment, offset)
+  const service = state.resources[`Service/${experiment.target.namespace}/assistant-public`]
+  if (service?.status?.loadBalancer?.ingress?.[0]?.ip) {
+    const kind = String(experiment.script.kind).toLowerCase()
+    const faultActive = offset >= (experiment.script.startAfterStartSeconds ?? Infinity)
+      && (experiment.script.endAfterStartSeconds === undefined || offset < experiment.script.endAfterStartSeconds)
+    const integrationProfile = faultActive && (kind.includes('aioutage') || kind.includes('aicoupling')) ? 'answer-unavailable-always'
+      : faultActive && (kind.includes('postgres') || kind.includes('database')) ? { stages: { embedding: [{ latencyMs: 40, result: 'success' }], postgres: [{ latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }], answer: [{ latencyMs: 50, result: 'success' }] } } : 'healthy'
+    const routed = routeServiceRequest(run, { origin: { kind: 'external', clusterId }, hostname: service.status.loadBalancer.ingress[0].ip,
+      port: service.spec.ports?.[0]?.port ?? 80, ...request, integrationProfile }, null)
+    run = routed.run; state = run.runtime.kubernetes.clusters[clusterId]
+    sample.request = request
+    sample.response = { status: routed.outcome.status, body: routed.outcome.body, transport: routed.outcome.transport,
+      route: routed.outcome.route, dependencyTrace: routed.outcome.dependencyTrace, integrationTrace: routed.outcome.integrationTrace ?? null }
+  }
+  const current = state.health.experiment
+  if (!current) return run
+  current.samples.push(sample)
+  current.summary.sampleCount = current.samples.length
+  current.summary.restartReceipts = state.health.receipts.filter(item => item.cause === 'probe' && current.podUids.includes(item.podUid)).slice(-40)
+  return run
 }
 
 function scenarioType(receipt) {
@@ -84,8 +113,20 @@ function assess(state, receipt) {
   const healthyChecks = completeProbes && containers.every(item => item.checks.startup.successes > 0 && item.checks.readiness.successes > 0 && item.checks.liveness.successes > 0)
   if (scenarioType(receipt) === 'cold') return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
   if (scenarioType(receipt) === 'readiness') return allReady && receipt.samples.length >= 2
-    && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length) && containers.every(item => item.restartCount === 0)
+    && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length && item.response?.route?.podUid !== receipt.podUids[0])
+    && receipt.samples.some(item => item.second === 25 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
+    && containers.every(item => item.restartCount === 0)
   if (scenarioType(receipt) === 'hang') return allReady && receipt.summary.restartReceipts.length > 0
+    && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
+      && item.response?.body?.sources?.includes('training-backups'))
+  const kind = String(receipt.script?.kind ?? '').toLowerCase()
+  if (kind.includes('aioutage') || kind.includes('aicoupling')) return allReady && containers.every(item => item.restartCount === 0)
+    && receipt.samples.some(item => item.second === 10 && item.response?.status === 200)
+    && receipt.samples.some(item => item.second === 12 && item.response?.status === 503)
+    && receipt.samples.some(item => item.second === 40 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
+  if (kind.includes('postgres') || kind.includes('database')) return allReady
+    && receipt.samples.some(item => item.second === 10 && (item.response?.status === 503 || item.response?.transport?.reason === 'NO_READY_ENDPOINTS'))
+    && receipt.samples.some(item => item.second === 30 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
   return allReady && receipt.samples.length > 0
 }
 
@@ -117,9 +158,10 @@ export function startProbeExperiment(input, scenarioId, lab) {
 }
 
 export function observeProbeExperiment(input, atMs, lab) {
-  const run = clone(input)
+  let run = clone(input)
   if (Number.isFinite(atMs)) run.runtime.simTimeMs = atMs
-  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) {
+    let state = run.runtime.kubernetes.clusters[clusterId]
     const experiment = state.health?.experiment
     if (!experiment || experiment.status !== 'active') continue
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod' && experiment.podUids.includes(item.metadata.uid))
@@ -128,9 +170,17 @@ export function observeProbeExperiment(input, atMs, lab) {
       experiment.baselineReadyAtMs = run.runtime.simTimeMs
       experiment.phase = 'running'
     }
-    captureSample(state, experiment, run.runtime.simTimeMs)
-    if (run.runtime.simTimeMs < experiment.endsAtMs) continue
-    const receipt = { ...experiment, status: 'completed', endedAtMs: run.runtime.simTimeMs }
+    run = captureSample(run, clusterId, experiment, run.runtime.simTimeMs)
+    state = run.runtime.kubernetes.clusters[clusterId]
+    const current = state.health.experiment
+    if (!current) continue
+    if (run.runtime.simTimeMs < current.endsAtMs) continue
+    if (scenarioType({ script: current.script }) === 'hang') {
+      run = captureSample(run, clusterId, current, run.runtime.simTimeMs, true)
+      state = run.runtime.kubernetes.clusters[clusterId]
+    }
+    const completed = state.health.experiment
+    const receipt = { ...completed, status: 'completed', endedAtMs: run.runtime.simTimeMs }
     receipt.outcome = assess(state, receipt) ? 'passed' : 'failed'
     state.health.receipts = [...state.health.receipts, receipt].slice(-40)
     state.health.experiment = null
