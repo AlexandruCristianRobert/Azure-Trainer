@@ -94,6 +94,10 @@ const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === tru
       <div class="aks-probe-inspection__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Container</th><th scope="col">Ready</th><th scope="col">Restarts</th><th scope="col">Startup</th><th scope="col">Readiness</th><th scope="col">Liveness</th></tr></thead><tbody>
         <tr v-for="item in probeView.containers.filter(item => namespacePods.some(pod => pod.metadata.uid === item.podUid))" :key="item.podUid"><th scope="row">{{ item.podName }}</th><td>{{ item.containerId }}</td><td>{{ item.ready ? 'Ready' : 'Not ready' }}</td><td>{{ item.restartCount }}</td><td v-for="type in ['startup', 'readiness', 'liveness']" :key="type">{{ item.checks[type] ? `${item.checks[type].successes} successes / ${item.checks[type].failures} failures` : 'Not configured' }}</td></tr>
       </tbody></table></div>
+      <h4>Probe experiment timeline</h4>
+      <p v-if="!probeView.timeline?.length">No probe observations have been recorded yet.</p>
+      <ol v-else class="aks-probe-inspection__timeline"><li v-for="(item, index) in probeView.timeline" :key="`${item.atMs}-${index}`"><strong>{{ item.kind?.charAt(0).toUpperCase() + item.kind?.slice(1) }}</strong> · {{ item.atMs / 1000 }}s<template v-if="item.failures !== undefined"> · {{ item.failures }} failures</template><template v-if="item.message"> · {{ item.message }}</template></li></ol>
+      <p v-if="probeView.receipts?.length">Latest experiment: {{ probeView.receipts.at(-1).scenarioId }} · {{ probeView.receipts.at(-1).status }}</p>
     </section>
     </div>
     <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">
