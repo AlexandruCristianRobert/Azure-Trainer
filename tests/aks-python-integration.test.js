@@ -7,7 +7,9 @@ describe('explicit Python assistant integration compiler', () => {
   it('compiles the teaching solution into an answer data-flow graph', () => {
     const result = parsePythonIntegration(INTEGRATION_SOLUTION_FILES, INTEGRATION_MANIFEST)
     expect(result.diagnostics).toEqual([])
-    expect(result.appSpec.integration.graph.nodes.map(node => node.op)).toEqual(expect.arrayContaining(['validate-question', 'embed', 'query', 'answer', 'response']))
+    expect(result.appSpec.integration).toMatchObject({ adapter: 'integration-fixture-v1', adapterDigest: expect.any(String), querySpec: expect.any(Object) })
+    expect(result.appSpec.integration.graph).toMatchObject({ version: 1, roots: expect.any(Object), bindings: expect.any(Object) })
+    expect(result.appSpec.integration.graph.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'validate-question', source: expect.any(Object) }), expect.objectContaining({ op: 'embed', source: expect.any(Object) }), expect.objectContaining({ op: 'query', source: expect.any(Object) })]))
   })
 
   it('records a literal vector as a literal rather than an embedding result', () => {
@@ -20,16 +22,25 @@ describe('explicit Python assistant integration compiler', () => {
 
   it('does not allow an unused helper to satisfy active answer execution', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES,
-      'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('vector = embeddings.embed(question, cfg["embedding_deployment"])', 'vector = [1, 0, 0]') }
+      'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('embeddings.embed', 'literal_vector') }
     const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
     expect(result.diagnostics).toEqual([])
     expect(result.appSpec.integration.graph.nodes.some(node => node.op === 'embed')).toBe(false)
   })
 
-  it('rejects an answer path without an empty-input guard', () => {
+  it('compiles an answer path without an empty-input guard for behavioral assessment', () => {
     const files = { ...INTEGRATION_SOLUTION_FILES,
       'app.py': INTEGRATION_SOLUTION_FILES['app.py'].replace('    if not question:\n        return {"status": 400, "body": {"error": "A question string is required."}}\n', '') }
-    expect(parsePythonIntegration(files, INTEGRATION_MANIFEST).diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
+    const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
+    expect(result.diagnostics).toEqual([])
+    expect(result.appSpec.integration.graph.nodes.some(node => node.op === 'validate-question')).toBe(false)
+  })
+
+  it('does not compile comments, strings, or unused functions into the active graph', () => {
+    const files = { ...INTEGRATION_SOLUTION_FILES, 'app.py': `${INTEGRATION_SOLUTION_FILES['app.py']}\n\ndef unused():\n    fake = EmbeddingClient()\n    return fake.embed("comment", "wrong")\n` }
+    const result = parsePythonIntegration(files, INTEGRATION_MANIFEST)
+    expect(result.diagnostics).toEqual([])
+    expect(result.appSpec.integration.graph.nodes.filter(node => node.op === 'embed')).toHaveLength(1)
   })
 
   it('includes saved retrieval SQL in the immutable image snapshot', () => {

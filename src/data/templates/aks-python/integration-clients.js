@@ -1,25 +1,28 @@
 import { INTEGRATION_FIXTURES } from '../../fixtures/aks/integration.js'
 
-export const INTEGRATION_CLIENTS_SOURCE = `"""Fixed, deterministic adapter used by the AKS assistant exercises."""
+export const TRAINING_CLIENTS_SOURCE = `"""Fixed, deterministic adapter used by the AKS assistant exercises."""
 import json
 FIXTURE_CATALOG = json.loads(r'''${JSON.stringify(INTEGRATION_FIXTURES)}''')
 
 class RetryPolicy:
-    def __init__(self, max_attempts=3, retryable=("THROTTLED", "UNAVAILABLE", "TIMEOUT"), total_budget_ms=1000, attempt_timeout_ms=200, sdk_retries=0):
+    def __init__(self, max_attempts, retryable_codes, base_delay_ms, max_delay_ms, attempt_timeout_ms):
         self.max_attempts = max_attempts
-        self.retryable = retryable
-        self.total_budget_ms = total_budget_ms
+        self.retryable_codes = retryable_codes
+        self.base_delay_ms = base_delay_ms
+        self.max_delay_ms = max_delay_ms
         self.attempt_timeout_ms = attempt_timeout_ms
-        self.sdk_retries = sdk_retries
 
 class RequestBudget:
-    def __init__(self, policy):
-        self.policy = policy
+    def __init__(self, total_ms):
+        self.total_ms = total_ms
         self.elapsed_ms = 0
-    def can_attempt(self):
-        return self.elapsed_ms < self.policy.total_budget_ms
-    def wait(self, milliseconds):
-        self.elapsed_ms = min(self.policy.total_budget_ms, self.elapsed_ms + milliseconds)
+    def invoke(self, operation, policy, **kwargs):
+        for attempt in range(policy.max_attempts):
+            if self.elapsed_ms >= self.total_ms: raise DependencyError()
+            try: return operation(**kwargs)
+            except DependencyError as error:
+                if error.code not in policy.retryable_codes or attempt + 1 == policy.max_attempts: raise
+                self.elapsed_ms += min(policy.max_delay_ms, policy.base_delay_ms * (attempt + 1))
 
 def as_vector(values):
     if not isinstance(values, list) or len(values) != 3 or not all(isinstance(item, (int, float)) for item in values):
@@ -27,14 +30,21 @@ def as_vector(values):
     return "[" + ",".join(str(item) for item in values) + "]"
 
 class EmbeddingClient:
+    def __init__(self, **kwargs): self.configuration = kwargs
     def embed(self, question, deployment):
         return FIXTURE_CATALOG["questions"].get(question, {}).get("embedding")
 
-class QueryClient:
-    def query(self, vector, query_source, parameters):
+class PgClient:
+    def __init__(self, **kwargs): self.configuration = kwargs
+    def execute(self, sql, params):
         return []
 
 class AnswerClient:
-    def answer(self, question, context, deployment):
-        return "No matching documents."
+    def __init__(self, **kwargs): self.configuration = kwargs
+    def generate(self, question, context, deployment): return {"answer": "No matching documents."}
+
+class DependencyError(Exception):
+    http_status = 503
+    public_message = "A dependency is unavailable."
+    code = "UNAVAILABLE"
 `
