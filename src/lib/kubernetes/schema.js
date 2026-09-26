@@ -139,8 +139,8 @@ function validateDeployment(value, root, configuration, probes, resources, rollo
   issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes, resources)
   if (issue) return issue
   if (rollouts) {
-    const strategy = value.spec.strategy ?? {}
-    if (!object(strategy) || Array.isArray(strategy)) return diag('INVALID_ROLLOUT_STRATEGY', undefined, root, 'Deployment strategy must be an object.')
+    const strategy = Object.hasOwn(value.spec, 'strategy') ? value.spec.strategy : {}
+    if (!object(strategy) || Array.isArray(strategy) || Object.keys(strategy).some(key => !['type', 'rollingUpdate'].includes(key))) return diag('INVALID_ROLLOUT_STRATEGY', undefined, root, 'Deployment strategy must contain only type and rollingUpdate.')
     const parsed = normalizeRolloutSpec({ ...strategy, ...(value.spec.minReadySeconds === undefined ? {} : { minReadySeconds: value.spec.minReadySeconds }), ...(value.spec.progressDeadlineSeconds === undefined ? {} : { progressDeadlineSeconds: value.spec.progressDeadlineSeconds }), ...(value.spec.revisionHistoryLimit === undefined ? {} : { revisionHistoryLimit: value.spec.revisionHistoryLimit }) })
     if (parsed.diagnostics.length) return diag(parsed.diagnostics[0].code, undefined, root, parsed.diagnostics[0].message)
   }
