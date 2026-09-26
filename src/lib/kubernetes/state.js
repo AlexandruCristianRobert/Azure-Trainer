@@ -293,17 +293,21 @@ function validResourceExperiment(experiment, state, runtime, lab, clusterId, now
   const scenario = lab?.scenarios?.[experiment?.scenarioId]
   const totals = experiment?.totals
   if (experiment?.profileId === 'diagnostic-pending' && experiment?.phase === 'complete') {
-    return experiment.version === 1 && experiment.clusterId === clusterId && scenario?.kind === 'aks-resource-profile'
+    const common = experiment.version === 1 && experiment.clusterId === clusterId && scenario?.kind === 'aks-resource-profile'
       && scenario.profileId === 'diagnostic-pending' && experiment.scenarioId && experiment.phaseZeroAtMs === experiment.startedAtMs
-      && experiment.outcome === 'passed' && experiment.pendingObserved === true && Number.isSafeInteger(experiment.startedAtMs)
+      && ['passed', 'failed'].includes(experiment.outcome) && Number.isSafeInteger(experiment.startedAtMs)
       && Number.isSafeInteger(experiment.endedAtMs) && experiment.endedAtMs === experiment.startedAtMs
-      && typeof experiment.deploymentUid === 'string' && isPlainObject(experiment.pendingProof)
+      && typeof experiment.deploymentUid === 'string'
+    const proof = isPlainObject(experiment.pendingProof)
       && Object.keys(experiment.pendingProof).sort().join(',') === 'atMs,deploymentUid,podUids,reasons'
       && experiment.pendingProof.deploymentUid === experiment.deploymentUid && experiment.pendingProof.atMs === experiment.startedAtMs
       && Array.isArray(experiment.pendingProof.podUids) && experiment.pendingProof.podUids.length === 2
       && new Set(experiment.pendingProof.podUids).size === 2 && experiment.pendingProof.podUids.every(uid => typeof uid === 'string')
       && Array.isArray(experiment.pendingProof.reasons) && experiment.pendingProof.reasons.length === 2
       && experiment.pendingProof.reasons.every(reason => reason === 'Insufficient cpu')
+    return common && (experiment.outcome === 'passed'
+      ? experiment.pendingObserved === true && proof
+      : experiment.pendingObserved === false && experiment.pendingProof === null)
   }
   return isPlainObject(experiment) && experiment.version === 1 && typeof experiment.profileId === 'string'
     && experiment.clusterId === clusterId && experiment.scenarioId && scenario?.kind === 'aks-resource-profile' && scenario.version === 1

@@ -7,10 +7,13 @@ import { parseKubernetesYaml } from './yaml.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
+import { RESOURCE_MANIFEST, RESOURCE_SOLUTION_FILES } from '../../data/templates/aks-python/resources.js'
+import { projectSourceHash, selectBuildFiles } from '../project/build.js'
 
 const clone = value => structuredClone(value)
 const PROFILES = RESOURCE_FIXTURES.profiles
 const workloadFor = profileId => profileId === 'independent-cycle' ? RESOURCE_FIXTURES.workload.independent : RESOURCE_FIXTURES.workload.guided
+const RESOURCE_SOURCE_HASH = projectSourceHash(selectBuildFiles(RESOURCE_SOLUTION_FILES, RESOURCE_MANIFEST))
 
 function invalid(message, code = 'INVALID_RESOURCE_EXPERIMENT') { return { code, message } }
 function stateFor(run, clusterId) { return run.runtime.kubernetes.clusters?.[clusterId] }
@@ -31,6 +34,27 @@ function savedDeployment(run, target) {
     if (doc) return doc
   }
   return null
+}
+
+function suppliedResourceArtifact(run, state, deployment, target, requirePodSnapshots = false) {
+  const image = deployment?.spec?.template?.spec?.containers?.[0]?.image
+  const artifactId = image && run.artifacts.publishedTags?.[image]
+  const artifact = artifactId && run.artifacts.buildsById?.[artifactId]
+  const source = artifact && run.artifacts.sourceSnapshotsByHash?.[artifact.sourceHash]
+  const registry = artifact && run.sandbox.containerRegistries.find(item => item.id === artifact.image?.registryId)
+  const expected = RESOURCE_FIXTURES.workload
+  const separator = image?.indexOf('/') ?? -1; const colon = image?.lastIndexOf(':') ?? -1
+  const publishedImage = typeof artifactId === 'string' && artifact?.id === artifactId && separator > 0 && colon > separator
+    && artifact.image?.loginServer === image.slice(0, separator).toLowerCase()
+    && artifact.image?.repository === image.slice(separator + 1, colon).toLowerCase()
+    && artifact.image?.tag === image.slice(colon + 1)
+    && registry?.loginServer?.toLowerCase() === artifact.image.loginServer
+  const sourceIsSupplied = artifact?.sourceHash === RESOURCE_SOURCE_HASH && source?.hash === artifact.sourceHash
+    && source.files && projectSourceHash(source.files) === artifact.sourceHash
+  const workloadIsSupplied = artifact?.appSpec?.workload?.operation === expected.operation
+    && artifact.appSpec.workload.units === expected.guided.units && artifact.appSpec.workload.scratchMiB === expected.guided.scratchMiB
+  const podsMatch = !requirePodSnapshots || descendants(run, target).every(pod => state.podSnapshots?.[pod.metadata.uid]?.artifactId === artifactId)
+  return publishedImage && sourceIsSupplied && workloadIsSupplied && podsMatch ? { artifactId, artifact, source } : null
 }
 
 function adoptionReady(run, state, target) {
@@ -106,24 +130,31 @@ export function startResourceExperiment(input, scenarioId, lab) {
     : null
   if (!original?.resourcesRuntime || !deployment || descendants(input, { ...target, clusterId: scenario.target.clusterId }).length === 0)
     return { run: input, diagnostics: [invalid('The declared resource profile target is unavailable.')] }
+  const expectedIncidentPhase = profile.diagnosis === 'pending' ? 'scheduling' : profile.diagnosis === 'oom' ? 'memory' : profile.diagnosis === 'no-cpu' ? 'hpa' : null
+  if (expectedIncidentPhase && input.labId === 'aks-resources-troubleshooting'
+    && original.resourcesRuntime.incident?.phase !== expectedIncidentPhase)
+    return { run: input, diagnostics: [invalid(`The ${profile.diagnosis} diagnosis is not active in the current incident phase.`, 'RESOURCE_INCIDENT_PHASE')] }
   if (profile.requiresHpa && !hpa) return { run: input, diagnostics: [invalid(profile.diagnosis === 'no-cpu'
     ? 'The missing-request diagnosis requires its declared live HPA.'
     : 'This profile requires a live HPA and an applied Deployment with replicas omitted.')] }
   if (profile.diagnosis === 'oom') {
-    const workload = input.artifacts.buildsById?.[original.podSnapshots?.[descendants(input, { ...target, clusterId: scenario.target.clusterId })[0]?.metadata?.uid]?.artifactId]?.appSpec?.workload
     const pod = descendants(input, { ...target, clusterId: scenario.target.clusterId })[0]
     const resources = normalizeContainerResources(pod?.spec?.containers?.[0]?.resources ?? {}).effective
-    if (workload?.operation !== 'process_batch' || workload.units !== 20 || workload.scratchMiB !== 96
+    if (!suppliedResourceArtifact(input, original, deployment, { ...target, clusterId: scenario.target.clusterId }, true)
       || resources.memoryRequestBytes !== 128 * 1024 * 1024 || resources.memoryLimitBytes !== 128 * 1024 * 1024)
       return { run: input, diagnostics: [invalid('The OOM diagnosis requires the supplied 20-unit workload with a 128Mi memory limit.')] }
   }
+  if (profile.diagnosis === 'pending'
+    && !suppliedResourceArtifact(input, original, deployment, { ...target, clusterId: scenario.target.clusterId }))
+    return { run: input, diagnostics: [invalid('The Pending diagnosis requires the supplied immutable 20-unit workload artifact.')] }
   if (profile.diagnosis === 'no-cpu') {
     const rawResources = deployment.spec.template.spec.containers[0].resources ?? {}
     const effective = normalizeContainerResources(rawResources).effective
     const validPolicy = hpa?.spec?.minReplicas === 2 && hpa?.spec?.maxReplicas === 4
       && hpa?.spec?.metrics?.[0]?.resource?.target?.averageUtilization === 60
       && hpa?.spec?.behavior?.scaleDown?.stabilizationWindowSeconds === 60
-    if (rawResources.requests?.cpu !== undefined || rawResources.limits?.cpu !== undefined || effective.cpuRequestM || effective.cpuLimitM || !validPolicy)
+    if (!suppliedResourceArtifact(input, original, deployment, { ...target, clusterId: scenario.target.clusterId }, true)
+      || rawResources.requests?.cpu !== undefined || rawResources.limits?.cpu !== undefined || effective.cpuRequestM || effective.cpuLimitM || !validPolicy)
       return { run: input, diagnostics: [invalid('The undefined-utilization diagnosis requires no CPU request or limit and the declared HPA policy.')] }
   }
   const required = scenarioId.startsWith('test-') ? scenario.requiredReadyReplicas : profile.requiredReadyReplicas
