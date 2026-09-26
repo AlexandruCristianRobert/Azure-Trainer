@@ -248,6 +248,7 @@ function validResourceAssignments(runtime, byUid) {
       && Object.hasOwn(runtime.nodes, assignment.nodeName) && Number.isInteger(assignment.cpuRequestM) && Number.isInteger(assignment.memoryRequestBytes)
       && assignment.cpuRequestM === (effective.cpuRequestM ?? 0) && assignment.memoryRequestBytes === (effective.memoryRequestBytes ?? 0)
   })) return false
+  if (![...byUid.values()].filter(pod => pod.kind === 'Pod' && !pod.metadata.uid.startsWith('diagnostic/') && pod.spec?.nodeName).every(pod => Object.hasOwn(runtime.assignments, pod.metadata.uid))) return false
   return Object.entries(runtime.nodes).every(([name, node]) => {
     const used = Object.values(runtime.assignments).filter(item => item.nodeName === name).reduce((sum, item) => ({ cpu: sum.cpu + item.cpuRequestM, memory: sum.memory + item.memoryRequestBytes }), { cpu: 0, memory: 0 })
     return used.cpu <= node.allocatableCpuM - node.fixedCpuM && used.memory <= node.allocatableMemoryBytes - node.fixedMemoryBytes

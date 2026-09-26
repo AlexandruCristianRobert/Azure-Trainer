@@ -4,6 +4,11 @@ import { emptyClusterState } from '../src/lib/kubernetes/state.js'
 import { parseKubernetesYaml } from '../src/lib/kubernetes/yaml.js'
 import { RESOURCE_SOLUTION_FILES } from '../src/data/templates/aks-python/resources.js'
 import { setDeploymentReplicas } from '../src/lib/kubernetes/scheduling.js'
+import { seedResourceTest } from './helpers/aks.js'
+import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
+import { getServiceBackends } from '../src/lib/kubernetes/services.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { advanceKubernetesTime } from '../src/lib/kubernetes/time.js'
 
 function deployment(replicas) {
   const value = parseKubernetesYaml(RESOURCE_SOLUTION_FILES['k8s/deployment.yaml']).documents[0]
@@ -21,6 +26,21 @@ function run() {
 const lab = { capabilities: { kubernetesResources: true, kubernetesConfiguration: true, kubernetesProbes: true } }
 
 describe('AKS replica ownership', () => {
+  it('preserves existing Pods on scale-up and withdraws a terminating Pod before its reservation is released', () => {
+    const seeded = seedResourceTest({ replicas: 2 }); let value = advanceKubernetesTime(seeded.run, 10, seeded.lab)
+    const state = value.runtime.kubernetes.clusters[seeded.clusterId]; const before = Object.keys(state.resourcesRuntime.assignments).sort()
+    const containers = before.map(uid => state.health.containers[uid].containerId)
+    value = reconcileKubernetes(setDeploymentReplicas(value, seeded.target, 3, { cause: 'manual' }).run, seeded.lab)
+    const afterUp = Object.keys(value.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments).sort()
+    expect(afterUp).toEqual(expect.arrayContaining(before))
+    expect(before.map(uid => value.runtime.kubernetes.clusters[seeded.clusterId].health.containers[uid].containerId)).toEqual(containers)
+    value = reconcileKubernetes(setDeploymentReplicas(value, seeded.target, 1, { cause: 'manual' }).run, seeded.lab)
+    expect(getServiceBackends(value, seeded.target).readyEndpoints).toHaveLength(1)
+    expect(Object.keys(value.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(3)
+    value = advanceKubernetesTime(value, 1, seeded.lab)
+    expect(Object.keys(value.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(1)
+    expect(validateBehavioralRun(JSON.parse(JSON.stringify(value)), seeded.lab)).toBeTruthy()
+  })
   it('relinquishes replicas once, then preserves an externally scaled live value on omitted reapply', () => {
     let value = applyKubernetesObjects(run(), [deployment(2)], { clusterId: 'c1', namespace: 'assistant' }, lab).run
     value = setDeploymentReplicas(value, { clusterId: 'c1', namespace: 'assistant', deploymentName: 'assistant' }, 4, { cause: 'manual' }).run
