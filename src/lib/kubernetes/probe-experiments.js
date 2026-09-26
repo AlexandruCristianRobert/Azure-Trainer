@@ -189,12 +189,16 @@ export function startProbeExperiment(input, scenarioId, lab) {
   run = restarted.run; state = run.runtime.kubernetes.clusters[clusterId]
   const podUids = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === scenario.target.namespace
     && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet')).map(item => item.metadata.uid).sort()
+  const diagnosticStartup = scenarioId.includes('short-start')
+  const configuredWarmup = lab?.healthFixture?.maximumWarmupSeconds
+  const warmupSeconds = diagnosticStartup ? 60 : Number.isInteger(configuredWarmup) ? configuredWarmup : durationSeconds
+  const warmupDeadlineAtMs = run.runtime.simTimeMs + Math.min(durationSeconds, warmupSeconds) * 1000
   state.health.experiment = { version: 1, scenarioId, scenarioVersion: 1, clusterId, target: clone(scenario.target),
     deploymentUid: state.resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.uid ?? null,
     fingerprint: fingerprint(run, scenario.target), podUids,
     containerIds: Object.fromEntries(podUids.map(uid => [uid, state.health.containers[uid]?.containerId ?? null])),
     initializationSeconds: lab?.healthFixture?.initializationSeconds ?? scenario.script?.initializationSeconds ?? 0,
-    baselineReadyAtMs: null, startedAtMs: run.runtime.simTimeMs, endsAtMs: run.runtime.simTimeMs + durationSeconds * 1000,
+    baselineReadyAtMs: null, startedAtMs: run.runtime.simTimeMs, endsAtMs: warmupDeadlineAtMs,
     status: 'active', phase: 'warming', samples: [], summary: { readinessIntervals: [], restartReceipts: [], sampleCount: 0 },
     script: { ...clone(scenario.script), kind: scenarioId } }
   return { run, diagnostics: [] }
@@ -214,8 +218,13 @@ export function observeProbeExperiment(input, atMs, lab) {
       experiment.phase = 'running'
       const relativeFinishSeconds = scenarioType({ script: experiment.script }) === 'cold' ? 1
         : experiment.script.finishAfterStartSeconds
-      if (experiment.scenarioId !== 'coldStartup' && Number.isInteger(relativeFinishSeconds)) experiment.endsAtMs = Math.min(experiment.endsAtMs,
-        experiment.baselineReadyAtMs + relativeFinishSeconds * 1000)
+      // Legacy helper scenarios use their declared duration as their fixed
+      // observation window. Authored Labs declare an explicit warmup cap.
+      if (Number.isInteger(relativeFinishSeconds) && (Number.isInteger(lab?.healthFixture?.maximumWarmupSeconds)
+        || experiment.scenarioId !== 'coldStartup')) {
+        const durationDeadline = experiment.startedAtMs + (lab?.scenarios?.[experiment.scenarioId]?.durationSeconds ?? 300) * 1000
+        experiment.endsAtMs = Math.min(durationDeadline, experiment.baselineReadyAtMs + relativeFinishSeconds * 1000)
+      }
     }
     run = captureSample(run, clusterId, experiment, run.runtime.simTimeMs)
     state = run.runtime.kubernetes.clusters[clusterId]
