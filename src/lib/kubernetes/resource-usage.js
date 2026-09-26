@@ -10,6 +10,8 @@ const MiB = 1024 * 1024
 const PROFILES = RESOURCE_FIXTURES.profiles
 const isReady = (pod, container) => pod?.status?.phase === 'Running' && pod.metadata.deletionTimestamp === undefined
   && container?.restartAtMs === null && container?.terminatedAtMs === null && container.ready === true
+const isAliveForAccounting = (container, atMs) => !!container && container.startedAtMs < atMs
+  && (container.terminatedAtMs === null ? container.restartAtMs === null : container.terminatedAtMs >= atMs)
 
 function clusterState(run, clusterId) { return run.runtime.kubernetes.clusters?.[clusterId] }
 function resourceState(run, clusterId) { return clusterState(run, clusterId)?.resourcesRuntime }
@@ -118,9 +120,9 @@ export function accountResourceSecond(input, atMs, lab) {
     const workByPod = new Map(readyPods.map(pod => [pod.metadata.uid, totalAvailableWork / Math.max(1, readyPods.length)]))
     const active = []
     for (const pod of Object.values(cluster.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running'
-      && item.metadata.deletionTimestamp === undefined && runtime.assignments[item.metadata.uid])) {
+      && runtime.assignments[item.metadata.uid])) {
       const health = containerFor(cluster, pod); const workload = workloadFor(run, cluster, pod)
-      if (!health || !workload || health.startedAtMs >= atMs || health.terminatedAtMs !== null || health.restartAtMs !== null) continue
+      if (!workload || !isAliveForAccounting(health, atMs)) continue
       const uid = pod.metadata.uid
       const cpuLimitM = normalizeContainerResources(pod.spec.containers[0].resources ?? {}).effective.cpuLimitM ?? Infinity
       const usage = runtime.usage[uid] ??= { containerId: health.containerId, workloadDigest: workload.helperDigest,
@@ -157,15 +159,16 @@ export function accountResourceSecond(input, atMs, lab) {
         const memoryLimit = normalizeContainerResources(item.pod.spec.containers[0].resources ?? {}).effective.memoryLimitBytes ?? Infinity
         const oom = item.memoryBytes > memoryLimit
         item.oom = oom
-        if (!oom && item.health.ready && item.usage.readySinceMs === null) item.usage.readySinceMs = startMs
-        if (!item.health.ready) item.usage.readySinceMs = null
+        const metricReady = isReady(item.pod, item.health) && !oom
+        if (metricReady && item.usage.readySinceMs === null) item.usage.readySinceMs = startMs
+        if (!metricReady) item.usage.readySinceMs = null
         const windowStartMs = Math.floor(startMs / 15_000) * 15_000
         if (!item.usage.window || item.usage.window.containerId !== item.health.containerId || item.usage.window.windowStartMs !== windowStartMs) {
           item.usage.window = { containerId: item.health.containerId, windowStartMs, windowEndMs: windowStartMs + 15_000,
             cpuTotalM: 0, memoryPeakBytes: 0, readySeconds: 0, readySinceMs: item.usage.readySinceMs }
         }
         const window = item.usage.window; window.cpuTotalM += got; window.memoryPeakBytes = Math.max(window.memoryPeakBytes, item.memoryBytes)
-        if (item.health.ready && !oom && item.usage.readySinceMs !== null) { window.readySeconds++; window.readySinceMs = Math.min(window.readySinceMs, item.usage.readySinceMs) }
+        if (metricReady && item.usage.readySinceMs !== null) { window.readySeconds++; window.readySinceMs = Math.min(window.readySinceMs, item.usage.readySinceMs) }
         if (experiment?.phase === 'running') {
           experiment.totals.completed += oom ? 0 : item.done
         }

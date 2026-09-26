@@ -42,6 +42,38 @@ describe('AKS resource accounting', () => {
     expect(view.cpuThrottledM).toBe(0)
   })
 
+  it('accounts a liveness-restart grace process at baseline only without routing or a usable metric', () => {
+    const c = seedResourceTest()
+    let run = advanceResources(c.run, c.lab, 30)
+    const state = run.runtime.kubernetes.clusters[c.clusterId]
+    const pod = resourceView(run, c.target).pods[0]
+    const metricCount = state.resourcesRuntime.metrics[pod.uid]?.length ?? 0
+    run = startHealthFault(run, c.clusterId, pod.uid, 'hung')
+    run = advanceResources(run, c.lab, 11)
+    const grace = run.runtime.kubernetes.clusters[c.clusterId]
+    expect(grace.resourcesRuntime.usage[pod.uid]).toMatchObject({ cpuDemandM: 10, cpuDeliveredM: 10 })
+    expect(grace.resourcesRuntime.usage[pod.uid].cpuDeliveredTotalM).toBe(410)
+    expect(grace.resourcesRuntime.metrics[pod.uid]?.length ?? 0).toBe(metricCount)
+    expect(grace.health.containers[pod.uid].ready).toBe(false)
+    const routed = routeServiceRequest(run, { origin: { kind: 'external', clusterId: c.clusterId }, hostname: '192.0.2.10', port: 80,
+      method: 'GET', path: '/api/work' }, c.lab)
+    expect(routed.outcome.route.podUid).not.toBe(pod.uid)
+    run = advanceResources(run, c.lab, 4)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.usage[pod.uid]).toMatchObject({ cpuDemandM: 0, cpuDeliveredM: 0 })
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.usage[pod.uid]).toMatchObject({ cpuDemandM: 0, cpuDeliveredM: 0 })
+  })
+
+  it('accounts a real scale-down deletion grace until its one-second termination boundary', () => {
+    const c = seedResourceTest()
+    let run = advanceResources(c.run, c.lab, 30)
+    run = reconcileKubernetes(setDeploymentReplicas(run, c.target, 1, { cause: 'manual', lab: c.lab }).run, c.lab)
+    const state = run.runtime.kubernetes.clusters[c.clusterId]
+    const deleting = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.deletionTimestamp !== undefined)
+    expect(deleting).toBeDefined()
+    run = advanceResources(run, c.lab, 1)
+    expect(Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).some(item => item.kind === 'Pod' && item.metadata.uid === deleting.metadata.uid)).toBe(false)
+  })
+
   it('publishes a healthy Pod metric at an aligned boundary when another Deployment OOMs', () => {
     const c = seedResourceTest({ resources: { requests: { cpu: '250m', memory: '128Mi' }, limits: { cpu: '500m', memory: '128Mi' } } })
     const observer = parseYaml(c.run.project.savedFiles['k8s/deployment.yaml'])

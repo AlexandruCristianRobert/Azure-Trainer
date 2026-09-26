@@ -75,6 +75,11 @@ export function processContainerLifecycle(run, atMs, lab) {
         ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }
       container.currentLogs = []
       container.terminatedAtMs = null
+      const usage = state.resourcesRuntime?.usage?.[uid]
+      if (usage) {
+        usage.cpuDemandM = 0; usage.cpuDeliveredM = 0; usage.cpuThrottledM = 0
+        usage.readySinceMs = null; usage.window = null
+      }
     }
     if (container.restartAtMs === null || container.restartAtMs > atMs) continue
     if (!pod || pod.status?.phase !== 'Running') continue

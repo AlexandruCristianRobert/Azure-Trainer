@@ -127,12 +127,12 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
     events += scheduledEventCount(run, next)
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
     run.runtime.simTimeMs = next
-    run = reconcileResourceTerminations(projectConfigurationAt(run, next), next, lab)
+    run = projectConfigurationAt(run, next)
     run = resourceTimestamp(run, next, lab)
     run = observeProbeExperiment(run, next, lab)
   }
   run.runtime.simTimeMs = target
-  run = reconcileResourceTerminations(projectConfigurationAt(run, target), target, lab)
+  run = projectConfigurationAt(run, target)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
   run = accountResourceSecond(run, target, lab)
   run = sampleResourceMetrics(run, target, lab)
