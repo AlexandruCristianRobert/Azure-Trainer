@@ -44,4 +44,13 @@ describe('AKS probe experiment runtime cleanup', () => {
     const atBaseline = advanceHealth(active, lab, 59)
     expect(atBaseline.runtime.kubernetes.clusters[seeded.clusterId].health.experiment.endsAtMs).toBe(159_000)
   })
+
+  it('fails hang proof when the replacement container becomes ready after the recovery bound', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0 })
+    const active = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
+    const baseline = advanceHealth(active, seeded.lab, 1)
+    const slowRestartLab = { ...seeded.lab, healthFixture: { initializationSeconds: 100 } }
+    const finished = advanceHealth(baseline, slowRestartLab, 100)
+    expect(finished.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1).outcome).toBe('failed')
+  })
 })

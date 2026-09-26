@@ -90,7 +90,7 @@ function captureSample(run, clusterId, experiment, nowMs, final = false) {
     const faultActive = offset >= (experiment.script.startAfterStartSeconds ?? Infinity)
       && (experiment.script.endAfterStartSeconds === undefined || offset < experiment.script.endAfterStartSeconds)
     const integrationProfile = faultActive && (kind === 'ai' || kind === 'ai-coupling') ? 'answer-unavailable-always'
-      : faultActive && kind === 'database' ? { stages: { embedding: [{ latencyMs: 40, result: 'success' }], postgres: [{ latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }, { latencyMs: 30, code: 'UNAVAILABLE' }], answer: [{ latencyMs: 50, result: 'success' }] } } : 'healthy'
+      : faultActive && kind === 'database' ? 'embedding-timeout-always' : 'healthy'
     const routed = routeServiceRequest(run, { origin: { kind: 'external', clusterId }, hostname: service.status.loadBalancer.ingress[0].ip,
       port: service.spec.ports?.[0]?.port ?? 80, ...request, integrationProfile }, null)
     run = routed.run; state = run.runtime.kubernetes.clusters[clusterId]
@@ -279,15 +279,19 @@ export function observeProbeExperiment(input, atMs, lab) {
 
 export function finishProbeExperiment(input, lab) {
   let run = observeProbeExperiment(input, input.runtime.simTimeMs, lab)
-  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
-    const receipt = state.health?.receipts?.at(-1)
-    if (!receipt || receipt.status !== 'completed' || receipt.evidenceId) continue
-    const task = lab?.tasks?.find(item => item.verification?.scenarioId === receipt.scenarioId && item.verification?.scenarioVersion === 1)
-    if (!task) continue
-    run = recordVerification(run, lab, task.id, { scenarioId: receipt.scenarioId, scenarioVersion: 1, outcome: receipt.outcome, completed: receipt.outcome === 'passed',
-      startedAtMs: receipt.startedAtMs, endedAtMs: receipt.endedAtMs,
-      measurements: { clusterId: receipt.clusterId, samples: receipt.samples, summary: receipt.summary, probeReceipt: receipt } })
-    run.runtime.kubernetes.clusters[receipt.clusterId].health.receipts.at(-1).evidenceId = run.evidence.currentEvidenceByTask[task.id]
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) {
+    const receipts = [...(run.runtime.kubernetes.clusters[clusterId].health?.receipts ?? [])]
+    for (const receipt of receipts) {
+      if (receipt.status !== 'completed' || receipt.evidenceId) continue
+      const task = lab?.tasks?.find(item => item.verification?.scenarioId === receipt.scenarioId && item.verification?.scenarioVersion === 1)
+      if (!task) continue
+      run = recordVerification(run, lab, task.id, { scenarioId: receipt.scenarioId, scenarioVersion: 1, outcome: receipt.outcome, completed: receipt.outcome === 'passed',
+        startedAtMs: receipt.startedAtMs, endedAtMs: receipt.endedAtMs,
+        measurements: { clusterId: receipt.clusterId, samples: receipt.samples, summary: receipt.summary, probeReceipt: receipt } })
+      const current = run.runtime.kubernetes.clusters[clusterId].health.receipts.find(item => item.status === 'completed'
+        && item.scenarioId === receipt.scenarioId && item.startedAtMs === receipt.startedAtMs && item.endedAtMs === receipt.endedAtMs)
+      if (current) current.evidenceId = run.evidence.currentEvidenceByTask[task.id]
+    }
   }
   return run
 }

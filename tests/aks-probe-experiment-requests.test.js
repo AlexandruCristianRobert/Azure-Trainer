@@ -56,6 +56,27 @@ describe('AKS probe experiments sample actual routed application behavior', () =
     expect(receipt.outcome).toBe('passed')
   })
 
+  it('does not accept an application-level database failure while endpoints remain admitted', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0 })
+    const started = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'requiredPostgresOutage' }).run
+    const finished = advanceHealth(started, seeded.lab, 35)
+    const receipt = finished.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1)
+    expect(receipt.samples.find(item => item.second === 10).readyBackendCount).toBeGreaterThan(0)
+    expect(receipt.outcome).toBe('failed')
+  })
+
+  it('samples info at +6 during AI coupling before the liveness restart', () => {
+    const files = { ...HEALTH_SOLUTION_FILES,
+      'app.py': HEALTH_SOLUTION_FILES['app.py'].replace('return {"status": 200, "body": {"check": "liveness"}}',
+        'return {"status": 200 if ai_available() else 503, "body": {"check": "liveness"}}') }
+    const seeded = seedHealthTest({ startupSeconds: 0, files })
+    const started = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'optionalAiCoupling' }).run
+    const finished = advanceHealth(started, seeded.lab, 45)
+    const receipt = finished.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1)
+    expect(receipt.samples.find(item => item.second === 6)).toMatchObject({ request: { method: 'GET', path: '/api/info' }, response: { status: 200 } })
+    expect(receipt.outcome).toBe('passed')
+  })
+
   it('records a final assistant answer after the hung container recovers in the same Pod', () => {
     const { receipt } = complete('processHang')
     const final = receipt.samples.find(item => item.second === 100 && item.request?.method === 'POST')
