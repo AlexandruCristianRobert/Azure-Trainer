@@ -164,6 +164,13 @@ function assess(state, receipt) {
   return allReady && receipt.samples.length > 0
 }
 
+function clearExperimentFaults(state, experiment) {
+  for (const uid of experiment?.podUids ?? []) {
+    const faults = state.health?.containers?.[uid]?.localFaults
+    if (faults) { faults.admissionClosed = false; faults.hung = false }
+  }
+}
+
 export function startProbeExperiment(input, scenarioId, lab) {
   const scenario = lab?.scenarios?.[scenarioId]
   if (!scenario || typeof scenarioId !== 'string') return { run: input, ...invalid('The selected probe experiment is not declared by this Lab.') }
@@ -224,6 +231,7 @@ export function observeProbeExperiment(input, atMs, lab) {
     const receipt = { ...completed, status: 'completed', endedAtMs: run.runtime.simTimeMs }
     receipt.outcome = assess(state, receipt) ? 'passed' : 'failed'
     state.health.receipts = [...state.health.receipts, receipt].slice(-40)
+    clearExperimentFaults(state, completed)
     state.health.experiment = null
   }
   return run
@@ -247,7 +255,9 @@ export function finishProbeExperiment(input, lab) {
 export function cancelProbeExperiment(input, clusterId) {
   const run = clone(input); const state = run.runtime.kubernetes.clusters?.[clusterId]
   if (!state?.health?.experiment) return { run: input, ...invalid('There is no active probe experiment to cancel.') }
-  state.health.receipts = [...state.health.receipts, { ...state.health.experiment, status: 'cancelled', endedAtMs: run.runtime.simTimeMs }].slice(-40)
+  const experiment = state.health.experiment
+  state.health.receipts = [...state.health.receipts, { ...experiment, status: 'cancelled', endedAtMs: run.runtime.simTimeMs }].slice(-40)
+  clearExperimentFaults(state, experiment)
   state.health.experiment = null
   return { run, diagnostics: [] }
 }
