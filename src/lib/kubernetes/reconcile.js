@@ -5,6 +5,7 @@ import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 import { reconcileHealth } from './probes.js'
 import { schedulePendingPods } from './scheduling.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+import { clearPodState } from './pod-cleanup.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -136,10 +137,7 @@ export function reconcileKubernetesResult(input, lab) {
           state.resourcesRuntime.terminationDue[stale.metadata.uid] ??= run.runtime.simTimeMs + 1000
         } else {
           delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
-          delete state.podSnapshots[stale.metadata.uid]
-          delete state.projectionDue[stale.metadata.uid]
-          delete state.resourcesRuntime?.assignments?.[stale.metadata.uid]
-          delete state.resourcesRuntime?.usage?.[stale.metadata.uid]
+          clearPodState(state, stale.metadata.uid)
         }
       }
       for (const old of Object.values(state.resources).filter(item => item.kind === 'ReplicaSet'

@@ -72,4 +72,39 @@ describe('AKS resource scheduling', () => {
     expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(1)
     expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).not.toContain(pod.uid)
   })
+
+  it('releases controller-owned Pod reservations when deleting a Deployment and schedules fresh Pods on reapply', () => {
+    const seeded = seedResourceTest()
+    const deletedUids = resourceView(seeded.run, seeded.target).pods.map(pod => pod.uid)
+    let run = act(seeded.run, seeded.lab, { type: 'command', line: 'kubectl delete deployment assistant -n assistant' }).run
+
+    expect(validateBehavioralRun(run, seeded.lab)).toBeTruthy()
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.usage)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.terminationDue)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].projectionDue)).toHaveLength(0)
+    expect(deletedUids.every(uid => !Object.hasOwn(run.runtime.kubernetes.clusters[seeded.clusterId].health.containers, uid))).toBe(true)
+
+    run = act(run, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(2)
+    expect(validateBehavioralRun(run, seeded.lab)).toBeTruthy()
+  })
+
+  it('releases assigned Pods when deleting their Namespace and schedules fresh Pods after restoring it', () => {
+    const seeded = seedResourceTest()
+    const deletedUids = resourceView(seeded.run, seeded.target).pods.map(pod => pod.uid)
+    let run = act(seeded.run, seeded.lab, { type: 'command', line: 'kubectl delete namespace assistant' }).run
+
+    expect(validateBehavioralRun(run, seeded.lab)).toBeTruthy()
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.usage)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.terminationDue)).toHaveLength(0)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].projectionDue)).toHaveLength(0)
+    expect(deletedUids.every(uid => !Object.hasOwn(run.runtime.kubernetes.clusters[seeded.clusterId].health.containers, uid))).toBe(true)
+
+    run = act(run, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/namespace.yaml' }).run
+    run = act(run, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(2)
+    expect(validateBehavioralRun(run, seeded.lab)).toBeTruthy()
+  })
 })

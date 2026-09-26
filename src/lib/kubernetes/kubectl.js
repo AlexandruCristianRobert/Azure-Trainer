@@ -4,6 +4,7 @@ import { reconcileKubernetesResult, restartDeploymentResult, getDeploymentPods, 
 import { validateKubernetesObject } from './schema.js'
 import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 import { runDiagnosticCommand } from './diagnostics.js'
+import { clearPodState, deleteCascade } from './pod-cleanup.js'
 
 const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
 const namespaced = new Set(['Pod', 'Deployment', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
@@ -163,18 +164,17 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         if (!['Deployment', 'Service'].includes(kind) || !object?.metadata?.name) return response(sandbox, [err('delete -f supports saved Deployment and Service manifests only.')])
         const item = state.resources[kubeObjectKey(kind, namespace, object.metadata.name)]
         if (!item) continue
-        const ids = new Set([item.metadata.uid]); let changed = true
-        while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }
-        for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] }
+        deleteCascade(state, [item])
       }
       const reconciled = reconcileKubernetesResult(next, lab)
       if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
       return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(reconciled.run))
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
-    if (!['Pod', 'Deployment', 'Service'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, or service NAME.')])
-    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
-    const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId], item = state.resources[kubeObjectKey(kind, selection.namespace, name)]
+    if (!['Pod', 'Deployment', 'Service', 'Namespace'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, service, or namespace NAME.')])
+    if (kind !== 'Namespace' && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
+    const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId]
+    const item = state.resources[kubeObjectKey(kind, kind === 'Namespace' ? '' : selection.namespace, name)]
     if (!item) return response(sandbox, [err(`${kind} '${name}' was not found.`)])
     if (kind === 'Pod') {
       const sequence = run.nextSequence
@@ -183,9 +183,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         deletedPodName: item.metadata.name, deletedReplicaSetUid: item.metadata.ownerReferences?.[0]?.uid ?? null,
         templateHash, replacementPodUid: null, replacementPodName: null, replacementReplicaSetUid: null,
         replacementTemplateHash: null }].slice(-100)
-      delete state.podSnapshots[item.metadata.uid]; delete state.projectionDue[item.metadata.uid]; delete state.resourcesRuntime?.assignments?.[item.metadata.uid]; delete state.resourcesRuntime?.usage?.[item.metadata.uid]; delete state.resourcesRuntime?.terminationDue?.[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
+      clearPodState(state, item.metadata.uid); delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
     }
-    else { const ids = new Set([item.metadata.uid]); let changed = true; while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }; for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] } }
+    else deleteCascade(state, [item], kind === 'Namespace' ? item.metadata.name : null)
     const reconciled = reconcileKubernetesResult(next, lab)
     if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
     return response(sandbox, [out(`${kind.toLowerCase()} "${name}" deleted`)], stateEffect(reconciled.run))

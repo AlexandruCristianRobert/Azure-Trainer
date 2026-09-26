@@ -1,5 +1,6 @@
 import { normalizeContainerResources } from './resource-schema.js'
 import { kubeObjectKey } from './objects.js'
+import { clearPodState } from './pod-cleanup.js'
 
 const clone = value => structuredClone(value)
 
@@ -80,10 +81,7 @@ export function finishScheduledTerminations(input, clusterId, atMs, lab) {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     if (pod) {
       delete state.resources[kubeObjectKey('Pod', pod.metadata.namespace, pod.metadata.name)]
-      delete state.podSnapshots[uid]
-      delete state.projectionDue[uid]
-      delete state.resourcesRuntime.assignments[uid]
-      delete state.resourcesRuntime.usage[uid]
+      clearPodState(state, uid)
     }
     delete due[uid]
   }
