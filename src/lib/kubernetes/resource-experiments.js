@@ -266,7 +266,7 @@ function persistExperimentResult(input, clusterId, experiment, lab) {
 
 export function observeResourceExperiment(input, atMs, lab) {
   let run = clone(input)
-  for (const [clusterId, state] of Object.entries(run.runtime.kubernetes.clusters ?? {})) {
+  for (const [clusterId, state] of Object.entries(run.runtime.kubernetes?.clusters ?? {})) {
     const experiment = state.resourcesRuntime?.experiment
     if (!experiment || !['warming', 'running', 'unsupported'].includes(experiment.phase)) continue
     experiment.atMs = atMs
@@ -290,10 +290,12 @@ export function observeResourceExperiment(input, atMs, lab) {
         && !currentBoundaryRecorded(current, elapsed, false)) {
         const routed = captureBoundary(run, current, elapsed); run = routed.run
       }
-      current.pendingObserved ||= current.observations.some(item => item.pods.some(pod => pod.phase === 'Pending' && pod.placementAgeSeconds > 30))
-      current.oomObserved ||= runtime.receipts.some(item => item.kind === 'container-termination' && item.reason === 'OOMKilled' && item.atMs >= current.phaseZeroAtMs)
-      current.scaleReceipts = runtime.receipts.filter(item => item.kind === 'hpa-scale' && item.controllerUid === current.hpaUid && item.atMs >= current.phaseZeroAtMs)
-      current.provenance = run.runtime.kubernetes.requests.filter(item => item.workload?.operation === 'process_batch' && item.sequence >= (current.startSequence ?? 0)).map(item => ({ operation: item.workload.operation, units: item.workload.units, checksum: item.workload.checksum })).slice(-12)
+      const observedRuntime = resourceRuntime(run, clusterId)
+      const observed = observedRuntime.experiment
+      observed.pendingObserved ||= observed.observations.some(item => item.pods.some(pod => pod.phase === 'Pending' && pod.placementAgeSeconds > 30))
+      observed.oomObserved ||= observedRuntime.receipts.some(item => item.kind === 'container-termination' && item.reason === 'OOMKilled' && item.atMs >= observed.phaseZeroAtMs)
+      observed.scaleReceipts = observedRuntime.receipts.filter(item => item.kind === 'hpa-scale' && item.controllerUid === observed.hpaUid && item.atMs >= observed.phaseZeroAtMs)
+      observed.provenance = run.runtime.kubernetes.requests.filter(item => item.workload?.operation === 'process_batch' && item.sequence >= (observed.startSequence ?? 0)).map(item => ({ operation: item.workload.operation, units: item.workload.units, checksum: item.workload.checksum })).slice(-12)
       if (willFinish
         && !currentBoundaryRecorded(current, elapsed, true)) {
         const finalSample = captureBoundary(run, current, elapsed, true); run = finalSample.run
@@ -320,7 +322,7 @@ export function cancelResourceExperiment(input, clusterId, reason = 'Cancelled b
 
 export function cancelChangedResourceExperiments(input) {
   let run = input
-  for (const [clusterId, state] of Object.entries(run.runtime.kubernetes.clusters ?? {})) {
+  for (const [clusterId, state] of Object.entries(run.runtime.kubernetes?.clusters ?? {})) {
     const experiment = state.resourcesRuntime?.experiment
     if (!experiment || !['warming', 'running'].includes(experiment.phase)) continue
   const liveHpa = experiment.hpaUid ? Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.uid === experiment.hpaUid) : null

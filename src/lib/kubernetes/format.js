@@ -15,12 +15,18 @@ export function kubeTable(items, kind, wide = false) {
       : `${item.metadata?.name ?? ''}\t${item.reason ?? ''}\t${item.message ?? ''}`)
     return [header, ...rows].join('\n')
   }
+  if (kind === 'Node' && items.some(item => item.status?.capacity)) {
+    return ['NAME\tSTATUS\tCPU\tMEMORY\tALLOCATABLE', ...items.map(item => `${item.metadata.name}\t${item.status.phase ?? 'Ready'}\t${item.status.capacity.cpu}\t${item.status.capacity.memory}\t${item.status.allocatable.cpu} / ${item.status.allocatable.memory}`)].join('\n')
+  }
+  if (kind === 'HorizontalPodAutoscaler') {
+    return ['NAME\tREFERENCE\tTARGETS\tMINPODS\tMAXPODS\tREPLICAS', ...items.map(item => `${item.metadata.name}\t${item.spec.scaleTargetRef.kind}/${item.spec.scaleTargetRef.name}\t${item.status?.currentMetrics?.[0]?.resource?.current?.averageUtilization ?? '<unknown>'}%/${item.spec.metrics?.[0]?.resource?.target?.averageUtilization ?? '?'}%\t${item.spec.minReplicas}\t${item.spec.maxReplicas}\t${item.status?.currentReplicas ?? 0}/${item.status?.desiredReplicas ?? 0}`)].join('\n')
+  }
   const header = wide ? 'NAME\tSTATUS\tNAMESPACE\tDETAILS' : 'NAME\tSTATUS'
   const rows = items.map(item => {
     const status = item.status?.phase ?? item.status?.conditions?.find(x => x.type === 'Ready')?.status ?? 'Active'
     const details = item.kind === 'Service' ? `${item.spec.type} ${item.spec.ports?.[0]?.port ?? ''}${wide ? ` ${item.spec.clusterIP ?? ''}${item.status?.loadBalancer?.ingress?.[0]?.ip ? ` ${item.status.loadBalancer.ingress[0].ip}` : ''}` : ''}`
       : item.kind === 'EndpointSlice' ? `${item.endpoints?.length ?? 0} endpoints${wide ? ` ${item.ports?.map(port => port.port).join(',') ?? ''}` : ''}`
-        : item.kind === 'Deployment' ? `${item.spec.replicas} desired` : item.reason ?? ''
+        : item.kind === 'Deployment' ? `${item.spec.replicas} desired` : item.kind === 'Pod' ? `${item.spec?.nodeName ?? '<unassigned>'}${item.status?.schedulingReason ? ` (${item.status.schedulingReason})` : ''}` : item.reason ?? ''
     return wide ? `${item.metadata?.name ?? ''}\t${status}\t${item.metadata?.namespace ?? '<cluster>'}\t${details}` : `${item.metadata?.name ?? ''}\t${status}`
   })
   return [header, ...rows].join('\n')
@@ -28,7 +34,16 @@ export function kubeTable(items, kind, wide = false) {
 
 export function describeObject(resource, state) {
   const lines = [`Name: ${resource.metadata.name}`, `Namespace: ${resource.metadata.namespace ?? '<cluster>'}`, `Kind: ${resource.kind}`]
-  if (resource.kind === 'Deployment') lines.push(`Replicas: ${resource.spec.replicas}`, 'Scheduling, image pulls, and readiness are simulated.')
+  if (resource.kind === 'Deployment') {
+    const container = resource.spec.template?.spec?.containers?.[0]
+    const requested = container?.resources?.requests ?? {}
+    const limits = container?.resources?.limits ?? {}
+    lines.push(`Replicas: ${resource.spec.replicas}`, `Resource requests: cpu=${requested.cpu ?? '<none>'}, memory=${requested.memory ?? '<none>'}`,
+      `Resource limits: cpu=${limits.cpu ?? '<none>'}, memory=${limits.memory ?? '<none>'}`, 'Scheduling, image pulls, and readiness are simulated.')
+  }
+  if (resource.kind === 'HorizontalPodAutoscaler') lines.push(`Target: ${resource.spec.scaleTargetRef.kind}/${resource.spec.scaleTargetRef.name}`,
+    `Replicas: current ${resource.status?.currentReplicas ?? 0}, desired ${resource.status?.desiredReplicas ?? 0}, ready ${resource.status?.readyReplicas ?? 0}`,
+    `CPU utilization: ${resource.status?.currentMetrics?.[0]?.resource?.current?.averageUtilization ?? '<unknown>'}% / ${resource.spec.metrics?.[0]?.resource?.target?.averageUtilization ?? '?'}%`)
   if (resource.kind === 'Service') {
     const targetPort = resource.spec.ports[0]?.targetPort
     const backends = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === resource.metadata.namespace && item.status?.podIP

@@ -7,6 +7,7 @@ import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspectio
 import { inspectIntegrationRequests } from '../../lib/kubernetes/integration-inspection.js'
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
+import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
@@ -48,11 +49,13 @@ const integrationRequests = computed(() => run.lab?.capabilities?.kubernetesAiIn
 const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === true && cluster.value
   ? inspectProbes(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value,
     deploymentName: 'assistant', serviceName: 'assistant-internal' }) : null)
+const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources === true && cluster.value
+  ? inspectResources(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: 'assistant' }) : null)
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
   <BladeHeader :crumbs="[{ label: 'Home', route: '/' }, { label: 'Resource groups', blade: { kind: 'resource-groups' } }, { label: resourceGroup, blade: { kind: 'resource-group', name: resourceGroup } }, { label: name }]" :title="name" subtitle="Kubernetes service" icon="aks" :commands="[{ label: 'Refresh', icon: 'arrow-sync' }]" @navigate="portal.showBlade($event)" />
-  <template v-if="cluster"><EssentialsGrid :items="essentials" @navigate="portal.showBlade($event)" /><p class="aks-blade__notice">Workloads and request results are read-only. State changes are modeled immediately for this Lab.</p>
+  <template v-if="cluster"><EssentialsGrid :items="essentials" @navigate="portal.showBlade($event)" /><p class="aks-blade__notice">Workloads and request results are read-only. <template v-if="run.lab?.capabilities?.kubernetesResources">Resource lifecycle, metrics, and autoscaling change only when the explicit simulation clock advances.</template><template v-else>State changes are modeled immediately for this Lab.</template></p>
     <div class="aks-blade__scope"><label>Namespace <select v-model="namespace"><option v-for="item in namespaces" :key="item">{{ item }}</option></select></label></div>
     <div class="aks-inspection-tabs" role="tablist" aria-label="Cluster inspection">
       <button id="aks-overview-tab" role="tab" type="button" :tabindex="bladeTab === 'overview' ? 0 : -1" :aria-selected="bladeTab === 'overview'" aria-controls="aks-overview-panel" @click="bladeTab = 'overview'" @keydown.right.prevent="selectBladeTab('services')" @keydown.left.prevent="selectBladeTab('services')">Overview</button>
@@ -98,6 +101,14 @@ const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === tru
       <p v-if="!probeView.timeline?.length">No probe observations have been recorded yet.</p>
       <ol v-else class="aks-probe-inspection__timeline"><li v-for="(item, index) in probeView.timeline" :key="`${item.atMs}-${index}`"><strong>{{ item.kind?.charAt(0).toUpperCase() + item.kind?.slice(1) }}</strong> · {{ item.atMs / 1000 }}s<template v-if="item.failures !== undefined"> · {{ item.failures }} failures</template><template v-if="item.message"> · {{ item.message }}</template></li></ol>
       <p v-if="probeView.receipts?.length">Latest experiment: {{ probeView.receipts.at(-1).scenarioId }} · {{ probeView.receipts.at(-1).status }}</p>
+    </section>
+    <section v-if="resourceView" class="aks-probe-inspection" aria-label="Read-only resource and autoscaling inspection">
+      <h3 class="blade__section-title">Resource budgets and autoscaling</h3>
+      <p>Capacity, allocatable budget, supplied fixed reservations, learner requests, and remaining room are shown separately. The diagnostic workload is included once in the fixed reservation.</p>
+      <div class="aks-probe-inspection__table"><table><thead><tr><th scope="col">Node</th><th scope="col">Capacity</th><th scope="col">Allocatable</th><th scope="col">Fixed reservation</th><th scope="col">Learner requests</th><th scope="col">Remaining</th></tr></thead><tbody><tr v-for="(node, name) in resourceView.nodes" :key="name"><th scope="row">{{ name }}</th><td>{{ node.capacityCpuM }}m / {{ Math.round(node.capacityMemoryBytes / 1024 / 1024) }}Mi</td><td>{{ node.allocatableCpuM }}m / {{ Math.round(node.allocatableMemoryBytes / 1024 / 1024) }}Mi</td><td>{{ node.fixedCpuM }}m / {{ Math.round(node.fixedMemoryBytes / 1024 / 1024) }}Mi</td><td>{{ node.requestedCpuM }}m / {{ Math.round(node.requestedMemoryBytes / 1024 / 1024) }}Mi</td><td>{{ node.remainingCpuM }}m / {{ Math.round(node.remainingMemoryBytes / 1024 / 1024) }}Mi</td></tr></tbody></table></div>
+      <p v-if="resourceView.deployment">Deployment: desired {{ resourceView.deployment.desiredReplicas }}, ready {{ resourceView.deployment.readyReplicas }}.</p>
+      <article v-for="hpa in resourceView.hpas" :key="hpa.metadata.uid"><p>HPA {{ hpa.metadata.name }}: current {{ hpa.status?.currentReplicas ?? 0 }}, desired {{ hpa.status?.desiredReplicas ?? 0 }}, ready {{ hpa.targetReadyReplicas }}, CPU {{ hpa.status?.currentMetrics?.[0]?.resource?.current?.averageUtilization ?? '<unknown>' }}% / {{ hpa.spec.metrics?.[0]?.resource?.target?.averageUtilization }}%.</p><p>Conditions: {{ hpa.status?.conditions?.map(item => `${item.type} ${item.status} (${item.reason})`).join('; ') || '<none>' }}. Recommendation history: {{ hpa.controller?.recommendations?.map(item => `${item.replicas} @ ${item.atMs / 1000}s`).join(', ') || '<none>' }}.</p></article>
+      <p v-if="resourceView.experiment">Work totals: {{ resourceView.totals.arrivals }} arrived, {{ resourceView.totals.completed }} completed, {{ resourceView.totals.remaining }} remaining; peak backlog {{ resourceView.totals.peakBacklog }}. {{ resourceView.experiment.observations?.length ?? 0 }} measured observations.</p>
     </section>
     </div>
     <div v-else id="aks-services-panel" role="tabpanel" aria-labelledby="aks-services-tab" class="aks-services-tab">

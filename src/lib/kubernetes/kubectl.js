@@ -5,6 +5,8 @@ import { validateKubernetesObject } from './schema.js'
 import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 import { runDiagnosticCommand } from './diagnostics.js'
 import { clearPodState, deleteCascade } from './pod-cleanup.js'
+import { setDeploymentReplicas } from './scheduling.js'
+import { inspectResources } from './resource-inspection.js'
 
 const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler', hpa: 'HorizontalPodAutoscaler', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
 const namespaced = new Set(['Pod', 'Deployment', 'HorizontalPodAutoscaler', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
@@ -13,7 +15,7 @@ const response = (sandbox, lines, effects, diagnostics = []) => ({ sandbox, line
 
 function flags(tokens, allowed) {
   const result = { positional: [], values: {} }
-  const values = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '-o': 'output', '--output': 'output', '-f': 'file', '--dry-run': 'dryRun', '-l': 'label' }
+  const values = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '-o': 'output', '--output': 'output', '-f': 'file', '--dry-run': 'dryRun', '-l': 'label', '--replicas': 'replicas' }
   const booleans = { '-A': 'allNamespaces', '--all-namespaces': 'allNamespaces', '--current': 'current', '--show-labels': 'showLabels', '--previous': 'previous' }
   for (let i = 0; i < tokens.length; i++) {
     let token = tokens[i], key = values[token], inline
@@ -58,6 +60,21 @@ function render(items, kind, format) {
   return format === 'json' ? kubeJson(value) : format === 'yaml' ? kubeYaml(value) : kubeTable(items, kind, format === 'wide')
 }
 function stateEffect(run) { return [{ type: 'kubernetes-state', kubernetes: run.runtime.kubernetes, nextSequence: run.nextSequence }] }
+function resourceNodes(run, selection) {
+  const runtime = selection.state.resourcesRuntime
+  return Object.entries(runtime?.nodes ?? {}).map(([name, node]) => ({ apiVersion: 'v1', kind: 'Node', metadata: { name, uid: `node-${selection.clusterId}-${name}` },
+    status: { phase: 'Ready', capacity: { cpu: '2000m', memory: '8192Mi' }, allocatable: { cpu: `${node.allocatableCpuM}m`, memory: `${node.allocatableMemoryBytes / 1024 / 1024}Mi` } } }))
+}
+function topResources(run, selection, namespace, kind) {
+  const targets = Object.values(selection.state.resources).filter(item => item.kind === 'Deployment' && (!namespace || item.metadata.namespace === namespace))
+  const views = targets.map(item => inspectResources(run, { clusterId: selection.clusterId, namespace: item.metadata.namespace, deploymentName: item.metadata.name }))
+  if (kind === 'nodes') return ['NAME\tCPU(instant delivered)\tCPU(instant throttled)\tMEMORY(15s peak)\tRESERVATION REMAINING', ...Object.entries(views[0]?.nodes ?? {}).map(([name, node]) => `${name}\t${node.cpuDeliveredM}m\t${node.cpuThrottledM}m\t${node.memoryPeakBytes == null ? '<unknown>' : `${Math.round(node.memoryPeakBytes / 1024 / 1024)}Mi`}\t${node.remainingCpuM}m / ${Math.round(node.remainingMemoryBytes / 1024 / 1024)}Mi`)].join('\n')
+  const pods = views.flatMap(view => view.pods)
+  return ['NAME\tCPU(15s avg)\tMEMORY(15s peak)\tAGE\tWINDOW', ...pods.map(pod => {
+    const metric = pod.metrics?.at(-1)
+    return `${pod.name}\t${metric ? `${metric.cpuAverageM}m` : '<unknown>'}\t${metric ? `${Math.round(metric.memoryPeakBytes / 1024 / 1024)}Mi` : '<unknown>'}\t${metric ? `${Math.round(metric.ageSeconds)}s` : '<unknown>'}\t${metric ? '15s' : '<unknown>'}`
+  })].join('\n')
+}
 function manifests(run, files) {
   const parsed = []
   for (const file of files) {
@@ -110,7 +127,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (command === 'set-context' && parsed.values.current && parsed.values.namespace && !parsed.positional.length) { const name = run.runtime.kubernetes.currentContext; if (!name) return response(sandbox, [err('No current Kubernetes context is configured.')]); const contexts = structuredClone(run.runtime.kubernetes.contexts); contexts[name].namespace = parsed.values.namespace; return response(sandbox, [out(`Context namespace set to ${parsed.values.namespace}.`)], [{ type: 'kubernetes-state', kubernetes: { ...run.runtime.kubernetes, contexts }, nextSequence: run.nextSequence }]) }
     return response(sandbox, [err('Unsupported kubectl config command.')])
   }
-  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : verb === 'logs' ? new Set(['namespace', 'context', 'previous']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
+  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : verb === 'logs' ? new Set(['namespace', 'context', 'previous']) : verb === 'scale' ? new Set(['namespace', 'context', 'replicas']) : verb === 'top' ? new Set(['namespace', 'context']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
   if (parsed.error) return response(sandbox, [err(parsed.error)])
   const selection = target(run, parsed.values)
   if (selection.error) return response(sandbox, [err(`Error: ${selection.error}`)])
@@ -120,7 +137,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (!kind || parsed.positional.length > 2) return response(sandbox, [err('Unsupported resource type.')])
     if (name && parsed.values.allNamespaces) return response(sandbox, [err('A named resource cannot use --all-namespaces.')])
     if (namespaced.has(kind) && !parsed.values.allNamespaces && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
-    const derivedNodes = kind === 'Node' ? Array.from({ length: run.sandbox.aksClusters.find(cluster => cluster.id === selection.clusterId)?.nodeCount ?? 0 }, (_, index) => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: `nodepool1-${index}`, uid: `node-${selection.clusterId}-${index}` }, status: { phase: 'Ready' } })) : null
+    const derivedNodes = kind === 'Node' ? (selection.state.resourcesRuntime ? resourceNodes(run, selection) : Array.from({ length: run.sandbox.aksClusters.find(cluster => cluster.id === selection.clusterId)?.nodeCount ?? 0 }, (_, index) => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: `nodepool1-${index}`, uid: `node-${selection.clusterId}-${index}` }, status: { phase: 'Ready' } }))) : null
     if (parsed.values.label && !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?=[A-Za-z0-9_.-]+$/.test(parsed.values.label)) return response(sandbox, [err('-l supports one equality selector in key=value form.')])
     if (parsed.values.showLabels && kind !== 'Pod') return response(sandbox, [err('--show-labels is supported only for Pods.')])
     const labelPair = parsed.values.label?.split('=')
@@ -132,10 +149,23 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   }
   if (verb === 'describe') {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
-    if (!['Deployment', 'Pod', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('describe requires deployment, pod, service, endpointslice, configmap, or secret NAME.')])
+    if (!['Deployment', 'Pod', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'Node'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('describe requires deployment, pod, node, horizontalpodautoscaler, service, endpointslice, configmap, or secret NAME.')])
+    if (kind === 'Node') {
+      const node = resourceNodes(run, selection).find(item => item.metadata.name === name)
+      if (!node) return response(sandbox, [err(`Node '${name}' was not found.`)])
+      const detail = inspectResources(run, { clusterId: selection.clusterId, namespace: selection.namespace, deploymentName: 'assistant' }).nodes[name]
+      return response(sandbox, [out([`Name: ${name}`, 'Kind: Node', `Capacity: ${detail.capacityCpuM}m CPU / ${Math.round(detail.capacityMemoryBytes / 1024 / 1024)}Mi memory`, `Allocatable: ${detail.allocatableCpuM}m CPU / ${Math.round(detail.allocatableMemoryBytes / 1024 / 1024)}Mi memory`, `Fixed reservation: ${detail.fixedCpuM}m CPU / ${Math.round(detail.fixedMemoryBytes / 1024 / 1024)}Mi memory`, `Learner requests: ${detail.requestedCpuM}m CPU / ${Math.round(detail.requestedMemoryBytes / 1024 / 1024)}Mi memory`, `Remaining: ${detail.remainingCpuM}m CPU / ${Math.round(detail.remainingMemoryBytes / 1024 / 1024)}Mi memory`].join('\n'))])
+    }
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const found = resources(selection.state, kind, selection.namespace).find(item => item.metadata.name === name)
-    return found ? response(sandbox, [out(describeObject(found, selection.state))]) : response(sandbox, [err(`${kind} '${name}' was not found.`)])
+    if (!found) return response(sandbox, [err(`${kind} '${name}' was not found.`)])
+    const described = describeObject(found, selection.state)
+    if (kind !== 'HorizontalPodAutoscaler') return response(sandbox, [out(described)])
+    const controller = selection.state.resourcesRuntime?.hpa?.[found.metadata.uid]
+    const conditions = (found.status?.conditions ?? []).map(item => `${item.type}=${item.status} (${item.reason})`).join('; ') || '<none>'
+    const history = (controller?.recommendations ?? []).map(item => `${item.replicas}@${item.atMs / 1000}s`).join(', ') || '<none>'
+    const targetView = inspectResources(run, { clusterId: selection.clusterId, namespace: found.metadata.namespace, deploymentName: found.spec.scaleTargetRef.name })
+    return response(sandbox, [out(`${described}\nReady replicas: ${targetView.deployment?.readyReplicas ?? 0}\nConditions: ${conditions}\nRecommendation history: ${history}`)])
   }
   if (verb === 'logs') {
     const name = parsed.positional[0]
@@ -147,11 +177,25 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (!snapshot) return response(sandbox, [err(`Pod '${name}' has no running container logs.`)])
     const health = lab.capabilities.kubernetesProbes === true ? selection.state.health?.containers?.[pod.metadata.uid] : null
     if (parsed.values.previous) return health?.previous
-      ? response(sandbox, [out(health.previous.logs.join('\n') || 'The previous container has no application logs.')])
+      ? response(sandbox, [out(health.previous.logs.join('\n') || `Previous container terminated: ${health.previous.reason ?? 'Unknown'}${health.previous.exitCode == null ? '' : ` (exit code ${health.previous.exitCode})`}.` )])
       : response(sandbox, [err(`Pod '${name}' has no previous terminated container logs.`)])
     const application = (selection.state.connectivity?.applicationLogs ?? []).filter(item => item.podUid === pod.metadata.uid)
       .map(item => `request=${item.requestId} ${item.method} ${item.path} status=${item.status} dependencies=${item.dependencySummary.map(hop => `${hop.operation}:${hop.status}${hop.reason ? `(${hop.reason})` : ''}`).join(',')}`)
     return response(sandbox, [out([`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...application].join('\n'))])
+  }
+  if (verb === 'top') {
+    const kind = parsed.positional[0]
+    if (!['pods', 'pod', 'nodes', 'node'].includes(kind) || parsed.positional.length !== 1 || !selection.state.resourcesRuntime) return response(sandbox, [err('top requires pods or nodes in a resource-enabled Kubernetes Lab.')])
+    return response(sandbox, [out(topResources(run, selection, kind.startsWith('node') ? null : selection.namespace, kind.startsWith('node') ? 'nodes' : 'pods'))])
+  }
+  if (verb === 'scale') {
+    const match = /^deployment\/(.+)$/.exec(parsed.positional[0] ?? '')
+    const replicas = Number(parsed.values.replicas)
+    if (!match || parsed.positional.length !== 1 || !Number.isInteger(replicas)) return response(sandbox, [err('scale requires deployment/NAME --replicas N.')])
+    const scaled = setDeploymentReplicas(run, { clusterId: selection.clusterId, namespace: selection.namespace, deploymentName: match[1] }, replicas, { cause: 'manual', lab })
+    if (scaled.diagnostics.length) return response(sandbox, [err(`Error: ${scaled.diagnostics[0].message}`)], undefined, scaled.diagnostics)
+    const reconciled = reconcileKubernetesResult(scaled.run, lab)
+    return response(sandbox, [out(`deployment.apps/${match[1]} scaled`)], stateEffect(reconciled.run))
   }
   if (verb === 'delete') {
     if (parsed.values.file) {

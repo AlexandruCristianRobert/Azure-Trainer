@@ -74,7 +74,8 @@ export function applyAksAction(run, action, lab) {
   if (!scenario || Object.keys(scenario).some(key => !scenarioKeys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1
     || !target || Object.keys(target).sort().join(',') !== 'clusterId,deploymentName,namespace,serviceName'
     || [target.clusterId, target.deploymentName, target.namespace, target.serviceName].some(value => typeof value !== 'string' || !value)
-    || !request || !['GET', 'POST'].includes(request.method) || (request.method === 'GET' && (Object.keys(request).sort().join(',') !== 'method,path' || request.path !== '/api/info'))
+    || !request || !['GET', 'POST'].includes(request.method) || (request.method === 'GET' && (Object.keys(request).sort().join(',') !== 'method,path' || !['/api/info', '/api/work'].includes(request.path)
+      || request.path === '/api/work' && lab?.capabilities?.kubernetesResources !== true))
     || (request.method === 'POST' && (request.path !== '/api/ask' || !isJsonValue(request.body) || Object.keys(request).some(key => !['method', 'path', 'body'].includes(key))))
     || !expected || (scenario.connectivity !== undefined ? !validConnectivityExpected(expected)
       : Object.keys(expected).sort().join(',') !== 'body,status' || !Number.isInteger(expected.status) || !isJsonValue(expected.body))
