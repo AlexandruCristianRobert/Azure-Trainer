@@ -205,7 +205,7 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
   return { lab: seededLab, run, clusterId, podUids, target }
 }
 
-export function seedResourceTest({ resources = null, replicas = 2, units = 20, scratchMiB = 96 } = {}) {
+export function seedResourceTest({ resources = null, replicas = 2, hpa = null, units = 20, scratchMiB = 96 } = {}) {
   const { lab: initialLab, run: initial } = createAksTestRun({ manifestId: RESOURCE_MANIFEST.id,
     capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesResources: true }, initialProjectFiles: structuredClone(RESOURCE_SOLUTION_FILES) })
   const lab = { ...initialLab, healthFixture: { initializationSeconds: 6 } }
@@ -228,6 +228,10 @@ export function seedResourceTest({ resources = null, replicas = 2, units = 20, s
     target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas } }
   run = initializeConnectivity(run, clusterId)
   run = reconcileServices(run, clusterId)
+  if (hpa) {
+    run = act(run, lab, { type: 'save-file', path: 'k8s/hpa.yaml', text: stringifyYaml(hpa) }).run
+    run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/hpa.yaml' }).run
+  }
   return { lab, run, clusterId, target, podUids: getDeploymentPods(run, clusterId, target.namespace, target.deploymentName).map(pod => pod.metadata.uid).sort() }
 }
 

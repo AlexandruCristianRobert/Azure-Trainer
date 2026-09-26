@@ -151,7 +151,7 @@ function validClusterState(state, run, lab, clusterId) {
   if (!probesEnabled && state.health !== undefined) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
-  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1', EndpointSlice: 'discovery.k8s.io/v1' }
+  const supportedVersions = { Namespace: 'v1', Deployment: 'apps/v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', HorizontalPodAutoscaler: 'autoscaling/v2', Node: 'v1', ReplicaSet: 'apps/v1', Pod: 'v1', Event: 'v1', EndpointSlice: 'discovery.k8s.io/v1' }
   for (const [key, resource] of resources) {
     if (!isPlainObject(resource) || typeof resource.apiVersion !== 'string' || typeof resource.kind !== 'string'
       || !isPlainObject(resource.metadata) || typeof resource.metadata.name !== 'string' || !resource.metadata.name
@@ -164,7 +164,7 @@ function validClusterState(state, run, lab, clusterId) {
     if (key !== `${resource.kind}/${namespace}/${resource.metadata.name}` || uids.has(resource.metadata.uid)) return false
     uids.add(resource.metadata.uid)
   }
-  const declaredObjects = resources.filter(([, resource]) => ['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret'].includes(resource.kind))
+  const declaredObjects = resources.filter(([, resource]) => ['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler'].includes(resource.kind))
   const deployments = declaredObjects.filter(([, resource]) => resource.kind === 'Deployment').map(([, resource]) => resource)
   for (const [, resource] of declaredObjects) {
     const desired = {
@@ -175,7 +175,7 @@ function validClusterState(state, run, lab, clusterId) {
       ...(resource.type === undefined ? {} : { type: resource.type }),
       ...(resource.data === undefined ? {} : { data: resource.data }),
     }
-    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments: [...deployments, ...declaredObjects.filter(([, item]) => item.kind === 'HorizontalPodAutoscaler').map(([, item]) => item)], kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
   if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
@@ -262,6 +262,16 @@ function validResourceRuntime(state, run, lab, clusterId) {
       && Number.isFinite(item.cpuAverageM) && item.cpuAverageM >= 0 && item.cpuAverageM <= 4000 && item.windowEndMs <= run.runtime.simTimeMs
       && Number.isSafeInteger(item.memoryPeakBytes) && item.memoryPeakBytes >= 0 && item.memoryPeakBytes <= 16 * 1024 * 1024 * 1024
       && Number.isSafeInteger(item.readySinceMs) && item.readySinceMs >= 0 && item.readySinceMs <= item.windowStartMs))) return false
+  if (!Object.entries(value.hpa).every(([uid, controller]) => {
+    const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.uid === uid)
+    return !!hpa && isPlainObject(controller) && Number.isInteger(controller.policyGeneration) && controller.policyGeneration >= 1
+      && Number.isInteger(controller.nextSyncMs) && controller.nextSyncMs >= 0 && (controller.lastSyncMs === null || Number.isInteger(controller.lastSyncMs) && controller.lastSyncMs >= 0)
+      && Array.isArray(controller.recommendations) && controller.recommendations.length <= 22
+      && controller.recommendations.every(item => isPlainObject(item) && Number.isInteger(item.atMs) && Number.isInteger(item.replicas) && item.replicas >= 1 && item.replicas <= 6)
+      && (controller.lastDecision === null || isPlainObject(controller.lastDecision) && typeof controller.lastDecision.reason === 'string'
+        && [controller.lastDecision.rawDesired, controller.lastDecision.adjustedDesired, controller.lastDecision.stabilizedDesired, controller.lastDecision.observedUtilization, controller.lastDecision.beforeStabilization].every(item => item === null || Number.isFinite(item))
+        && typeof controller.lastDecision.missingSamples === 'boolean' && typeof controller.lastDecision.unreadySamples === 'boolean' && Number.isInteger(controller.lastDecision.atMs))
+  })) return false
   return Object.entries(value.terminationDue).every(([uid, atMs]) => {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     return typeof uid === 'string' && Number.isFinite(atMs) && atMs >= 0 && pod?.metadata.deletionTimestamp !== undefined

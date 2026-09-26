@@ -6,8 +6,8 @@ import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
 import { runDiagnosticCommand } from './diagnostics.js'
 import { clearPodState, deleteCascade } from './pod-cleanup.js'
 
-const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
-const namespaced = new Set(['Pod', 'Deployment', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
+const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler', hpa: 'HorizontalPodAutoscaler', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
+const namespaced = new Set(['Pod', 'Deployment', 'HorizontalPodAutoscaler', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
 const out = text => ({ text, kind: 'out' }), err = text => ({ text, kind: 'err' })
 const response = (sandbox, lines, effects, diagnostics = []) => ({ sandbox, lines, events: [], latencyMs: 0, ...(effects ? { effects } : {}), ...(diagnostics.length ? { diagnostics } : {}) })
 
@@ -171,7 +171,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
       return response(sandbox, [out(`deleted manifests from ${parsed.values.file[0]}`)], stateEffect(reconciled.run))
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
-    if (!['Pod', 'Deployment', 'Service', 'Namespace'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, service, or namespace NAME.')])
+    if (!['Pod', 'Deployment', 'Service', 'Namespace', 'HorizontalPodAutoscaler'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, service, namespace, or horizontalpodautoscaler NAME.')])
     if (kind === 'Namespace' && ['default', 'kube-system', 'kube-public'].includes(name)) return response(sandbox, [err(`Namespace '${name}' is protected and cannot be deleted.`)])
     if (kind !== 'Namespace' && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId]
@@ -186,7 +186,10 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         replacementTemplateHash: null }].slice(-100)
       clearPodState(state, item.metadata.uid); delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
     }
-    else deleteCascade(state, [item], kind === 'Namespace' ? item.metadata.name : null)
+    else {
+      if (kind === 'HorizontalPodAutoscaler') delete state.resourcesRuntime?.hpa?.[item.metadata.uid]
+      deleteCascade(state, [item], kind === 'Namespace' ? item.metadata.name : null)
+    }
     const reconciled = reconcileKubernetesResult(next, lab)
     if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)
     return response(sandbox, [out(`${kind.toLowerCase()} "${name}" deleted`)], stateEffect(reconciled.run))

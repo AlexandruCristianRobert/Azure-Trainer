@@ -32,7 +32,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
   }
   for (let i = 0; i < documents.length; i++) {
-    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: options.locations?.[i] })
+    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
     const ns = object.metadata.namespace ?? ''
@@ -68,6 +68,14 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, ...generatedService,
       ...(object.kind === 'Service' ? { spec: { ...object.spec, ...(generatedService.spec ?? {}) } } : {}),
       metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
+    if (object.kind === 'HorizontalPodAutoscaler' && old && JSON.stringify(old.spec) !== JSON.stringify(object.spec)) {
+      const controller = next.runtime.kubernetes.clusters[clusterId].resourcesRuntime?.hpa?.[uid]
+      if (controller) {
+        controller.policyGeneration += 1
+        controller.recommendations = []
+        controller.lastDecision = { reason: 'policy-changed', rawDesired: null, adjustedDesired: null, stabilizedDesired: null, observedUtilization: null, missingSamples: false, unreadySamples: false, atMs: next.runtime.simTimeMs, beforeStabilization: null }
+      }
+    }
     if (object.kind === 'ConfigMap' || object.kind === 'Secret') next = scheduleConfigurationProjection(next, clusterId, key)
     lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} ${old ? 'configured' : 'created'}`, kind: 'out' })
   }

@@ -6,6 +6,7 @@ import { finishProbeExperiment, observeProbeExperiment } from './probe-experimen
 import { finishScheduledTerminations, schedulePendingPods } from './scheduling.js'
 import { reconcileKubernetes } from './reconcile.js'
 import { accountResourceSecond, sampleResourceMetrics } from './resource-usage.js'
+import { reconcileHpa } from './hpa.js'
 
 const clone = value => structuredClone(value)
 
@@ -91,7 +92,9 @@ function resourceTimestamp(run, atMs, lab) {
   run = processContainerLifecycle(run, atMs, lab)
   run = processProbeTimestamp(run, atMs, lab)
   run = reconcileProbeServices(run)
-  return sampleResourceMetrics(run, atMs, lab)
+  run = sampleResourceMetrics(run, atMs, lab)
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, atMs, lab)
+  return run
 }
 
 function reconcileResourceTerminations(run, atMs, lab) {
@@ -110,6 +113,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, run.runtime.simTimeMs, lab), run.runtime.simTimeMs, lab))
   run = accountResourceSecond(run, run.runtime.simTimeMs, lab)
   run = sampleResourceMetrics(run, run.runtime.simTimeMs, lab)
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, run.runtime.simTimeMs, lab)
   run = observeProbeExperiment(run, run.runtime.simTimeMs, lab)
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
@@ -128,6 +132,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
   run = accountResourceSecond(run, target, lab)
   run = sampleResourceMetrics(run, target, lab)
+  for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, target, lab)
   run = observeProbeExperiment(run, target, lab)
   return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }

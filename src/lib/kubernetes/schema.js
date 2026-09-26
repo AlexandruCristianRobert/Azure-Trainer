@@ -1,7 +1,8 @@
 import { parseHttpProbe } from './probe-schema.js'
 import { normalizeContainerResources } from './resource-schema.js'
+import { validateHpa } from './hpa.js'
 
-const allowedKinds = new Set(['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret'])
+const allowedKinds = new Set(['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler'])
 const namePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 const labelNamePattern = /^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/
 const validDnsName = value => typeof value === 'string' && value.length <= 63 && namePattern.test(value)
@@ -207,7 +208,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   const namespaced = input.kind !== 'Namespace'
   const resolvedNamespace = namespaced ? namespace ?? input.metadata?.namespace : undefined
   if (namespaced && !validDnsName(resolvedNamespace)) return { object: null, diagnostics: [diag('INVALID_NAMESPACE', resolvedNamespace, root)] }
-  const expectedVersion = input.kind === 'Deployment' ? 'apps/v1' : 'v1'
+  const expectedVersion = input.kind === 'Deployment' ? 'apps/v1' : input.kind === 'HorizontalPodAutoscaler' ? 'autoscaling/v2' : 'v1'
   if (input.apiVersion !== expectedVersion) return { object: null, diagnostics: [diag('INVALID_API_VERSION', input.apiVersion, root)] }
   issue = metadata(input.metadata, root, namespaced, namespace)
   if (issue) return { object: null, diagnostics: [issue] }
@@ -217,6 +218,11 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
   else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources)
+  else if (input.kind === 'HorizontalPodAutoscaler') {
+    if (!resources) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
+    const result = validateHpa(input, { namespace: resolvedNamespace, deployments: capabilities.deployments ?? [] })
+    return result.diagnostics.length ? result : { object: result.object, diagnostics: [] }
+  }
   else issue = validateService(input, root, capabilities)
   if (issue) return { object: null, diagnostics: [issue] }
   const output = clone(input)
