@@ -38,6 +38,7 @@ export function registerRevision(input, target, template) {
 export function pruneRevisionHistory(input, target) {
   const run = clone(input); const state = run.runtime.kubernetes.clusters[target.clusterId]; const history = state?.rollouts?.deployments?.[target.deploymentUid]; const deploy = state && deployment(run, target)
   if (!history || !deploy) return run
+  if (!history.conditions.some(item => item?.type === 'Progressing' && item?.status === 'True' && item?.reason === 'NewReplicaSetAvailable')) return run
   const limit = deploy.spec.revisionHistoryLimit ?? 10; const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
   const removable = history.revisions.filter(item => item.rsUid !== history.currentRsUid).filter(item => { const rs = replicaSets(state, deploy.metadata.uid).find(value => value.metadata.uid === item.rsUid); return rs?.spec.replicas === 0 && !pods.some(pod => pod.metadata.ownerReferences?.some(ref => ref.uid === item.rsUid)) }).sort((a, b) => a.revision - b.revision)
   while (history.revisions.length > limit + 1 && removable.length) { const stale = removable.shift(); const rs = replicaSets(state, deploy.metadata.uid).find(value => value.metadata.uid === stale.rsUid); history.revisions = history.revisions.filter(item => item.rsUid !== stale.rsUid); if (rs) delete state.resources[key('ReplicaSet', rs.metadata.namespace, rs.metadata.name)] }
