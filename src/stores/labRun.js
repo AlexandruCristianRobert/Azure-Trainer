@@ -412,6 +412,10 @@ export const useLabRunStore = defineStore('labRun', {
         job.started = true
         if (context.queuedDraft === job) context.queuedDraft = null
         if (generation !== this.generation || attempt !== context.session.snapshot().run?.attemptId) return null
+        // A timer tick can be queued behind the action that completes the run.
+        // It is stale bookkeeping once completion makes the session read-only;
+        // user actions still go through dispatch and retain the READ_ONLY error.
+        if (job.action.type === 'elapsed' && context.session.snapshot().readOnly) return null
         try {
           const settled = await context.session.dispatch(job.action)
           if (generation !== this.generation || !settled) return null

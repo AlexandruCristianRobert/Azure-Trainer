@@ -117,6 +117,19 @@ describe('behavioral store adapter', () => {
     expect(native.results).toHaveLength(1)
   })
 
+  it('settles a timer tick queued behind the final action before pauseTimer returns', async () => {
+    const store = useLabRunStore()
+    await store.load(lab.id, { lab, repository: repository() })
+    store.tick(1000)
+    const finishing = store.dispatchBehavioral(finish)
+    store.tick(2000)
+    const paused = store.pauseTimer()
+    await finishing
+    await expect(paused).resolves.toBeDefined()
+    expect(store.completedAt).toBeTruthy()
+    expect(store.elapsedMs).toBe(0)
+  })
+
   it('retains an unsaved action for export and retry after storage failure', async () => {
     const native = repository()
     const store = useLabRunStore()
