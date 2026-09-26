@@ -58,7 +58,7 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   if (reason) {
     if (configuration.diagnostics.length && grant && artifactId) waitingConfiguration(state, value, configuration.diagnostics)
     else addEvent(state, reason, `Simulated image pull for ${container.image} failed: ${reason}.`, deployment.metadata.namespace)
-  } else capturePod(run, { ...value, clusterId: cluster.id, template, configuration }, artifactId)
+  } else if (!resourceManaged) capturePod(run, { ...value, clusterId: cluster.id, template, configuration }, artifactId)
   return value
 }
 
@@ -128,17 +128,18 @@ export function reconcileKubernetesResult(input, lab) {
       }
       const ownedPods = getDeploymentPods(run, cluster.id, deployment.metadata.namespace, deployment.metadata.name)
       const previous = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid !== replicaSet.metadata.uid))
-      const current = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid) && !item.metadata.deletionTimestamp)
+      const current = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid) && item.metadata.deletionTimestamp === undefined)
       const removed = [...previous, ...current.slice(deployment.spec.replicas)]
       for (const stale of removed) {
         if (run.__resourceLab && stale.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid)) {
           stale.metadata.deletionTimestamp ??= run.runtime.simTimeMs
-          stale.status = { ...stale.status, phase: 'Terminating', conditions: [] }
           state.resourcesRuntime.terminationDue[stale.metadata.uid] ??= run.runtime.simTimeMs + 1000
         } else {
           delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
           delete state.podSnapshots[stale.metadata.uid]
           delete state.projectionDue[stale.metadata.uid]
+          delete state.resourcesRuntime?.assignments?.[stale.metadata.uid]
+          delete state.resourcesRuntime?.usage?.[stale.metadata.uid]
         }
       }
       for (const old of Object.values(state.resources).filter(item => item.kind === 'ReplicaSet'

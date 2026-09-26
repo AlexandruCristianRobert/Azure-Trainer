@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { schedulePendingPods } from '../src/lib/kubernetes/scheduling.js'
+import { seedResourceTest, resourceView } from './helpers/aks.js'
 
 function runWithPendingPod({ cpu = 1250, memory = 128 * 1024 * 1024 } = {}) {
   return {
@@ -14,6 +15,12 @@ function runWithPendingPod({ cpu = 1250, memory = 128 * 1024 * 1024 } = {}) {
 }
 
 describe('AKS resource scheduling', () => {
+  it('keeps an oversized resource Pod Pending without a snapshot through the learner build/apply path', () => {
+    const { run, target, clusterId } = seedResourceTest({ replicas: 1, resources: { requests: { cpu: '1250m', memory: '128Mi' }, limits: { cpu: '1500m', memory: '256Mi' } } })
+    const pod = resourceView(run, target).pods[0]
+    expect(pod).toMatchObject({ phase: 'Pending', nodeName: null, schedulingReason: 'Insufficient cpu' })
+    expect(run.runtime.kubernetes.clusters[clusterId].podSnapshots[pod.uid]).toBeUndefined()
+  })
   it('leaves a 1250m Pod Pending even though total free cluster CPU is 2000m', () => {
     const run = schedulePendingPods(runWithPendingPod(), 'c1', { capabilities: { kubernetesResources: true } })
     const pod = run.runtime.kubernetes.clusters.c1.resources['Pod/assistant/assistant-1']

@@ -11,6 +11,8 @@ import { HEALTH_FIXTURES } from '../../src/data/fixtures/aks/health.js'
 import { probeDependencies } from '../../src/lib/kubernetes/probe-experiments.js'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { getDeploymentPods } from '../../src/lib/kubernetes/reconcile.js'
+import { RESOURCE_MANIFEST, RESOURCE_SOLUTION_FILES } from '../../src/data/templates/aks-python/resources.js'
+import { inspectResources } from '../../src/lib/kubernetes/resource-inspection.js'
 
 export function makeTrainingSnapshot() {
   return {
@@ -202,6 +204,25 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
   const seededLab = { ...baseLab, scenarios: { ...(baseLab.scenarios ?? {}), ...scenarios }, tasks: [...(baseLab.tasks ?? []), ...probeTasks] }
   return { lab: seededLab, run, clusterId, podUids, target }
 }
+
+export function seedResourceTest({ resources = null, replicas = 2 } = {}) {
+  const { lab: initialLab, run: initial } = createAksTestRun({ manifestId: RESOURCE_MANIFEST.id,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: true }, initialProjectFiles: structuredClone(RESOURCE_SOLUTION_FILES) })
+  const lab = { ...initialLab, healthFixture: { initializationSeconds: 6 } }
+  let run = initial
+  if (resources || replicas !== 2) {
+    const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+    deployment.spec.replicas = replicas
+    if (resources) deployment.spec.template.spec.containers[0].resources = resources
+    run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  }
+  for (const line of ['az group create -n rgaksresources -l eastus', 'az acr create -g rgaksresources -n acraksprobesguided --sku Basic', 'az acr build --registry acraksprobesguided -t assistant:health-v1 .', 'az aks create -g rgaksresources -n aksresources --enable-managed-identity --generate-ssh-keys --attach-acr acraksprobesguided', 'az aks get-credentials -g rgaksresources -n aksresources', 'kubectl apply -f k8s/namespace.yaml', 'kubectl apply -f k8s/configmap.yaml', 'kubectl apply -f k8s/secret.yaml', 'kubectl apply -f k8s/deployment.yaml']) run = act(run, lab, { type: 'command', line }).run
+  const clusterId = run.sandbox.aksClusters[0].id; const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' }
+  return { lab, run, clusterId, target, podUids: getDeploymentPods(run, clusterId, target.namespace, target.deploymentName).map(pod => pod.metadata.uid).sort() }
+}
+
+export function advanceResources(run, lab, seconds) { return act(run, lab, { type: 'aks-advance', seconds }).run }
+export function resourceView(run, target) { return inspectResources(run, target) }
 
 export function advanceHealth(run, lab, seconds) {
   return act(run, lab, { type: 'aks-advance', seconds }).run

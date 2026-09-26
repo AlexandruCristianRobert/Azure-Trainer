@@ -45,7 +45,7 @@ export function schedulePendingPods(input, clusterId, lab) {
       pod.status.schedulingReason = reason
       pod.status.conditions = [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: reason }]
       state.events.push({ apiVersion: 'v1', kind: 'Event', metadata: { name: `event-${state.events.length + 1}`, namespace: pod.metadata.namespace }, reason: 'FailedScheduling', message: reason, simulated: true })
-      if (state.events.length > 1000) state.events.splice(0, state.events.length - 1000)
+      if (state.events.length > 300) state.events.splice(0, state.events.length - 300)
       continue
     }
     const [nodeName] = fitting[0]
@@ -57,14 +57,17 @@ export function schedulePendingPods(input, clusterId, lab) {
   return run
 }
 
-export function setDeploymentReplicas(input, target, replicas, { cause, controllerUid = null } = {}) {
+export function setDeploymentReplicas(input, target, replicas, { cause, controllerUid = null, lab = null } = {}) {
   const run = clone(input); const state = run.runtime?.kubernetes?.clusters?.[target.clusterId]
   const deployment = state?.resources?.[kubeObjectKey('Deployment', target.namespace, target.deploymentName)]
-  if (!deployment || !Number.isInteger(replicas) || replicas < 1 || replicas > 6 || !['manual', 'apply', 'hpa'].includes(cause)) {
+  const maximum = state?.resourcesRuntime?.version === 1 ? 6 : 3
+  if (!deployment || !Number.isInteger(replicas) || replicas < 1 || replicas > maximum || !['manual', 'apply', 'hpa'].includes(cause)) {
     return { run: input, diagnostics: [{ code: 'INVALID_REPLICA_SCALE', message: 'Replica scaling requires an existing Deployment and a value from 1 through 6.' }] }
   }
+  if (deployment.spec.replicas === replicas) return { run, diagnostics: [] }
   deployment.spec.replicas = replicas
   deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
+  deployment.metadata.generation = (deployment.metadata.generation ?? 1) + 1
   if (cause === 'hpa') deployment.metadata.annotations = { ...(deployment.metadata.annotations ?? {}), 'trainer.azure/hpa-controller': controllerUid ?? '' }
   return { run, diagnostics: [] }
 }

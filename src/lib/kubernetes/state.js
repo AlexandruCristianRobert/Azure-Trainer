@@ -7,6 +7,8 @@ import { parsePythonDockerfile } from '../project/python-dockerfile.js'
 import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
 import { CONNECTIVITY_INCIDENT_PHASES, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 import { AI_TROUBLESHOOTING_CLUSTER_ID, AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
+import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+import { normalizeContainerResources } from './resource-schema.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -140,6 +142,8 @@ function validClusterState(state, run, lab, clusterId) {
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
+  if (resourcesEnabled && !validResourceRuntime(state)) return false
+  if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
     || !Array.isArray(state.health.events) || state.health.events.length > 1000)) return false
@@ -173,6 +177,7 @@ function validClusterState(state, run, lab, clusterId) {
     if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
+  if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
   if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
   for (const [, resource] of resources) {
@@ -221,6 +226,32 @@ function validClusterState(state, run, lab, clusterId) {
   return state.events.every(event => isPlainObject(event)) && state.receipts.every(receipt => validReceipt(receipt, run))
     && new Set(state.receipts.map(receipt => receipt.sequence)).size === state.receipts.length
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
+}
+
+function validResourceRuntime(state) {
+  const value = state.resourcesRuntime
+  if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.nodes) || !isPlainObject(value.assignments)
+    || !isPlainObject(value.usage) || !isPlainObject(value.metrics) || !isPlainObject(value.hpa) || !isPlainObject(value.terminationDue)
+    || value.experiment !== null || !Array.isArray(value.receipts) || value.incident !== null) return false
+  if (JSON.stringify(value.nodes) !== JSON.stringify(RESOURCE_FIXTURES.nodes)) return false
+  return Object.entries(value.terminationDue).every(([uid, atMs]) => {
+    const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
+    return typeof uid === 'string' && Number.isFinite(atMs) && atMs >= 0 && pod?.metadata.deletionTimestamp !== undefined
+  })
+    && (!state.applyOwnership || isPlainObject(state.applyOwnership) && Object.values(state.applyOwnership).every(item => isPlainObject(item) && typeof item.replicas === 'boolean'))
+}
+
+function validResourceAssignments(runtime, byUid) {
+  if (!Object.entries(runtime.assignments).every(([uid, assignment]) => {
+    const pod = byUid.get(uid); const effective = normalizeContainerResources(pod?.spec?.containers?.[0]?.resources ?? {}).effective
+    return pod?.kind === 'Pod' && (pod.metadata.deletionTimestamp === undefined || Number.isFinite(runtime.terminationDue?.[uid])) && pod.spec?.nodeName === assignment?.nodeName
+      && Object.hasOwn(runtime.nodes, assignment.nodeName) && Number.isInteger(assignment.cpuRequestM) && Number.isInteger(assignment.memoryRequestBytes)
+      && assignment.cpuRequestM === (effective.cpuRequestM ?? 0) && assignment.memoryRequestBytes === (effective.memoryRequestBytes ?? 0)
+  })) return false
+  return Object.entries(runtime.nodes).every(([name, node]) => {
+    const used = Object.values(runtime.assignments).filter(item => item.nodeName === name).reduce((sum, item) => ({ cpu: sum.cpu + item.cpuRequestM, memory: sum.memory + item.memoryRequestBytes }), { cpu: 0, memory: 0 })
+    return used.cpu <= node.allocatableCpuM - node.fixedCpuM && used.memory <= node.allocatableMemoryBytes - node.fixedMemoryBytes
+  })
 }
 
 function validProbeFacts(facts, experiment, nowMs) {

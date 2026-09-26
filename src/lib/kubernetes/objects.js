@@ -1,6 +1,7 @@
 import { validateKubernetesObject } from './schema.js'
 import { scheduleConfigurationProjection } from './configuration.js'
 import { serviceAllocationDiagnostic } from './services.js'
+import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -17,6 +18,9 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
   let next = clone(run); const diagnostics = []; const lines = []
   if (!state) return { run, lines, diagnostics: [{ code: 'KUBE_CLUSTER_NOT_FOUND', message: 'The selected Kubernetes cluster is unavailable.' }] }
   const connectivity = state.connectivity
+  if (lab?.capabilities?.kubernetesResources === true && !next.runtime.kubernetes.clusters[clusterId].resourcesRuntime) {
+    next.runtime.kubernetes.clusters[clusterId].resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {} }
+  }
   if (connectivity) {
     const incoming = documents.filter(item => item?.kind === 'Service').filter(item => {
       const namespace = item.metadata?.namespace ?? options.namespace
