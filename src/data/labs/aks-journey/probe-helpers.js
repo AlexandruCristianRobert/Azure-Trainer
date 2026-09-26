@@ -6,9 +6,9 @@ export function probeScenario(scenarioId, target, script, durationSeconds) {
     target: Object.freeze({ ...target }), durationSeconds, script: Object.freeze({ ...script }) })
 }
 
-export function probeTask({ id, stageId, text, explanation, hints, examNote, check, solution, scenarioId, target }) {
+export function probeTask({ id, stageId, text, explanation, hints, examNote, check, solution, scenarioId, target, dependencies }) {
   return { id, stageId, text, explanation, hints, examNote, check, solution,
-    ...(scenarioId ? { verification: { scenarioId, scenarioVersion: 1 }, dependencies: probeDependencies(target) } : {}) }
+    ...(scenarioId ? { verification: { scenarioId, scenarioVersion: 1 }, dependencies: dependencies ?? probeDependencies(target) } : {}) }
 }
 
 export function requestTask({ id, stageId, text, explanation, hints, examNote, check, solution, scenarioId, target }) {
