@@ -33,6 +33,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
   }
   for (let i = 0; i < documents.length; i++) {
+    const beforeObject = clone(next)
     const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true, kubernetesRollouts: lab?.capabilities?.kubernetesRollouts === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
@@ -71,6 +72,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
     if (object.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true) {
       const revision = registerRevision(next, { clusterId, namespace: object.metadata.namespace, deploymentName: object.metadata.name, deploymentUid: uid }, object.spec.template)
+      if (revision.diagnostics.length) return { run: beforeObject, lines, diagnostics: revision.diagnostics }
       next = revision.run
     }
     if (object.kind === 'HorizontalPodAutoscaler' && old && JSON.stringify(old.spec) !== JSON.stringify(object.spec)) {

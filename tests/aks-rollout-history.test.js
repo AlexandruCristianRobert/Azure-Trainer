@@ -14,9 +14,12 @@ describe('rollout schema', () => {
 })
 
 test('reuses a retained template while promoting a monotonic revision', () => {
-  const run = { nextSequence: 10, runtime: { kubernetes: { clusters: { c1: { resources: {} } } } } }
-  const target = { clusterId: 'c1', namespace: 'assistant', deploymentName: 'assistant', deploymentUid: 'deploy-1' }
   const one = { metadata: { labels: { app: 'assistant' } }, spec: { containers: [{ name: 'api', image: 'a:v1' }] } }
+  const run = { nextSequence: 10, runtime: { simTimeMs: 0, kubernetes: { clusters: { c1: { resources: {
+    'Deployment/assistant/assistant': { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'assistant', namespace: 'assistant', uid: 'deploy-1', generation: 1 }, spec: { replicas: 2, selector: { matchLabels: { app: 'assistant' } }, template: one } },
+    'ReplicaSet/assistant/assistant-v1': { apiVersion: 'apps/v1', kind: 'ReplicaSet', metadata: { name: 'assistant-v1', namespace: 'assistant', uid: 'rs-1', ownerReferences: [{ uid: 'deploy-1', kind: 'Deployment', name: 'assistant' }] }, spec: { replicas: 2, selector: { matchLabels: { app: 'assistant' } }, template: one } },
+  } } } } } }
+  const target = { clusterId: 'c1', namespace: 'assistant', deploymentName: 'assistant', deploymentUid: 'deploy-1' }
   const two = { metadata: { labels: { app: 'assistant' } }, spec: { containers: [{ name: 'api', image: 'a:v2' }] } }
   const first = registerRevision(run, target, one)
   const second = registerRevision(first.run, target, two)

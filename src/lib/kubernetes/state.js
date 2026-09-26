@@ -149,7 +149,7 @@ function validClusterState(state, run, lab, clusterId) {
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
-  if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 100)) return false
+  if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 40)) return false
   if (!rolloutsEnabled && state.rollouts !== undefined) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
@@ -185,6 +185,22 @@ function validClusterState(state, run, lab, clusterId) {
     if (rolloutsEnabled && resource.kind === 'Deployment' && normalizeRolloutSpec({ ...(resource.spec.strategy ?? {}), minReadySeconds: resource.spec.minReadySeconds, progressDeadlineSeconds: resource.spec.progressDeadlineSeconds, revisionHistoryLimit: resource.spec.revisionHistoryLimit }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
+  if (rolloutsEnabled) for (const [uid, rollout] of Object.entries(state.rollouts.deployments)) {
+    const deploy = byUid.get(uid)
+    if (deploy?.kind !== 'Deployment' || !isPlainObject(rollout) || !Number.isInteger(rollout.nextRevision) || rollout.nextRevision < 2
+      || !Number.isInteger(rollout.currentRevision) || rollout.currentRevision < 1 || rollout.currentRevision >= rollout.nextRevision
+      || typeof rollout.currentRsUid !== 'string' || !Number.isInteger(rollout.observedGeneration) || !Array.isArray(rollout.revisions) || rollout.revisions.length < 1 || rollout.revisions.length > 20
+      || !isPlainObject(rollout.availableSinceByPod) || !isPlainObject(rollout.progressSnapshot) || !Array.isArray(rollout.conditions)) return false
+    const revisions = new Set()
+    for (const revision of rollout.revisions) {
+      const rs = byUid.get(revision?.rsUid)
+      if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revisions.has(revision.revision)
+        || typeof revision.templateHash !== 'string' || !isPlainObject(revision.template) || typeof revision.imageRef !== 'string'
+        || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid)) return false
+      revisions.add(revision.revision)
+    }
+    if (!rollout.revisions.some(item => item.rsUid === rollout.currentRsUid && item.revision === rollout.currentRevision)) return false
+  }
   if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
   if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false

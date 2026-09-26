@@ -6,6 +6,7 @@ import { reconcileHealth } from './probes.js'
 import { schedulePendingPods } from './scheduling.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { clearPodState } from './pod-cleanup.js'
+import { registerRevision } from './rollout-history.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -119,6 +120,12 @@ export function reconcileKubernetesResult(input, lab) {
     if (run.__resourceLab && !state.resourcesRuntime) state.resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {}, accountedUntilMs: null }
     const deployments = Object.values(state.resources).filter(item => item.kind === 'Deployment')
     for (const deployment of deployments) {
+      if (lab?.capabilities?.kubernetesRollouts === true) {
+        const revision = registerRevision(run, { clusterId: cluster.id, namespace: deployment.metadata.namespace, deploymentName: deployment.metadata.name, deploymentUid: deployment.metadata.uid }, deployment.spec.template)
+        if (revision.diagnostics.length) return { run: original, diagnostics: revision.diagnostics }
+        run = revision.run
+        continue
+      }
       const templateHash = hash(deployment.spec.template)
       const rsName = `${deployment.metadata.name}-${templateHash}`
       const rsKey = kubeObjectKey('ReplicaSet', deployment.metadata.namespace, rsName)
