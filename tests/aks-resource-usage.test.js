@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { act, advanceResources, resourceView, seedResourceTest, startHealthFault } from './helpers/aks.js'
 import { startResourceProfileFixture } from '../src/lib/kubernetes/resource-usage.js'
 import { setDeploymentReplicas } from '../src/lib/kubernetes/scheduling.js'
@@ -28,6 +29,41 @@ describe('AKS resource accounting', () => {
     expect(run.runtime.kubernetes.clusters[c.clusterId].events.some(event => event.reason === 'OOMKilled')).toBe(true)
     expect(view.cpuThrottledM).toBe(0)
     expect(view.totals.completed).toBe(0)
+  })
+
+  it('clears instantaneous CPU during OOM restart backoff', () => {
+    const c = seedResourceTest({ resources: { requests: { cpu: '250m', memory: '128Mi' }, limits: { cpu: '500m', memory: '128Mi' } } })
+    const run = runResourceProfile(c.run, c.lab, 'test-local-work', 35)
+    const view = resourceView(run, c.target)
+    expect(view.oomCount).toBeGreaterThan(0)
+    expect(view.pods.every(pod => pod.cpuDemandM === null && pod.cpuDeliveredM === null && pod.cpuThrottledM === null)).toBe(true)
+    expect(view.cpuDemandM).toBe(0)
+    expect(view.cpuDeliveredM).toBe(0)
+    expect(view.cpuThrottledM).toBe(0)
+  })
+
+  it('publishes a healthy Pod metric at an aligned boundary when another Deployment OOMs', () => {
+    const c = seedResourceTest({ resources: { requests: { cpu: '250m', memory: '128Mi' }, limits: { cpu: '500m', memory: '128Mi' } } })
+    const observer = parseYaml(c.run.project.savedFiles['k8s/deployment.yaml'])
+    observer.metadata.name = 'observer'
+    observer.spec.selector.matchLabels.app = 'observer'
+    observer.spec.template.metadata.labels.app = 'observer'
+    observer.spec.replicas = 1
+    observer.spec.template.spec.containers[0].resources = { requests: { cpu: '250m', memory: '128Mi' }, limits: { cpu: '500m', memory: '256Mi' } }
+    const deploymentFile = c.run.project.savedFiles['k8s/deployment.yaml']
+    let run = act(c.run, c.lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: `${deploymentFile}\n---\n${stringifyYaml(observer)}` }).run
+    run = act(run, c.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+    run = advanceResources(run, c.lab, 44)
+    const observerPod = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item =>
+      item.kind === 'Pod' && item.metadata.labels?.app === 'observer')
+    expect(observerPod).toBeDefined()
+    const started = startResourceProfileFixture(run, 'test-local-work', c.lab)
+    expect(started.diagnostics).toEqual([])
+    run = advanceResources(started.run, c.lab, 1)
+    const state = run.runtime.kubernetes.clusters[c.clusterId]
+    expect(state.resourcesRuntime.receipts.some(item => item.podUid !== observerPod.metadata.uid && item.reason === 'OOMKilled' && item.atMs === 45_000),
+      JSON.stringify({ experiment: state.resourcesRuntime.experiment, receipts: state.resourcesRuntime.receipts })).toBe(true)
+    expect(state.resourcesRuntime.metrics[observerPod.metadata.uid]).toContainEqual(expect.objectContaining({ windowStartMs: 30_000, windowEndMs: 45_000 }))
   })
 
   it('produces identical totals for one 60 second advance and twelve 5 second advances', () => {

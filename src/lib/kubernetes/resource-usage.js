@@ -44,7 +44,7 @@ export function startResourceProfileFixture(input, scenarioId, lab) {
     startedAtMs: run.runtime.simTimeMs, warmupDeadlineMs: run.runtime.simTimeMs + 360_000, phaseZeroAtMs: null,
     requiredReadyReplicas: scenario.requiredReadyReplicas, atMs: run.runtime.simTimeMs, overflowBacklog: 0,
     totals: { arrivals: 0, completed: 0, remaining: 0, peakBacklog: 0 }, unsupported: null }
-  return { run, diagnostics: [] }
+  return { run: sampleResourceMetrics(run, run.runtime.simTimeMs, lab), diagnostics: [] }
 }
 
 function latestComplete(runtime, uid, containerId, beforeMs) {
@@ -123,11 +123,16 @@ export function sampleResourceMetrics(input, atMs, lab) {
 export function accountResourceSecond(input, atMs, lab) {
   if (lab?.capabilities?.kubernetesResources !== true) return input
   let run = clone(input)
+  const oomTargets = []
   for (const [clusterId, cluster] of Object.entries(run.runtime.kubernetes.clusters ?? {})) {
     const runtime = cluster.resourcesRuntime; if (!runtime) continue
     if (!Number.isFinite(runtime.accountedUntilMs)) { runtime.accountedUntilMs = atMs; continue }
     if (atMs <= runtime.accountedUntilMs || atMs - runtime.accountedUntilMs !== 1000) continue
     runtime.accountedUntilMs = atMs
+    for (const usage of Object.values(runtime.usage)) {
+      usage.cpuDemandM = 0; usage.cpuDeliveredM = 0; usage.cpuThrottledM = 0
+      usage.memoryBytes = RESOURCE_FIXTURES.baseMemoryMiB * MiB
+    }
     const experiment = runtime.experiment
     if (experiment?.clusterId === clusterId) {
       experiment.atMs = atMs
@@ -136,6 +141,7 @@ export function accountResourceSecond(input, atMs, lab) {
       }
     }
     const pods = experiment?.clusterId === clusterId ? podsFor(run, experiment) : []
+    const profilePodIds = new Set(pods.map(pod => pod.metadata.uid))
     const readyPods = pods.filter(pod => isReady(pod, containerFor(cluster, pod)) && runtime.assignments[pod.metadata.uid]
       && workloadFor(run, cluster, pod)?.version === 1)
     const startMs = atMs - 1000
@@ -165,7 +171,8 @@ export function accountResourceSecond(input, atMs, lab) {
       const assignedWork = workByPod.get(uid) ?? 0
       const profile = experiment ? PROFILES[experiment.profileId] : null
       const unitCost = profile?.kind === 'ai-wait' ? 1 : workload.units
-      const isProfileWork = profile?.kind === 'workload' && experiment?.phase === 'running' && (assignedWork > 0 || rate > 0)
+      const isProfileWork = profilePodIds.has(uid) && profile?.kind === 'workload' && experiment?.phase === 'running'
+        && (assignedWork > 0 || rate > 0)
       const scratch = isProfileWork ? workload.scratchMiB * MiB : 0
       const memoryBytes = RESOURCE_FIXTURES.baseMemoryMiB * MiB + scratch
       const workDemandM = assignedWork * unitCost
@@ -217,15 +224,20 @@ export function accountResourceSecond(input, atMs, lab) {
         && (drained || atMs >= boundedEnd)) experiment.phase = 'complete'
     }
     for (const item of active) if (item.oom) {
-      const terminated = terminateForMemoryLimit(run, clusterId, item.uid, atMs)
-      run = terminated
-      const nextState = resourceState(run, clusterId)
-      nextState.receipts.push({ kind: 'container-termination', podUid: item.uid, containerId: item.health.containerId,
-        reason: 'OOMKilled', exitCode: 137, atMs })
-      if (nextState.receipts.length > 40) nextState.receipts.splice(0, nextState.receipts.length - 40)
-      if (runtime !== nextState) Object.assign(runtime.usage, nextState.usage)
+      oomTargets.push({ clusterId, podUid: item.uid, containerId: item.health.containerId })
     }
-    if (atMs % 15_000 === 0) for (const [uid, usage] of Object.entries(runtime.usage)) publishMetric(runtime, uid, usage, atMs)
+  }
+  for (const target of oomTargets) {
+    run = terminateForMemoryLimit(run, target.clusterId, target.podUid, atMs)
+    const runtime = resourceState(run, target.clusterId)
+    runtime.receipts.push({ kind: 'container-termination', podUid: target.podUid, containerId: target.containerId,
+      reason: 'OOMKilled', exitCode: 137, atMs })
+    if (runtime.receipts.length > 40) runtime.receipts.splice(0, runtime.receipts.length - 40)
+    const usage = runtime.usage[target.podUid]
+    if (usage) {
+      usage.cpuDemandM = 0; usage.cpuDeliveredM = 0; usage.cpuThrottledM = 0
+      usage.memoryBytes = RESOURCE_FIXTURES.baseMemoryMiB * MiB; usage.window = null
+    }
   }
   return run
 }
