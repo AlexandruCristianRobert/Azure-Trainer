@@ -18,6 +18,16 @@ function applyHpa(c, hpa = HPA) {
 }
 
 describe('AKS CPU HPA', () => {
+  it('reports HPA desired scale separately from actual ready Pod count', () => {
+    const c = seedResourceTest()
+    const run = advanceResources(applyHpa(c), c.lab, 30)
+    const result = act(run, c.lab, { type: 'command', line: 'kubectl describe hpa assistant-cpu -n assistant' })
+    const output = result.lines.map(line => line.text).join('\n')
+    expect(output).toMatch(/Replicas: current \d+, desired \d+/)
+    expect(output).not.toMatch(/Replicas: current \d+, desired \d+, ready/)
+    expect(output.match(/Ready replicas: \d+/g)).toHaveLength(1)
+  })
+
   it('uses effective CPU requests, not limits, for observed utilization', () => {
     const c = seedResourceTest()
     let run = applyHpa(c)

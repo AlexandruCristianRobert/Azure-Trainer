@@ -6,6 +6,7 @@ import { sampleResourceMetrics } from './resource-usage.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+import { normalizeContainerResources } from './resource-schema.js'
 
 const clone = value => structuredClone(value)
 const PROFILES = RESOURCE_FIXTURES.profiles
@@ -100,10 +101,31 @@ export function startResourceExperiment(input, scenarioId, lab) {
   const original = stateFor(input, scenario.target.clusterId)
   const target = { namespace: scenario.target.namespace, deploymentName: scenario.target.deploymentName }
   const deployment = original?.resources?.[kubeObjectKey('Deployment', target.namespace, target.deploymentName)]
-  const hpa = profile.requiresHpa ? adoptionReady(input, original ?? {}, target) : null
+  const hpa = profile.requiresHpa
+    ? profile.diagnosis === 'no-cpu' ? liveHpa(original ?? {}, target.namespace, target.deploymentName) : adoptionReady(input, original ?? {}, target)
+    : null
   if (!original?.resourcesRuntime || !deployment || descendants(input, { ...target, clusterId: scenario.target.clusterId }).length === 0)
     return { run: input, diagnostics: [invalid('The declared resource profile target is unavailable.')] }
-  if (profile.requiresHpa && !hpa) return { run: input, diagnostics: [invalid('This profile requires a live HPA and an applied Deployment with replicas omitted.')] }
+  if (profile.requiresHpa && !hpa) return { run: input, diagnostics: [invalid(profile.diagnosis === 'no-cpu'
+    ? 'The missing-request diagnosis requires its declared live HPA.'
+    : 'This profile requires a live HPA and an applied Deployment with replicas omitted.')] }
+  if (profile.diagnosis === 'oom') {
+    const workload = input.artifacts.buildsById?.[original.podSnapshots?.[descendants(input, { ...target, clusterId: scenario.target.clusterId })[0]?.metadata?.uid]?.artifactId]?.appSpec?.workload
+    const pod = descendants(input, { ...target, clusterId: scenario.target.clusterId })[0]
+    const resources = normalizeContainerResources(pod?.spec?.containers?.[0]?.resources ?? {}).effective
+    if (workload?.operation !== 'process_batch' || workload.units !== 20 || workload.scratchMiB !== 96
+      || resources.memoryRequestBytes !== 128 * 1024 * 1024 || resources.memoryLimitBytes !== 128 * 1024 * 1024)
+      return { run: input, diagnostics: [invalid('The OOM diagnosis requires the supplied 20-unit workload with a 128Mi memory limit.')] }
+  }
+  if (profile.diagnosis === 'no-cpu') {
+    const rawResources = deployment.spec.template.spec.containers[0].resources ?? {}
+    const effective = normalizeContainerResources(rawResources).effective
+    const validPolicy = hpa?.spec?.minReplicas === 2 && hpa?.spec?.maxReplicas === 4
+      && hpa?.spec?.metrics?.[0]?.resource?.target?.averageUtilization === 60
+      && hpa?.spec?.behavior?.scaleDown?.stabilizationWindowSeconds === 60
+    if (rawResources.requests?.cpu !== undefined || rawResources.limits?.cpu !== undefined || effective.cpuRequestM || effective.cpuLimitM || !validPolicy)
+      return { run: input, diagnostics: [invalid('The undefined-utilization diagnosis requires no CPU request or limit and the declared HPA policy.')] }
+  }
   const required = scenarioId.startsWith('test-') ? scenario.requiredReadyReplicas : profile.requiredReadyReplicas
   if (profileId === 'manual-work' && (deployment.spec.replicas !== 3 || liveHpa(original, target.namespace, target.deploymentName)
     || !savedDeploymentHasReplicas(input, target, 3)))
@@ -117,7 +139,24 @@ export function startResourceExperiment(input, scenarioId, lab) {
     fingerprint: fingerprintValue, historicalFingerprint: fingerprint(run, state, target, scenario.target.clusterId, { historical: true }),
     deploymentUid: deployment.metadata.uid, hpaUid: hpa?.metadata.uid ?? null, hpaPolicy: clone(hpa?.spec ?? null), baselineReplicas: null,
     routeSamples: [], observations: [], boundaryKeys: [], proof: null, cancellationReason: null, startSequence: run.nextSequence,
-    scaleReceipts: [], pendingObserved: false, oomObserved: false, provenance: [], podSeenAt: {} }
+    scaleReceipts: [], pendingObserved: false, pendingProof: null, oomObserved: false, oomProof: null,
+    hpaObservations: [], provenance: [], podSeenAt: {} }
+  // A scheduling diagnosis observes the declared Pending state itself.  It is
+  // deliberately not a weakened warmup for normal workload profiles.
+  if (profileId === 'diagnostic-pending') {
+    const pending = descendants(run, { ...target, clusterId: scenario.target.clusterId })
+    const reason = pod => pod.status?.schedulingReason ?? pod.status?.conditions?.find(item => item.type === 'PodScheduled')?.message
+    const valid = pending.length === 2 && pending.every(pod => pod.status?.phase === 'Pending' && !pod.spec?.nodeName
+      && !runtime.assignments[pod.metadata.uid] && !state.health?.containers?.[pod.metadata.uid]
+      && pod.status?.conditions?.some(item => item.type === 'PodScheduled' && item.status === 'False' && item.reason === 'Unschedulable')
+      && reason(pod)?.includes('Insufficient cpu'))
+    runtime.experiment.phase = 'complete'; runtime.experiment.phaseZeroAtMs = run.runtime.simTimeMs
+    runtime.experiment.endedAtMs = run.runtime.simTimeMs; runtime.experiment.pendingObserved = valid
+    runtime.experiment.pendingProof = valid ? { deploymentUid: deployment.metadata.uid, atMs: run.runtime.simTimeMs,
+      podUids: pending.map(pod => pod.metadata.uid).sort(), reasons: pending.map(reason).sort() } : null
+    runtime.experiment.outcome = valid ? 'passed' : 'failed'
+    return { run: persistExperimentResult(run, scenario.target.clusterId, runtime.experiment, lab), diagnostics: [] }
+  }
   run = sampleResourceMetrics(run, run.runtime.simTimeMs, lab)
   return { run, diagnostics: [] }
 }
@@ -191,6 +230,13 @@ function assess(experiment, profile) {
       && item.body?.answer === 'Training backups are kept for 30 days.'
       : item.request.path === '/api/work' && item.workload?.operation === 'process_batch'
         && item.workload.units === experiment.workloadSpec?.units && item.workload.checksum === workloadFor(experiment.profileId).checksum))
+  if (profile.diagnosis === 'oom') return experiment.oomObserved && experiment.oomProof?.podUid && experiment.phase === 'complete' ? 'passed' : 'failed'
+  if (profile.diagnosis === 'no-cpu') {
+    const syncs = experiment.hpaObservations ?? []
+    const validSyncs = syncs.filter(item => item.reason === 'FailedGetResourceMetric' && item.scalingActive === false
+      && item.samplePodUids.length >= 2 && item.missingRequestPodUids.length >= 2)
+    return validSyncs.length >= 2 && experiment.phase === 'complete' ? 'passed' : 'failed'
+  }
   const success = experiment.phase === 'complete' && experiment.unsupported === null && experiment.totals.remaining < 1e-6
     && noOom && validRoute && (experiment.profileId === 'manual-work'
       ? base === 3 && experiment.baselinePodUids?.length === 3 && routed.filter(item => item.request.path === '/api/work').every(item => item.body?.checksum === 3230)
@@ -253,6 +299,9 @@ function persistExperimentResult(input, clusterId, experiment, lab) {
         samples: experiment.routeSamples, observations: experiment.observations, scaleReceipts: experiment.scaleReceipts ?? [],
         fingerprint: experiment.historicalFingerprint } })
     resourceRuntime(run, clusterId).experiment.evidenceId = run.evidence.currentEvidenceByTask[task.id]
+    const incident = resourceRuntime(run, clusterId).incident
+    const phaseForTask = { 'observe-pending': ['observations', 'scheduling'], 'repair-scheduling': ['recoveries', 'scheduling'], 'observe-oom': ['observations', 'memory'], 'repair-memory': ['recoveries', 'memory'], 'observe-hpa': ['observations', 'hpa'], 'repair-hpa': ['recoveries', 'hpa'] }[task.id]
+    if (incident && phaseForTask && experiment.outcome === 'passed') incident[phaseForTask[0]][phaseForTask[1]] = run.evidence.currentEvidenceByTask[task.id]
   }
   const runtime = resourceRuntime(run, clusterId); const completed = runtime.experiment
   runtime.receipts.push({ kind: 'resource-experiment', profileId: completed.profileId, phase: 'complete', outcome: completed.outcome,
@@ -286,19 +335,49 @@ export function observeResourceExperiment(input, atMs, lab) {
       const runtime = resourceRuntime(run, clusterId), current = runtime.experiment
       const legacyFixture = current.profileId.startsWith('test-')
       const willFinish = elapsed >= profile.durationSeconds && (!legacyFixture || current.totals.remaining < 1e-9)
-      if (elapsed >= 0 && Number.isInteger(elapsed) && profileBoundaryOffsets(profile).has(elapsed) && !willFinish
+      if (!profile.diagnosis && elapsed >= 0 && Number.isInteger(elapsed) && profileBoundaryOffsets(profile).has(elapsed) && !willFinish
         && !currentBoundaryRecorded(current, elapsed, false)) {
         const routed = captureBoundary(run, current, elapsed); run = routed.run
       }
       const observedRuntime = resourceRuntime(run, clusterId)
       const observed = observedRuntime.experiment
       observed.pendingObserved ||= observed.observations.some(item => item.pods.some(pod => pod.phase === 'Pending' && pod.placementAgeSeconds > 30))
-      observed.oomObserved ||= observedRuntime.receipts.some(item => item.kind === 'container-termination' && item.reason === 'OOMKilled' && item.atMs >= observed.phaseZeroAtMs)
+      const oom = observedRuntime.receipts.find(item => item.kind === 'container-termination' && item.reason === 'OOMKilled' && item.exitCode === 137 && item.atMs >= observed.phaseZeroAtMs)
+      observed.oomObserved ||= !!oom
+      if (oom && !observed.oomProof) {
+        const pod = Object.values(stateFor(run, clusterId).resources).find(item => item.kind === 'Pod' && item.metadata.uid === oom.podUid)
+        const health = stateFor(run, clusterId).health?.containers?.[oom.podUid]
+        observed.oomProof = { podUid: oom.podUid, containerId: oom.containerId, atMs: oom.atMs,
+          restartCount: health?.restartCount ?? 0, restartAtMs: health?.restartAtMs ?? null, samePod: !!pod }
+      }
+      if (observed.oomProof) {
+        const pod = Object.values(stateFor(run, clusterId).resources).find(item => item.kind === 'Pod' && item.metadata.uid === observed.oomProof.podUid)
+        const health = stateFor(run, clusterId).health?.containers?.[observed.oomProof.podUid]
+        observed.oomProof.restartCount = Math.max(observed.oomProof.restartCount, health?.restartCount ?? 0)
+        observed.oomProof.restartAtMs = health?.restartAtMs ?? observed.oomProof.restartAtMs
+        observed.oomProof.samePod = !!pod
+      }
+      if (observed.hpaUid) {
+        const hpaRuntime = observedRuntime.hpa[observed.hpaUid]
+        const hpa = Object.values(stateFor(run, clusterId).resources).find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.uid === observed.hpaUid)
+        if (hpaRuntime?.lastSyncMs === atMs && hpa && !(observed.hpaObservations ?? []).some(item => item.atMs === atMs)) {
+          const pods = descendants(run, { ...observed.target, clusterId })
+          const samplePodUids = pods.filter(pod => (observedRuntime.metrics[pod.metadata.uid] ?? []).some(sample => sample.windowEndMs === atMs
+            && sample.containerId === stateFor(run, clusterId).health?.containers?.[pod.metadata.uid]?.containerId)).map(pod => pod.metadata.uid).sort()
+          const conditions = hpa.status?.conditions ?? []
+          const row = { atMs, reason: hpaRuntime.lastDecision?.reason ?? null,
+            scalingActive: conditions.find(item => item.type === 'ScalingActive')?.status === 'True',
+            eligiblePodUids: pods.filter(pod => pod.status?.phase === 'Running' && stateFor(run, clusterId).health?.containers?.[pod.metadata.uid]?.ready === true).map(pod => pod.metadata.uid).sort(),
+            missingRequestPodUids: pods.filter(pod => !(normalizeContainerResources(pod.spec?.containers?.[0]?.resources ?? {}).effective.cpuRequestM > 0)).map(pod => pod.metadata.uid).sort(),
+            samplePodUids }
+          observed.hpaObservations ??= []; observed.hpaObservations.push(row); observed.hpaObservations = observed.hpaObservations.slice(-12)
+        }
+      }
       observed.scaleReceipts = observedRuntime.receipts.filter(item => item.kind === 'hpa-scale' && item.controllerUid === observed.hpaUid && item.atMs >= observed.phaseZeroAtMs)
       observed.provenance = run.runtime.kubernetes.requests.filter(item => item.workload?.operation === 'process_batch' && item.sequence >= (observed.startSequence ?? 0)).map(item => ({ operation: item.workload.operation, units: item.workload.units, checksum: item.workload.checksum })).slice(-12)
       if (willFinish
-        && !currentBoundaryRecorded(current, elapsed, true)) {
-        const finalSample = captureBoundary(run, current, elapsed, true); run = finalSample.run
+        && (profile.diagnosis || !currentBoundaryRecorded(current, elapsed, true))) {
+        if (!profile.diagnosis) { const finalSample = captureBoundary(run, current, elapsed, true); run = finalSample.run }
         const completed = resourceRuntime(run, clusterId).experiment
         completed.phase = 'complete'; completed.endedAtMs = atMs; completed.outcome = assess(completed, profile)
         run = persistExperimentResult(run, clusterId, completed, lab)

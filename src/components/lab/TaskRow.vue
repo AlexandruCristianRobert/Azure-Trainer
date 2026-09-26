@@ -22,6 +22,7 @@ const stepText = (step) => {
   if (step.kind === 'file') return `${step.path}\n${step.content}`
   if (step.kind === 'scenario') return step.instruction ?? step.command ?? `Run ${step.scenarioId} in Experiments.`
   if (step.kind === 'advance') return step.instruction ?? `Advance the AKS simulation by ${step.seconds} seconds using the experiment controls.`
+  if (step.kind === 'aks-resource-next-incident') return step.instruction ?? 'Continue to the next resource incident in Experiments.'
   if (step.kind === 'inspect') return step.instruction ?? step.command ?? 'Inspect the current experiment results and workload state.'
   return `Send ${step.request.method} ${step.request.path} to ${step.request.appId.split('/').at(-1)}. Expect HTTP ${step.expected?.status}.`
 }

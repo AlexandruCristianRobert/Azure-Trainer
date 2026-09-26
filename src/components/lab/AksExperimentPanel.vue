@@ -22,6 +22,7 @@ const resourceScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}
 const resourceChoice = ref('')
 const resourceTarget = computed(() => resourceScenarios.value.find(([id]) => id === resourceChoice.value)?.[1]?.target ?? resourceScenarios.value[0]?.[1]?.target ?? null)
 const resourceInspection = computed(() => resourcesCapable.value && resourceTarget.value && run.behavioralRun ? inspectResources(run.behavioralRun, resourceTarget.value) : null)
+const resourceIncident = computed(() => resourceTarget.value ? run.behavioralRun?.runtime?.kubernetes?.clusters?.[resourceTarget.value.clusterId]?.resourcesRuntime?.incident ?? null : null)
 const probeChoice = ref('')
 const probeTarget = computed(() => probeScenarios.value.find(([id]) => id === probeChoice.value)?.[1]?.target ?? probeScenarios.value[0]?.[1]?.target ?? null)
 const probeInspection = computed(() => probeCapable.value && probeTarget.value && run.behavioralRun ? inspectProbes(run.behavioralRun, probeTarget.value) : null)
@@ -116,6 +117,14 @@ async function cancelResource() {
     if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
     statusMessage.value = error.value ? 'Resource cancellation failed.' : 'Resource experiment cancelled; injected arrivals have stopped.'
   } catch (reason) { error.value = reason.message; statusMessage.value = 'Resource cancellation failed.' }
+}
+async function continueResourceIncident() {
+  error.value = ''; statusMessage.value = 'Checking the observed recovery before introducing the next resource incident.'
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-resource-next-incident' })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'The next resource incident is not ready.' : 'The next controlled resource incident is active.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'The next resource incident could not be introduced.' }
 }
 async function advanceResource(seconds) {
   error.value = ''; statusMessage.value = `Advancing resource simulation by ${seconds} seconds.`
@@ -232,6 +241,7 @@ async function copyLogCommand(command) {
       <p v-if="resourceInspection?.experiment" role="status">{{ resourceInspection.experiment.profileId }} is {{ resourceInspection.experiment.phase }}<template v-if="resourceInspection.experiment.phase === 'warming'">; waiting for {{ resourceInspection.experiment.requiredReadyReplicas }} ready Pod(s) with complete metrics.</template><template v-else-if="resourceInspection.experiment.phase === 'complete'">; outcome {{ resourceInspection.experiment.outcome }}.</template><template v-else-if="resourceInspection.experiment.phase === 'cancelled'">; cancelled: {{ resourceInspection.experiment.cancellationReason }}.</template></p>
       <p v-else>No resource experiment is active. Select a declared profile to begin warmup.</p>
       <div class="experiment-tool__controls" aria-label="Resource simulation time controls"><button v-for="seconds in [1, 15, 60]" :key="seconds" type="button" class="btn" :aria-label="`Advance resource simulation by ${seconds} seconds`" :disabled="locked" @click="advanceResource(seconds)">Advance {{ seconds }}s</button></div>
+      <div v-if="resourceIncident" class="aks-config-controls__incident" aria-label="Staged resource incident"><p>Current resource incident: {{ resourceIncident.phase }}</p><button type="button" class="btn" :disabled="locked || resourceIncident.phase === 'hpa'" @click="continueResourceIncident">Continue to next resource incident</button></div>
       <p>CPU values are supplied simulator millicores: delivered and throttled are instantaneous, while <code>kubectl top</code> reports completed 15-second averages. Memory is a 15-second peak. Unknown means no completed eligible window; it is not idle zero. No Metrics Server installation is required.</p>
       <p>Supported examples: <code>kubectl get hpa -n assistant</code>, <code>kubectl describe deployment assistant -n assistant</code>, <code>kubectl top pods -n assistant</code>, <code>kubectl top nodes</code>, and <code>kubectl scale deployment/assistant --replicas 3 -n assistant</code>.</p>
       <div v-if="resourceInspection" class="aks-probe-controls__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">State / node</th><th scope="col">Requests / limits</th><th scope="col">CPU now</th><th scope="col">Latest metric</th><th scope="col">OOM</th></tr></thead><tbody><tr v-for="pod in resourceInspection.pods" :key="pod.uid"><th scope="row">{{ pod.name }}</th><td>{{ pod.phase }} / {{ pod.nodeName ?? pod.schedulingReason ?? 'unassigned' }}</td><td>{{ pod.resources?.authored?.cpuRequest ?? 'none' }} / {{ pod.resources?.authored?.cpuLimit ?? 'none' }} CPU<br>{{ pod.resources?.authored?.memoryRequest ?? 'none' }} / {{ pod.resources?.authored?.memoryLimit ?? 'none' }} memory</td><td>delivered {{ pod.cpuDeliveredM ?? 'unknown' }}m<br>throttled {{ pod.cpuThrottledM ?? 'unknown' }}m</td><td>{{ pod.metrics?.at(-1) ? `${pod.metrics.at(-1).cpuAverageM}m / ${Math.round(pod.metrics.at(-1).memoryPeakBytes / 1024 / 1024)}Mi; ${Math.round(pod.metrics.at(-1).ageSeconds)}s old` : '<unknown>' }}</td><td>{{ pod.oomCount }}<span v-if="pod.containerTerminations?.length"> · {{ pod.containerTerminations.at(-1).reason }}</span></td></tr></tbody></table></div>

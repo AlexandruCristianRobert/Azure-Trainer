@@ -66,6 +66,8 @@ export function executeAksSolution(run, lab, task) {
       } else run = act(run, lab, { type: 'aks-request', scenarioId: step.scenarioId }).run
     } else if (step.kind === 'advance') {
       run = act(run, lab, { type: 'aks-advance', seconds: step.seconds }).run
+    } else if (step.kind === 'aks-resource-next-incident') {
+      run = act(run, lab, { type: 'aks-resource-next-incident' }).run
     } else if (step.kind !== 'inspect') {
       throw new Error(`Unsupported AKS solution step: ${step.kind}`)
     }

@@ -63,6 +63,24 @@ export function resourceDependencies(target, { historical = false, profileId = n
   } }
 }
 
+/** Stable incident ownership for Lab 17 history: source/artifact and Deployment identity survive its declared YAML faults. */
+export function resourceIncidentDependencies(target) {
+  const { clusterId, namespace, deploymentName } = target ?? {}
+  return { [`aks-resource-incident:${clusterId}:${namespace}:${deploymentName}`]: context => {
+    const state = context.runtime.kubernetes?.clusters?.[clusterId]
+    const deployment = state?.resources?.[`Deployment/${namespace}/${deploymentName}`] ?? null
+    const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
+    const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
+    const artifact = artifactId ? context.artifacts.buildsById?.[artifactId] ?? null : null
+    const manifest = getProjectManifest(context.project.manifestId)
+    const sourceVersions = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, context.project.fileVersions[path] ?? 0]))
+    const incident = state?.resourcesRuntime?.incident
+    return { version: 1, clusterId, namespace, deploymentName, deploymentUid: deployment?.metadata?.uid ?? null,
+      artifactId, sourceHash: artifact?.sourceHash ?? null, sourceVersions, fixtureVersion: RESOURCE_FIXTURES.version,
+      incidentId: incident?.id ?? null, incidentVersion: incident?.version ?? null }
+  } }
+}
+
 function redactedDigest(value) {
   const text = JSON.stringify(value)
   let hash = 2166136261

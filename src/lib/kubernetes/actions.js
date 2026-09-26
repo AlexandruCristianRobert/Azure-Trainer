@@ -9,6 +9,7 @@ import { advanceIntegrationIncident } from './integration-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 import { cancelProbeExperiment, startProbeExperiment } from './probe-experiments.js'
 import { cancelResourceExperiment, startResourceExperiment } from './resource-experiments.js'
+import { advanceResourceIncident } from './resource-incidents.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -24,6 +25,12 @@ function validConnectivityExpected(expected) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (action.type === 'aks-resource-next-incident') {
+    if (Object.keys(action).length !== 1 || lab?.capabilities?.kubernetesResources !== true)
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Resource incident advancement accepts no caller-selected values.' }] }
+    const result = advanceResourceIncident(run, lab)
+    return { ...result, portalEvents: [] }
+  }
   if (action.type === 'aks-resource-start') {
     if (Object.keys(action).sort().join(',') !== 'scenarioId,type' || lab?.capabilities?.kubernetesResources !== true)
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Resource experiment starts accept only a declared scenario ID.' }] }

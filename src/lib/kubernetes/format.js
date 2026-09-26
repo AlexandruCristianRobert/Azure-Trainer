@@ -42,7 +42,7 @@ export function describeObject(resource, state) {
       `Resource limits: cpu=${limits.cpu ?? '<none>'}, memory=${limits.memory ?? '<none>'}`, 'Scheduling, image pulls, and readiness are simulated.')
   }
   if (resource.kind === 'HorizontalPodAutoscaler') lines.push(`Target: ${resource.spec.scaleTargetRef.kind}/${resource.spec.scaleTargetRef.name}`,
-    `Replicas: current ${resource.status?.currentReplicas ?? 0}, desired ${resource.status?.desiredReplicas ?? 0}, ready ${resource.status?.readyReplicas ?? 0}`,
+    `Replicas: current ${resource.status?.currentReplicas ?? 0}, desired ${resource.status?.desiredReplicas ?? 0}`,
     `CPU utilization: ${resource.status?.currentMetrics?.[0]?.resource?.current?.averageUtilization ?? '<unknown>'}% / ${resource.spec.metrics?.[0]?.resource?.target?.averageUtilization ?? '?'}%`)
   if (resource.kind === 'Service') {
     const targetPort = resource.spec.ports[0]?.targetPort

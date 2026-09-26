@@ -28,7 +28,7 @@ const blade = computed(() => resolveBlade(portal.blade, run.sandbox))
 
 <template>
   <AksClusterBlade v-if="blade.kind === 'aks-cluster'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
-  <ContainerRegistryBlade v-if="blade.kind === 'container-registry'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
+  <ContainerRegistryBlade v-else-if="blade.kind === 'container-registry'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
   <ManagedIdentityBlade v-else-if="blade.kind === 'managed-identity'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
   <EventGridSubscriptionBlade v-else-if="blade.kind === 'eventgrid-subscription'" :key="blade.resourceGroup + '/' + blade.topic + '/' + blade.name" :resource-group="blade.resourceGroup" :topic="blade.topic" :name="blade.name" />
   <EventGridTopicBlade v-else-if="blade.kind === 'eventgrid-topic'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />

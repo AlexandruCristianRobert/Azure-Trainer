@@ -14,5 +14,11 @@ export const RESOURCE_FIXTURES = Object.freeze({
     'independent-cycle': Object.freeze({ kind: 'workload', durationSeconds: 300, phases: [[0, 30, 10], [30, 120, 32]], requiredReadyReplicas: 2, requiresHpa: true, baselineReplicas: 2, maxReplicas: 6 }),
     'test-local-work': Object.freeze({ kind: 'workload', durationSeconds: 30, phases: [[0, 30, 10]], requiredReadyReplicas: 1, requiresHpa: false }),
     'test-ai-wait': Object.freeze({ kind: 'ai-wait', durationSeconds: 60, phases: [[0, 60, 28]], requiredReadyReplicas: 1, requiresHpa: false }),
+    // These profiles are intentionally diagnostic-only.  They never relax the
+    // readiness contract used by the public healthy profiles above.
+    'diagnostic-oom': Object.freeze({ kind: 'workload', durationSeconds: 30, phases: [[0, 30, 10]], requiredReadyReplicas: 2, requiresHpa: false, diagnosis: 'oom' }),
+    'diagnostic-no-cpu': Object.freeze({ kind: 'workload', durationSeconds: 30, phases: [[0, 30, 28]], requiredReadyReplicas: 2, requiresHpa: true, diagnosis: 'no-cpu' }),
+    'diagnostic-pending': Object.freeze({ kind: 'diagnosis', durationSeconds: 0, phases: [], requiredReadyReplicas: 1, requiresHpa: false, diagnosis: 'pending' }),
+    'recovery-work': Object.freeze({ kind: 'workload', durationSeconds: 30, phases: [[0, 30, 10]], requiredReadyReplicas: 2, requiresHpa: false }),
   }),
 })

@@ -7,6 +7,8 @@ import { parsePythonDockerfile } from '../project/python-dockerfile.js'
 import { CONFIG_INCIDENT_PHASES, CONFIG_TROUBLESHOOTING_IMAGE, CONFIG_TROUBLESHOOTING_CLUSTER_ID, CONFIG_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/config-incidents.js'
 import { CONNECTIVITY_INCIDENT_PHASES, CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_IMAGE, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 import { AI_TROUBLESHOOTING_CLUSTER_ID, AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
+const RESOURCES_TROUBLESHOOTING_LAB_ID = 'aks-resources-troubleshooting'
+const RESOURCES_TROUBLESHOOTING_CLUSTER_ID = '/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourceGroups/rg-aks-resources-troubleshooting/providers/Microsoft.ContainerService/managedClusters/aks-resources-troubleshooting'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
 
@@ -248,7 +250,7 @@ function validResourceRuntime(state, run, lab, clusterId) {
   const value = state.resourcesRuntime
   if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.nodes) || !isPlainObject(value.assignments)
     || !isPlainObject(value.usage) || !isPlainObject(value.metrics) || !isPlainObject(value.hpa) || !isPlainObject(value.terminationDue)
-    || !Array.isArray(value.receipts) || value.receipts.length > 40 || value.incident !== null
+    || !Array.isArray(value.receipts) || value.receipts.length > 40 || !validResourceIncident(value.incident, run, clusterId, lab)
     || !(value.accountedUntilMs === null || Number.isSafeInteger(value.accountedUntilMs) && value.accountedUntilMs >= 0 && value.accountedUntilMs <= run.runtime.simTimeMs)
     || !value.receipts.every(item => isPlainObject(item) && (item.kind === 'container-termination' && typeof item.podUid === 'string'
       && /^container-\d+$/.test(item.containerId ?? '') && item.reason === 'OOMKilled' && item.exitCode === 137
@@ -290,11 +292,24 @@ function validResourceExperiment(experiment, state, runtime, lab, clusterId, now
   const deployment = target && state.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]
   const scenario = lab?.scenarios?.[experiment?.scenarioId]
   const totals = experiment?.totals
+  if (experiment?.profileId === 'diagnostic-pending' && experiment?.phase === 'complete') {
+    return experiment.version === 1 && experiment.clusterId === clusterId && scenario?.kind === 'aks-resource-profile'
+      && scenario.profileId === 'diagnostic-pending' && experiment.scenarioId && experiment.phaseZeroAtMs === experiment.startedAtMs
+      && experiment.outcome === 'passed' && experiment.pendingObserved === true && Number.isSafeInteger(experiment.startedAtMs)
+      && Number.isSafeInteger(experiment.endedAtMs) && experiment.endedAtMs === experiment.startedAtMs
+      && typeof experiment.deploymentUid === 'string' && isPlainObject(experiment.pendingProof)
+      && Object.keys(experiment.pendingProof).sort().join(',') === 'atMs,deploymentUid,podUids,reasons'
+      && experiment.pendingProof.deploymentUid === experiment.deploymentUid && experiment.pendingProof.atMs === experiment.startedAtMs
+      && Array.isArray(experiment.pendingProof.podUids) && experiment.pendingProof.podUids.length === 2
+      && new Set(experiment.pendingProof.podUids).size === 2 && experiment.pendingProof.podUids.every(uid => typeof uid === 'string')
+      && Array.isArray(experiment.pendingProof.reasons) && experiment.pendingProof.reasons.length === 2
+      && experiment.pendingProof.reasons.every(reason => reason === 'Insufficient cpu')
+  }
   return isPlainObject(experiment) && experiment.version === 1 && typeof experiment.profileId === 'string'
     && experiment.clusterId === clusterId && experiment.scenarioId && scenario?.kind === 'aks-resource-profile' && scenario.version === 1
     && scenario.requiredReadyReplicas === experiment.requiredReadyReplicas
     && scenario.profileId === experiment.profileId
-    && ['manual-work', 'guided-cycle', 'ai-wait', 'independent-cycle', 'test-local-work', 'test-ai-wait'].includes(experiment.profileId)
+    && ['manual-work', 'guided-cycle', 'ai-wait', 'independent-cycle', 'test-local-work', 'test-ai-wait', 'diagnostic-pending', 'diagnostic-oom', 'diagnostic-no-cpu', 'recovery-work'].includes(experiment.profileId)
     && scenario.target?.clusterId === clusterId && scenario.target?.namespace === target?.namespace && scenario.target?.deploymentName === target?.deploymentName
     && target && Object.keys(target).sort().join(',') === 'deploymentName,namespace'
     && (deployment?.kind === 'Deployment' || ['complete', 'cancelled'].includes(experiment.phase)) && ['warming', 'running', 'complete', 'unsupported', 'cancelled'].includes(experiment.phase)
@@ -309,6 +324,32 @@ function validResourceExperiment(experiment, state, runtime, lab, clusterId, now
     && experiment.observations.every(item => isPlainObject(item) && Number.isSafeInteger(item.atMs) && Number.isInteger(item.second)
       && item.second >= 0 && Number.isFinite(item.arrivals) && item.arrivals >= 0 && Number.isFinite(item.completed) && item.completed >= 0
       && Number.isFinite(item.remaining) && item.remaining >= 0 && Number.isInteger(item.readyReplicas) && item.readyReplicas >= 0 && Array.isArray(item.pods))
+    && (experiment.hpaObservations === undefined && experiment.profileId !== 'diagnostic-no-cpu'
+      || Array.isArray(experiment.hpaObservations) && experiment.hpaObservations.length <= 12)
+    && (experiment.hpaObservations ?? []).every(item => isPlainObject(item) && Object.keys(item).sort().join(',') === 'atMs,eligiblePodUids,missingRequestPodUids,reason,samplePodUids,scalingActive'
+      && Number.isSafeInteger(item.atMs) && item.atMs >= (experiment.phaseZeroAtMs ?? experiment.startedAtMs) && item.atMs <= nowMs
+      && typeof item.reason === 'string' && typeof item.scalingActive === 'boolean'
+      && ['eligiblePodUids', 'missingRequestPodUids', 'samplePodUids'].every(key => Array.isArray(item[key]) && item[key].length <= 6 && item[key].every(uid => typeof uid === 'string')))
+    && (experiment.pendingProof === undefined && experiment.profileId !== 'diagnostic-pending' || experiment.pendingProof === null || isPlainObject(experiment.pendingProof)
+      && Object.keys(experiment.pendingProof).sort().join(',') === 'atMs,deploymentUid,podUids,reasons'
+      && Number.isSafeInteger(experiment.pendingProof.atMs) && experiment.pendingProof.atMs === experiment.startedAtMs
+      && experiment.pendingProof.deploymentUid === experiment.deploymentUid
+      && Array.isArray(experiment.pendingProof.podUids) && experiment.pendingProof.podUids.length === 2
+      && new Set(experiment.pendingProof.podUids).size === 2 && experiment.pendingProof.podUids.every(uid => typeof uid === 'string')
+      && Array.isArray(experiment.pendingProof.reasons) && experiment.pendingProof.reasons.length === 2
+      && experiment.pendingProof.reasons.every(reason => reason === 'Insufficient cpu'))
+    && (experiment.oomProof === undefined && experiment.profileId !== 'diagnostic-oom' || experiment.oomProof === null || isPlainObject(experiment.oomProof)
+      && Object.keys(experiment.oomProof).sort().join(',') === 'atMs,containerId,podUid,restartAtMs,restartCount,samePod'
+      && typeof experiment.oomProof.podUid === 'string' && /^container-\d+$/.test(experiment.oomProof.containerId ?? '')
+      && Number.isSafeInteger(experiment.oomProof.atMs) && experiment.oomProof.atMs >= (experiment.phaseZeroAtMs ?? experiment.startedAtMs)
+      && Number.isInteger(experiment.oomProof.restartCount) && experiment.oomProof.restartCount >= 0
+      && (experiment.oomProof.restartAtMs === null || Number.isSafeInteger(experiment.oomProof.restartAtMs))
+      && typeof experiment.oomProof.samePod === 'boolean')
+    && (experiment.profileId !== 'diagnostic-oom' || experiment.phase !== 'complete' || experiment.outcome !== 'passed'
+      || experiment.oomObserved === true && experiment.oomProof?.restartCount > 0 && experiment.oomProof.samePod === true)
+    && (experiment.profileId !== 'diagnostic-no-cpu' || experiment.phase !== 'complete' || experiment.outcome !== 'passed'
+      || (experiment.hpaObservations ?? []).filter(item => item.reason === 'FailedGetResourceMetric' && item.scalingActive === false
+        && item.samplePodUids.length >= 2 && item.missingRequestPodUids.length >= 2).length >= 2)
     && Array.isArray(experiment.boundaryKeys) && experiment.boundaryKeys.length <= 20 && new Set(experiment.boundaryKeys).size === experiment.boundaryKeys.length
     && (experiment.baselineReplicas === null || Number.isInteger(experiment.baselineReplicas) && experiment.baselineReplicas >= 1 && experiment.baselineReplicas <= 6)
     && Number.isFinite(experiment.overflowBacklog) && experiment.overflowBacklog >= 0
@@ -319,6 +360,50 @@ function validResourceExperiment(experiment, state, runtime, lab, clusterId, now
     && (experiment.phase === 'warming' || experiment.phase === 'complete' && experiment.unsupported === 'RESOURCE_WARMUP_TIMEOUT'
       || experiment.phase === 'cancelled' && experiment.phaseZeroAtMs === null
       ? experiment.phaseZeroAtMs === null : Number.isSafeInteger(experiment.phaseZeroAtMs))
+}
+
+function validResourceIncident(incident, run, clusterId, lab) {
+  if (run.labId !== RESOURCES_TROUBLESHOOTING_LAB_ID) return incident === null
+  // Seeding performs ordinary apply/reconcile actions before it installs the
+  // controlled incident state; a persisted Lab 17 run always has it.
+  if (incident === null) return typeof lab?.initializeSimulation !== 'function'
+  if (clusterId !== RESOURCES_TROUBLESHOOTING_CLUSTER_ID || !isPlainObject(incident)
+    || Object.keys(incident).sort().join(',') !== 'id,observations,phase,recoveries,sequence,version'
+    || incident.version !== 1 || incident.id !== 'resource-faults-v1' || !isPlainObject(incident.observations) || !isPlainObject(incident.recoveries)) return false
+  const phases = ['scheduling', 'memory', 'hpa']; const index = phases.indexOf(incident.phase)
+  if (index < 0 || incident.sequence !== index + 1) return false
+  const observationPhases = Object.keys(incident.observations).sort(); const recoveryPhases = Object.keys(incident.recoveries).sort()
+  const allowedPhases = phases.slice(0, index + 1).sort()
+  if (observationPhases.some(phase => !phases.includes(phase)) || recoveryPhases.some(phase => !phases.includes(phase))) return false
+  for (let position = 0; position < phases.length; position++) {
+    const phase = phases[position]
+    if (position < index && (!incident.observations[phase] || !incident.recoveries[phase])) return false
+    if (incident.recoveries[phase] && !incident.observations[phase]) return false
+  }
+  for (const [field, task] of [['observations', ['observe-pending', 'observe-oom', 'observe-hpa']], ['recoveries', ['repair-scheduling', 'repair-memory', 'repair-hpa']]]) {
+    for (const [position, phase] of phases.entries()) {
+      const id = incident[field][phase]
+      if (id === undefined) continue
+      const evidence = run.evidence?.experimentsById?.[id]
+      const taskDefinition = lab?.tasks?.find(item => item.id === task[position])
+      if (typeof id !== 'string' || position > index || evidence?.id !== id || evidence.attemptId !== run.attemptId
+        || evidence.labId !== run.labId || evidence.contentVersion !== run.contentVersion || evidence.taskId !== task[position]
+        || evidence.scenarioId !== taskDefinition?.verification?.scenarioId || evidence.scenarioVersion !== taskDefinition?.verification?.scenarioVersion
+        || evidence.outcome !== 'passed' || evidence.completed !== true || !Number.isSafeInteger(evidence.sequence) || evidence.sequence >= run.nextSequence
+        || Object.keys(evidence.dependencyValues ?? {}).length !== 1 || Object.keys(evidence.dependencyGenerations ?? {}).length !== 1) return false
+      const key = `aks-resource-incident:${RESOURCES_TROUBLESHOOTING_CLUSTER_ID}:assistant:assistant`
+      const dependency = evidence.dependencyValues[key]
+      if (!dependency || Object.keys(dependency).sort().join(',') !== 'artifactId,clusterId,deploymentName,deploymentUid,fixtureVersion,incidentId,incidentVersion,namespace,sourceHash,sourceVersions,version'
+        || dependency.version !== 1 || dependency.clusterId !== RESOURCES_TROUBLESHOOTING_CLUSTER_ID || dependency.namespace !== 'assistant'
+        || dependency.deploymentName !== 'assistant' || dependency.deploymentUid !== evidence.measurements?.fingerprint?.deploymentUid
+        || typeof dependency.artifactId !== 'string' || typeof dependency.sourceHash !== 'string' || dependency.fixtureVersion !== RESOURCE_FIXTURES.version
+        || dependency.incidentId !== incident.id || dependency.incidentVersion !== incident.version || !isPlainObject(dependency.sourceVersions)
+        || Object.values(dependency.sourceVersions).some(value => !Number.isSafeInteger(value) || value < 0)
+        || !Number.isSafeInteger(evidence.dependencyGenerations[key]) || evidence.dependencyGenerations[key] < 0) return false
+    }
+  }
+  if (observationPhases.some(phase => !allowedPhases.includes(phase)) || recoveryPhases.some(phase => !allowedPhases.includes(phase))) return false
+  return true
 }
 
 function validResourceUsage(uid, usage, state, run) {
