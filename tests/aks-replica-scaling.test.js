@@ -4,11 +4,10 @@ import { emptyClusterState } from '../src/lib/kubernetes/state.js'
 import { parseKubernetesYaml } from '../src/lib/kubernetes/yaml.js'
 import { RESOURCE_SOLUTION_FILES } from '../src/data/templates/aks-python/resources.js'
 import { setDeploymentReplicas } from '../src/lib/kubernetes/scheduling.js'
-import { seedResourceTest } from './helpers/aks.js'
+import { seedResourceTest, advanceResources } from './helpers/aks.js'
 import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
 import { getServiceBackends } from '../src/lib/kubernetes/services.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
-import { advanceKubernetesTime } from '../src/lib/kubernetes/time.js'
 
 function deployment(replicas) {
   const value = parseKubernetesYaml(RESOURCE_SOLUTION_FILES['k8s/deployment.yaml']).documents[0]
@@ -27,7 +26,7 @@ const lab = { capabilities: { kubernetesResources: true, kubernetesConfiguration
 
 describe('AKS replica ownership', () => {
   it('preserves existing Pods on scale-up and withdraws a terminating Pod before its reservation is released', () => {
-    const seeded = seedResourceTest({ replicas: 2 }); let value = advanceKubernetesTime(seeded.run, 10, seeded.lab)
+    const seeded = seedResourceTest({ replicas: 2 }); let value = advanceResources(seeded.run, seeded.lab, 10)
     const state = value.runtime.kubernetes.clusters[seeded.clusterId]; const before = Object.keys(state.resourcesRuntime.assignments).sort()
     const containers = before.map(uid => state.health.containers[uid].containerId)
     value = reconcileKubernetes(setDeploymentReplicas(value, seeded.target, 3, { cause: 'manual' }).run, seeded.lab)
@@ -37,7 +36,7 @@ describe('AKS replica ownership', () => {
     value = reconcileKubernetes(setDeploymentReplicas(value, seeded.target, 1, { cause: 'manual' }).run, seeded.lab)
     expect(getServiceBackends(value, seeded.target).readyEndpoints).toHaveLength(1)
     expect(Object.keys(value.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(3)
-    value = advanceKubernetesTime(value, 1, seeded.lab)
+    value = advanceResources(value, seeded.lab, 1)
     expect(Object.keys(value.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(1)
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(value)), seeded.lab)).toBeTruthy()
   })

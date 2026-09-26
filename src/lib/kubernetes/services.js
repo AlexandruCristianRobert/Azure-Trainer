@@ -27,7 +27,7 @@ export function initializeConnectivity(input, clusterId) {
   return run
 }
 
-function ready(pod) { return !pod.metadata?.deletionTimestamp && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True') }
+function ready(pod) { return pod.metadata?.deletionTimestamp === undefined && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True') }
 function selectedPods(state, service) {
   return Object.values(state.resources).filter(pod => pod.kind === 'Pod' && pod.metadata.namespace === service.metadata.namespace
     && Object.entries(service.spec.selector ?? {}).every(([key, value]) => pod.metadata.labels?.[key] === value))

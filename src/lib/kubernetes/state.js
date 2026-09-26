@@ -481,7 +481,7 @@ function validServiceSlices(state, service) {
   return [...groups.entries()].every(([port, pods]) => {
     const slice = state.resources[kubeSliceKey(service, port)]
     return JSON.stringify(slice.ports) === JSON.stringify(port === null ? [] : [{ protocol: 'TCP', port }])
-      && JSON.stringify(slice.endpoints) === JSON.stringify(pods.sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid)).map(pod => ({ addresses: [pod.status.podIP], conditions: { ready: pod.status.phase === 'Running' && pod.status.conditions?.some(item => item.type === 'Ready' && item.status === 'True') }, targetRef: { kind: 'Pod', namespace: pod.metadata.namespace, name: pod.metadata.name, uid: pod.metadata.uid } })))
+      && JSON.stringify(slice.endpoints) === JSON.stringify(pods.sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid)).map(pod => ({ addresses: [pod.status.podIP], conditions: { ready: pod.metadata.deletionTimestamp === undefined && pod.status.phase === 'Running' && pod.status.conditions?.some(item => item.type === 'Ready' && item.status === 'True') }, targetRef: { kind: 'Pod', namespace: pod.metadata.namespace, name: pod.metadata.name, uid: pod.metadata.uid } })))
   })
 }
 
@@ -495,7 +495,7 @@ function validDiagnosticPod(pod, clusterId) {
   return pod?.kind === 'Pod' && pod.metadata?.uid === `diagnostic/${clusterId}` && pod.metadata?.name === 'diagnostics' && pod.metadata?.namespace === 'diagnostics'
     && JSON.stringify(pod.metadata.labels) === JSON.stringify({ app: 'diagnostics' }) && pod.spec?.containers?.length === 1
     && pod.spec.containers[0]?.name === 'diagnostics' && pod.spec.containers[0]?.image === 'mcr.microsoft.com/aks-trainer/diagnostics:1'
-    && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True')
+    && pod.metadata.deletionTimestamp === undefined && pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True')
 }
 
 function validCapturedArtifact(artifact, source, run) {
