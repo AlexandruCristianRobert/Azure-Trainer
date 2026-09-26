@@ -1,6 +1,9 @@
 import { getDeploymentPods } from './reconcile.js'
 import { normalizeContainerResources } from './resource-schema.js'
 const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+const eligibleContainer = (pod, container) => pod?.status?.phase === 'Running' && pod.metadata?.deletionTimestamp === undefined
+  && container?.ready === true && container.terminatedAtMs === null && container.restartAtMs === null
+  && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
 
 function nodeBudgets(nodes, assignments, usage, metrics, state, nowMs) {
   return Object.fromEntries(Object.entries(nodes ?? {}).map(([name, node]) => {
@@ -9,8 +12,9 @@ function nodeBudgets(nodes, assignments, usage, metrics, state, nowMs) {
     const current = assigned.reduce((total, [uid]) => ({ cpuDeliveredM: total.cpuDeliveredM + (usage?.[uid]?.cpuDeliveredM ?? 0), cpuThrottledM: total.cpuThrottledM + (usage?.[uid]?.cpuThrottledM ?? 0) }), { cpuDeliveredM: 0, cpuThrottledM: 0 })
     const samples = assigned.map(([uid]) => {
       const pod = Object.values(state.resources ?? {}).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
-      const containerId = state.health?.containers?.[uid]?.containerId
-      return (metrics?.[uid] ?? []).filter(sample => sample.containerId === containerId).at(-1) ?? null
+      const container = state.health?.containers?.[uid]
+      if (!eligibleContainer(pod, container)) return null
+      return (metrics?.[uid] ?? []).filter(sample => sample.containerId === container.containerId).at(-1) ?? null
     })
     const sameWindow = samples.length && samples.every(Boolean) && samples.every(sample => sample.windowEndMs === samples[0].windowEndMs)
     const memoryPeakBytes = sameWindow ? samples.reduce((sum, sample) => sum + sample.memoryPeakBytes, 0) : null
@@ -32,9 +36,7 @@ export function inspectResources(run, target) {
   const pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName).map(pod => {
     const usage = runtime?.usage?.[pod.metadata.uid]
     const container = state.health?.containers?.[pod.metadata.uid]
-    const ready = pod.status?.phase === 'Running' && pod.metadata.deletionTimestamp === undefined && container?.ready === true
-      && container.terminatedAtMs === null && container.restartAtMs === null
-      && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
+    const ready = eligibleContainer(pod, container)
     const metrics = ready ? (runtime?.metrics?.[pod.metadata.uid] ?? []).filter(item => item.containerId === container?.containerId)
       .map(item => ({ ...item, ageSeconds: Math.max(0, (run.runtime.simTimeMs - item.windowEndMs) / 1000) })) : []
     const resources = normalizeContainerResources(pod.spec?.containers?.[0]?.resources ?? {})

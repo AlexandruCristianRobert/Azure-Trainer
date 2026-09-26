@@ -60,6 +60,23 @@ describe('AKS resource diagnostics and controls', () => {
     expect(previous).toContain('137')
   })
 
+  it('withholds stale node and Pod windows through OOM backoff until the replacement completes a window', () => {
+    const seeded = seedResourceTest({ resources: { requests: { cpu: '250m', memory: '128Mi' }, limits: { cpu: '500m', memory: '128Mi' } }, scratchMiB: 96 })
+    let run = advanceResources(seeded.run, seeded.lab, 30)
+    expect(resourceView(run, seeded.target).nodes['worker-a'].cpuAverageM).toBe(10)
+    run = act(run, seeded.lab, { type: 'aks-resource-start', scenarioId: 'test-local-work' }).run
+    run = advanceResources(run, seeded.lab, 2)
+    const duringBackoff = resourceView(run, seeded.target)
+    expect(duringBackoff.pods.some(pod => pod.metrics === null)).toBe(true)
+    expect(duringBackoff.nodes['worker-a'].cpuAverageM).toBeNull()
+    expect(duringBackoff.nodes['worker-a'].memoryPeakBytes).toBeNull()
+    run = act(run, seeded.lab, { type: 'aks-resource-cancel' }).run
+    run = advanceResources(run, seeded.lab, 60)
+    const recovered = resourceView(run, seeded.target)
+    expect(recovered.nodes['worker-a'].cpuAverageM).not.toBeNull()
+    expect(recovered.nodes['worker-a'].cpuAverageM).not.toBe(recovered.nodes['worker-a'].requestedCpuM)
+  })
+
   it('renders HPA history, hides empty probes, retains work requests with AI capability, and disables completed controls', async () => {
     const seeded = seedResourceTest()
     seeded.lab.scenarios.work = { kind: 'aks-request', version: 1, target: seeded.target, request: { method: 'GET', path: '/api/work' }, expected: { status: 200, body: {} } }
