@@ -190,14 +190,16 @@ function validClusterState(state, run, lab, clusterId) {
     if (deploy?.kind !== 'Deployment' || !isPlainObject(rollout) || !Number.isInteger(rollout.nextRevision) || rollout.nextRevision < 2
       || !Number.isInteger(rollout.currentRevision) || rollout.currentRevision < 1 || rollout.currentRevision >= rollout.nextRevision
       || typeof rollout.currentRsUid !== 'string' || !Number.isInteger(rollout.observedGeneration) || !Array.isArray(rollout.revisions) || rollout.revisions.length < 1 || rollout.revisions.length > 20
-      || !isPlainObject(rollout.availableSinceByPod) || !isPlainObject(rollout.progressSnapshot) || !Array.isArray(rollout.conditions)) return false
-    const revisions = new Set()
+      || !isPlainObject(rollout.availableSinceByPod) || !isPlainObject(rollout.progressSnapshot) || !Array.isArray(rollout.conditions) || rollout.conditions.length > 20
+      || !Number.isSafeInteger(rollout.lastProgressAtMs) || Object.values(rollout.progressSnapshot).some(value => !Number.isInteger(value) || value < 0)
+      || Object.entries(rollout.availableSinceByPod).some(([podUid, atMs]) => byUid.get(podUid)?.kind !== 'Pod' || !Number.isSafeInteger(atMs))) return false
+    const revisions = new Set(); const rsUids = new Set()
     for (const revision of rollout.revisions) {
       const rs = byUid.get(revision?.rsUid)
-      if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revisions.has(revision.revision)
+      if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revision.revision >= rollout.nextRevision || revisions.has(revision.revision) || rsUids.has(revision.rsUid)
         || typeof revision.templateHash !== 'string' || !isPlainObject(revision.template) || typeof revision.imageRef !== 'string'
-        || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid)) return false
-      revisions.add(revision.revision)
+        || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid) || rs.spec?.template?.spec?.containers?.[0]?.image !== revision.imageRef) return false
+      revisions.add(revision.revision); rsUids.add(revision.rsUid)
     }
     if (!rollout.revisions.some(item => item.rsUid === rollout.currentRsUid && item.revision === rollout.currentRevision)) return false
   }

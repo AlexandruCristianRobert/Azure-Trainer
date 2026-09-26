@@ -4,6 +4,8 @@ import { registerRevision, pruneRevisionHistory } from '../src/lib/kubernetes/ro
 import { seedFoundation } from './helpers/aks.js'
 import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
+import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
+import { validateKubernetesObject } from '../src/lib/kubernetes/schema.js'
 
 describe('rollout schema', () => {
   test('normalizes the supported rolling update defaults and percentage budget', () => {
@@ -76,4 +78,27 @@ test('prunes only completed zero-replica history without owned Pods', () => {
   for (const rs of Object.values(run.runtime.kubernetes.clusters[clusterId].resources).filter(item => item.kind === 'ReplicaSet')) rs.spec.replicas = 0
   run = pruneRevisionHistory(run, { clusterId, deploymentUid: uid })
   expect(run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid].revisions).toHaveLength(2)
+})
+
+test('rejects a twenty-first distinct ReplicaSet atomically but accepts retained recovery at the cap', () => {
+  let { run, lab, clusterId } = rolloutSeed(); run = apply(run, lab, clusterId, desired(run, clusterId)).run
+  const uid = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].metadata.uid
+  const target = { clusterId, deploymentUid: uid }; const template = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].spec.template
+  const first = structuredClone(template)
+  for (let index = 0; index < 19; index++) run = registerRevision(run, target, { ...template, metadata: { labels: { app: 'assistant' }, annotations: { distinct: String(index) } } }).run
+  const before = structuredClone(run); const blocked = registerRevision(run, target, { ...template, metadata: { labels: { app: 'assistant' }, annotations: { distinct: 'twenty' } } })
+  expect(blocked.diagnostics[0].code).toBe('ROLLOUT_REPLICASET_LIMIT')
+  expect(blocked.run.nextSequence).toBe(before.nextSequence)
+  expect(blocked.run.runtime.kubernetes).toEqual(before.runtime.kubernetes)
+  expect(registerRevision(run, target, first).diagnostics).toEqual([])
+})
+
+test('rejects malformed rollout fields and corrupted persisted rollout references', () => {
+  const deployment = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'assistant', namespace: 'assistant' }, spec: { replicas: 1, selector: { matchLabels: { app: 'assistant' } }, template: { metadata: { labels: { app: 'assistant' } }, spec: { containers: [{ name: 'api', image: 'a:v1', imagePullPolicy: 'Always', ports: [{ containerPort: 8080 }] }] } }, strategy: [], minReadySeconds: 1 } }
+  expect(validateKubernetesObject(deployment, { namespace: 'assistant', capabilities: { kubernetesRollouts: true } }).diagnostics[0].code).toBe('INVALID_ROLLOUT_STRATEGY')
+  let { run, lab, clusterId } = rolloutSeed(); run = apply(run, lab, clusterId, desired(run, clusterId)).run
+  const corrupted = structuredClone(run.runtime.kubernetes); const state = corrupted.clusters[clusterId]; const uid = state.resources['Deployment/assistant/assistant'].metadata.uid
+  expect(state.rollouts.deployments[uid].currentRsUid).toMatch(/^kube-/)
+  state.rollouts.deployments[uid].currentRsUid = 'missing-rs'
+  expect(validateKubernetesRuntime(corrupted, run, lab)).toBe(false)
 })
