@@ -67,6 +67,7 @@ function sampleOffsets(script) {
 function requestForSample(experiment, offset) {
   const kind = scenarioType({ script: experiment.script })
   const ask = () => ({ method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } })
+  if (faultType(experiment.script) === 'ai-coupling') return { method: 'GET', path: '/api/info', body: null }
   if (kind === 'readiness') return offset === 9 ? { method: 'GET', path: '/api/info', body: null } : ask()
   if (kind === 'hang') return { method: 'GET', path: '/api/info', body: null }
   if (experiment.script?.sampleAtSeconds?.length === 3) return offset === 10 ? { method: 'GET', path: '/api/info', body: null } : ask()
@@ -142,15 +143,28 @@ function assess(state, receipt) {
     return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
       && Number.isFinite(firstStartupSuccess) && firstStartupSuccess >= initializedAt && !earlyGatedCheck
   }
-  if (scenarioType(receipt) === 'readiness') return allReady && receipt.samples.length >= 2
+  if (scenarioType(receipt) === 'readiness') {
+    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const faultAt = receipt.baselineReadyAtMs + 5_000
+    const clearAt = receipt.baselineReadyAtMs + 20_000
+    const withdrew = events.find(item => item.type === 'readiness-transition' && item.ready === false && item.atMs >= faultAt)
+    const reentered = events.find(item => item.type === 'readiness-transition' && item.ready === true && item.atMs >= clearAt)
+    return allReady && receipt.samples.length >= 2
     && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length && item.response?.route?.podUid !== receipt.podUids[0])
     && receipt.samples.some(item => item.second === 25 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
-    && containers.every(item => item.restartCount === 0)
-  if (scenarioType(receipt) === 'hang') return receipt.summary.restartReceipts.some(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
-    && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
+    && containers.every(item => item.restartCount === 0) && withdrew?.atMs <= faultAt + 4_000 && reentered?.atMs <= clearAt + 5_000
+  }
+  if (scenarioType(receipt) === 'hang') {
+    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const hangAt = receipt.baselineReadyAtMs + 5_000
+    const termination = events.find(item => item.type === 'restart-scheduled' && item.probeType === 'liveness' && item.atMs >= hangAt)
+    const replacement = receipt.summary.restartReceipts.find(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
+      && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
+    return !!termination && termination.terminatedAtMs <= hangAt + 30_000 && !!replacement && replacement.atMs <= hangAt + 90_000
     && receipt.podUids.some(uid => state.health.containers[uid]?.containerId !== receipt.containerIds[uid])
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.body?.sources?.includes('training-backups'))
+  }
   const kind = faultType(receipt.script)
   if (kind === 'ai-coupling') return receipt.summary.restartReceipts.some(item => item.cause === 'probe'
     && item.probeType === 'LivenessProbeFailed' && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)

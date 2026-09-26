@@ -121,6 +121,7 @@ function complete(state, container, pod, appSpec, type, nowMs) {
     status: result.status ?? null, failures: success ? 0 : item.failures + 1 })
   if (success) { item.successes++; item.failures = 0 } else { item.failures++; item.successes = 0 }
   const probe = probesFor(pod)[type]
+  const wasReady = container.ready
   item.nextAtMs = startedAtMs + probe.periodSeconds * 1000
   while (item.nextAtMs <= nowMs) item.nextAtMs += probe.periodSeconds * 1000
   if (type === 'startup' && success && item.successes >= probe.successThreshold) {
@@ -130,7 +131,13 @@ function complete(state, container, pod, appSpec, type, nowMs) {
     if (success && item.successes >= probe.successThreshold) container.ready = true
     if (!success && item.failures >= probe.failureThreshold) container.ready = false
   }
-  if ((type === 'startup' || type === 'liveness') && !success && item.failures >= probe.failureThreshold) scheduleProbeRestart(container, pod, type, nowMs)
+  if ((type === 'startup' || type === 'liveness') && !success && item.failures >= probe.failureThreshold) {
+    scheduleProbeRestart(container, pod, type, nowMs)
+    if (container.terminatedAtMs !== null) recordHealthEvent(state, { type: 'restart-scheduled', atMs: nowMs, podUid: pod.metadata.uid,
+      probeType: type, terminatedAtMs: container.terminatedAtMs, restartAtMs: container.restartAtMs })
+  }
+  if (type === 'readiness' && wasReady !== container.ready) recordHealthEvent(state, { type: 'readiness-transition', atMs: nowMs,
+    podUid: pod.metadata.uid, ready: container.ready })
 }
 
 function start(state, container, pod, appSpec, type, nowMs, dependencySignals) {
