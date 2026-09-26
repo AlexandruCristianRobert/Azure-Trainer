@@ -30,8 +30,10 @@ const pods = context => getDeploymentPods(context.run ?? context, target.cluster
 const savedTarget = (context, path, kind, name) => parseKubernetesYaml(context.project.savedFiles[path] ?? '', path).documents
   .find(doc => doc?.kind === kind && doc.metadata?.namespace === namespace && doc.metadata?.name === name) ?? null
 const savedDeployment = context => savedTarget(context, 'k8s/deployment.yaml', 'Deployment', 'assistant')
-const savedHpa = context => savedTarget(context, 'k8s/hpa.yaml', 'HorizontalPodAutoscaler', 'assistant-cpu')
-const hpa = context => Object.values(live(context)?.resources ?? {}).find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.namespace === namespace && item.metadata.name === 'assistant-cpu')
+const hpaTargetsAssistant = item => item?.kind === 'HorizontalPodAutoscaler' && item.metadata?.namespace === namespace
+  && item.spec?.scaleTargetRef?.apiVersion === 'apps/v1' && item.spec.scaleTargetRef.kind === 'Deployment' && item.spec.scaleTargetRef.name === 'assistant'
+const savedHpa = context => parseKubernetesYaml(context.project.savedFiles['k8s/hpa.yaml'] ?? '', 'k8s/hpa.yaml').documents.find(hpaTargetsAssistant) ?? null
+const hpa = context => Object.values(live(context)?.resources ?? {}).find(hpaTargetsAssistant)
 const record = (context, id) => { const evidenceId = context.evidence.currentEvidenceByTask?.[id]; return evidenceId ? context.evidence.experimentsById?.[evidenceId] : null }
 const sourceCurrent = context => {
   const app = parsePythonProject(context.project.savedFiles, RESOURCE_MANIFEST)
@@ -60,11 +62,11 @@ const resourceDesign = context => {
 }
 const hpaDesign = context => {
   const policy = hpa(context); const saved = savedDeployment(context); const authored = savedHpa(context)
-  return resourceDesign(context) && policy?.spec?.scaleTargetRef?.name === 'assistant' && policy.spec.minReplicas === 2
+  return resourceDesign(context) && hpaTargetsAssistant(policy) && policy.spec.minReplicas === 2
     && policy.spec.maxReplicas >= 4 && policy.spec.maxReplicas <= 6 && policy.spec.metrics?.[0]?.resource?.target?.averageUtilization >= 50
     && policy.spec.metrics?.[0]?.resource?.target?.averageUtilization <= 70 && policy.spec.behavior?.scaleDown?.stabilizationWindowSeconds >= 30
     && policy.spec.behavior?.scaleDown?.stabilizationWindowSeconds <= 120 && authored?.kind === 'HorizontalPodAutoscaler'
-    && authored.metadata?.name === 'assistant-cpu' && authored.metadata?.namespace === namespace && canonicalize(authored.spec) === canonicalize(policy.spec)
+    && authored.metadata?.name === policy.metadata?.name && authored.metadata?.namespace === namespace && canonicalize(authored.spec) === canonicalize(policy.spec)
     && !Object.hasOwn(saved?.spec ?? {}, 'replicas')
     && live(context)?.applyOwnership?.['Deployment/assistant/assistant']?.replicas === false
 }

@@ -49,6 +49,7 @@ describe('AKS independent resource sizing lab', () => {
       .replace('acraksprobesguided.azurecr.io/assistant:health-v1', 'acraksresourcesindependent.azurecr.io/assistant:workload-v1')
       .replace('"300m"', '"250m"').replace('"600m"', '"500m"')
     const alternativeHpa = RESOURCE_INDEPENDENT_SOLUTION_FILES['k8s/hpa.yaml']
+      .replace('name: assistant-cpu', 'name: assistant-autoscaler')
       .replace('averageUtilization: 60', 'averageUtilization: 70').replace('stabilizationWindowSeconds: 60', 'stabilizationWindowSeconds: 90')
     for (const action of [
       { type: 'save-file', path: 'k8s/deployment.yaml', text: alternativeDeployment },
@@ -65,7 +66,13 @@ describe('AKS independent resource sizing lab', () => {
       { type: 'aks-resource-start', scenarioId: 'independent-resource-ai-wait' },
       { type: 'aks-advance', seconds: 90 },
       { type: 'aks-request', scenarioId: 'independent-resource-final' },
-    ]) run = act(run, aksResourcesIndependentLab, action).run
+    ]) {
+      run = act(run, aksResourcesIndependentLab, action).run
+      if (action.type === 'aks-advance' && action.seconds === 30)
+        expect(evaluateLab(aksResourcesIndependentLab, run).tasks.find(item => item.id === 'hpa-design').done).toBe(true)
+    }
+    const cluster = run.runtime.kubernetes.clusters[run.sandbox.aksClusters[0].id]
+    expect(cluster.resources['HorizontalPodAutoscaler/assistant/assistant-autoscaler']).toMatchObject({ metadata: { name: 'assistant-autoscaler', namespace: 'assistant' }, spec: { scaleTargetRef: { apiVersion: 'apps/v1', kind: 'Deployment', name: 'assistant' } } })
     expect(evaluateLab(aksResourcesIndependentLab, run).isComplete).toBe(true)
   })
 
