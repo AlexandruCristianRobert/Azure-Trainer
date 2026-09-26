@@ -60,6 +60,9 @@ export function executeAksSolution(run, lab, task) {
       if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
         run = act(run, lab, { type: 'aks-probe-start', scenarioId: step.scenarioId }).run
         for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
+      } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-resource-profile') {
+        run = act(run, lab, { type: 'aks-resource-start', scenarioId: step.scenarioId }).run
+        for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
       } else run = act(run, lab, { type: 'aks-request', scenarioId: step.scenarioId }).run
     } else if (step.kind === 'advance') {
       run = act(run, lab, { type: 'aks-advance', seconds: step.seconds }).run
