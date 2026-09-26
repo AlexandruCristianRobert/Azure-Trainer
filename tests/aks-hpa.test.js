@@ -136,17 +136,39 @@ describe('AKS CPU HPA', () => {
   })
 
   it('holds adjusted missing metrics inside tolerance and records bounded HPA scale receipts', () => {
-    const c = seedResourceTest({ replicas: 4 }); const six = structuredClone(HPA); six.spec.maxReplicas = 6; let run = applyHpa(c, six); run = advanceResources(run, c.lab, 30)
+    const c = seedResourceTest({ replicas: 4 }); let run = advanceResources(c.run, c.lab, 30); const six = structuredClone(HPA); six.spec.maxReplicas = 6; run = applyHpa({ ...c, run }, six)
     const state = run.runtime.kubernetes.clusters[c.clusterId]; const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
     const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
+    for (const pod of pods) state.resourcesRuntime.metrics[pod.metadata.uid] = []
     for (const pod of pods.slice(0, 2)) state.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: state.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 312.5, memoryPeakBytes: 0, readySinceMs: 0 }]
-    state.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null
     run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
-    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(5)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(4)
     const high = structuredClone(run); const s = high.runtime.kubernetes.clusters[c.clusterId]
     for (const pod of Object.values(s.resources).filter(item => item.kind === 'Pod')) s.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: s.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 4000, memoryPeakBytes: 0, readySinceMs: 0 }]
     s.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null
     const scaled = reconcileHpa(high, c.clusterId, 30_000, c.lab); const receipt = scaled.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.receipts.filter(item => item.kind === 'hpa-scale').at(-1)
-    expect(receipt).toMatchObject({ controllerUid: hpa.metadata.uid, atMs: 30_000, from: 5, to: 6, cause: 'hpa' })
+    expect(receipt).toMatchObject({ controllerUid: hpa.metadata.uid, atMs: 30_000, from: 4, to: 6, cause: 'hpa' })
+  })
+
+  it('keeps ready-missing downscale conservative and unready samples held', () => {
+    const c = seedResourceTest({ replicas: 4 }); let run = advanceResources(c.run, c.lab, 30); run = applyHpa({ ...c, run })
+    const state = run.runtime.kubernetes.clusters[c.clusterId]; const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
+    for (const pod of pods) state.resourcesRuntime.metrics[pod.metadata.uid] = []
+    state.resourcesRuntime.metrics[pods[0].metadata.uid] = [{ containerId: state.health.containers[pods[0].metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 10, memoryPeakBytes: 0, readySinceMs: 0 }]
+    const readyMissing = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    expect(readyMissing.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa[hpa.metadata.uid].lastDecision.missingSamples).toBe(true)
+    const unready = structuredClone(readyMissing); const u = unready.runtime.kubernetes.clusters[c.clusterId]; u.health.containers[pods[1].metadata.uid].ready = false; u.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null
+    const held = reconcileHpa(unready, c.clusterId, 30_000, c.lab)
+    expect(held.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa[hpa.metadata.uid].lastDecision.unreadySamples).toBe(true)
+  })
+
+  it('marks actual max bounding as ScalingLimited and does not mark an already-at-bound recommendation', () => {
+    const c = seedResourceTest({ replicas: 4 }); const six = structuredClone(HPA); six.spec.maxReplicas = 6; let run = applyHpa(c, six); run = advanceResources(run, c.lab, 30)
+    const state = run.runtime.kubernetes.clusters[c.clusterId]; const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod')) state.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: state.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 4000, memoryPeakBytes: 0, readySinceMs: 0 }]
+    state.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null; run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    const limited = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item => item.kind === 'HorizontalPodAutoscaler').status.conditions.find(item => item.type === 'ScalingLimited')
+    expect(limited).toMatchObject({ status: 'True', reason: 'TooManyReplicas' })
   })
 })
