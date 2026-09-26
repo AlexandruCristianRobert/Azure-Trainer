@@ -98,6 +98,13 @@ function captureSample(run, clusterId, experiment, nowMs, final = false) {
     sample.response = { requestId: routed.outcome.requestId, status: routed.outcome.status, body: routed.outcome.body, transport: routed.outcome.transport,
       route: routed.outcome.route, dependencyTrace: routed.outcome.dependencyTrace, integrationTrace: routed.outcome.integrationTrace ?? null }
   }
+  // The Service correctly routes around an unready hung Pod. Preserve a
+  // separate Pod-scoped observation so the experiment proves the local
+  // process timeout without making the router select an ineligible backend.
+  if (faultType(experiment.script) === 'hang' && offset >= (experiment.script.startAfterStartSeconds ?? Infinity)
+    && !final && state.health.containers[experiment.podUids[0]]?.localFaults?.hung) {
+    sample.faultedPodResponse = { podUid: experiment.podUids[0], transport: { ok: false, reason: 'PROCESS_TIMEOUT' }, status: null }
+  }
   const current = state.health.experiment
   if (!current) return run
   current.samples.push(sample)
@@ -166,6 +173,7 @@ function assess(state, receipt) {
     return !!withdrew && withdrew.atMs <= hangAt + 4_000 && !!termination && termination.atMs <= hangAt + 30_000
     && !!replacement && !!reentered && reentered.atMs <= hangAt + 90_000
     && state.health.containers[faultedUid]?.containerId !== receipt.containerIds[faultedUid]
+    && receipt.samples.some(item => item.faultedPodResponse?.transport?.reason === 'PROCESS_TIMEOUT')
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.route?.podUid === faultedUid && item.response?.body?.sources?.includes('training-backups'))
   }
