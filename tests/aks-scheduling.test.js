@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { schedulePendingPods } from '../src/lib/kubernetes/scheduling.js'
-import { seedResourceTest, resourceView, advanceResources, startHealthFault } from './helpers/aks.js'
+import { seedResourceTest, resourceView, advanceResources, startHealthFault, act } from './helpers/aks.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 
 function runWithPendingPod({ cpu = 1250, memory = 128 * 1024 * 1024 } = {}) {
