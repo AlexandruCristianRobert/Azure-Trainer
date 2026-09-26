@@ -45,8 +45,13 @@ function fingerprint(context, target) {
     savedBuildFiles, savedKubernetesFiles }
 }
 
-export function probeDependencies(target) {
+export function probeDependencies(target, { historical = false } = {}) {
   const { clusterId, namespace, deploymentName } = target ?? {}
+  if (historical) return { [`aks-probe-history:${clusterId}:${namespace}:${deploymentName}`]: context => {
+    const deployment = context.runtime.kubernetes?.clusters?.[clusterId]?.resources?.[`Deployment/${namespace}/${deploymentName}`]
+    return { version: 1, clusterId, namespace, deploymentName, deploymentUid: deployment?.metadata?.uid ?? null,
+      fixtureVersion: context.project.manifestId }
+  } }
   return { [`aks-probe:${clusterId}:${namespace}:${deploymentName}`]: context => fingerprint(context, target) }
 }
 
@@ -119,6 +124,14 @@ function assess(state, receipt) {
   const allReady = containers.length === receipt.podUids.length && containers.every(item => item.ready)
   const completeProbes = containers.length > 0 && containers.every(item => ['startup', 'readiness', 'liveness'].every(kind => item.checks?.[kind]))
   const healthyChecks = completeProbes && containers.every(item => item.checks.startup.successes > 0 && item.checks.readiness.successes > 0 && item.checks.liveness.successes > 0)
+  if (receipt.scenarioId.includes('short-start')) {
+    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)
+    const restarts = state.health.receipts.filter(item => item.cause === 'probe' && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)
+    return restarts.some(item => item.cause === 'probe' && item.probeType === 'StartupProbeFailed'
+      && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs)
+      && !events.some(item => item.type === 'probe-result' && item.probeType === 'startup' && item.success)
+      && !events.some(item => item.probeType === 'readiness')
+  }
   if (scenarioType(receipt) === 'cold') {
     const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
     const firstStartupSuccess = Math.min(...events.filter(item => item.type === 'probe-result' && item.probeType === 'startup' && item.success).map(item => item.atMs))
@@ -206,6 +219,8 @@ export function observeProbeExperiment(input, atMs, lab) {
       state = run.runtime.kubernetes.clusters[clusterId]
     }
     const completed = state.health.experiment
+    completed.summary.restartReceipts = state.health.receipts.filter(item => item.cause === 'probe' && completed.podUids.includes(item.podUid)
+      && item.atMs >= completed.startedAtMs).slice(-40)
     const receipt = { ...completed, status: 'completed', endedAtMs: run.runtime.simTimeMs }
     receipt.outcome = assess(state, receipt) ? 'passed' : 'failed'
     state.health.receipts = [...state.health.receipts, receipt].slice(-40)
