@@ -9,7 +9,9 @@ export const RESOURCES_GUIDED_IMAGE = `${RESOURCES_GUIDED_REGISTRY}.azurecr.io/a
 export const RESOURCES_STARTER_IMAGE = `${RESOURCES_GUIDED_REGISTRY}.azurecr.io/assistant:starter`
 export const RESOURCES_GUIDED_FILES = Object.freeze({
   ...RESOURCE_FILES,
-  'k8s/deployment.yaml': RESOURCE_FILES['k8s/deployment.yaml'].replace('acraksprobesguided.azurecr.io/assistant:health-v1', RESOURCES_STARTER_IMAGE),
+  'k8s/deployment.yaml': RESOURCE_FILES['k8s/deployment.yaml']
+    .replace('acraksprobesguided.azurecr.io/assistant:health-v1', RESOURCES_STARTER_IMAGE)
+    .replace('  replicas: 2\n', '  replicas: 1\n'),
 })
 
 export function seedResourcesGuided(run) {

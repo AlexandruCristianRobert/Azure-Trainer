@@ -6,8 +6,25 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { act, executeAksSolution } from './helpers/aks.js'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { RESOURCE_FILES } from '../src/data/templates/aks-python/resources.js'
+import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 
 describe('AKS guided resources and scaling lab', () => {
+  it('seeds one healthy starter Pod without resource settings or an HPA', () => {
+    const run = createBehavioralRun(aksResourcesGuidedLab, { attemptId: 'guided-resources-seed' })
+    const clusterId = run.sandbox.aksClusters[0].id
+    const state = run.runtime.kubernetes.clusters[clusterId]
+    const deployment = state.resources['Deployment/assistant/assistant']
+    const saved = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+    const pods = getDeploymentPods(run, clusterId, 'assistant', 'assistant')
+    expect(saved.spec.replicas).toBe(1)
+    expect(deployment.spec.replicas).toBe(1)
+    expect(pods).toHaveLength(1)
+    expect(pods[0].status.phase).toBe('Running')
+    expect(pods[0].status.conditions).toContainEqual(expect.objectContaining({ type: 'Ready', status: 'True' }))
+    expect(pods[0].spec.containers[0].resources).toBeUndefined()
+    expect(Object.values(state.resources).filter(item => item.kind === 'HorizontalPodAutoscaler')).toHaveLength(0)
+  })
+
   it('completes manual scaling, HPA scale-out and scale-in, then the final AI proof', () => {
     let run = createBehavioralRun(aksResourcesGuidedLab, { attemptId: 'guided-resources' })
     let beforeManual
