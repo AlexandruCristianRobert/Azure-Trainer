@@ -53,4 +53,28 @@ describe('AKS probe experiment runtime cleanup', () => {
     const finished = advanceHealth(baseline, slowRestartLab, 100)
     expect(finished.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1).outcome).toBe('failed')
   })
+
+  it('clears a hang fault at container termination while restart backoff remains pending', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0 })
+    const active = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
+    const terminated = advanceHealth(active, seeded.lab, 12)
+    const experiment = terminated.runtime.kubernetes.clusters[seeded.clusterId].health.experiment
+    const container = healthContainer(terminated, seeded.clusterId, experiment.podUids[0])
+    expect(container.previous).toMatchObject({ reason: 'LivenessProbeFailed' })
+    expect(container.localFaults.hung).toBe(false)
+    expect(container.restartAtMs).toBeGreaterThan(terminated.runtime.simTimeMs)
+  })
+
+  it('accepts a high-frequency alternative startup policy for a 42-second assistant', () => {
+    const seeded = seedHealthTest({ startupSeconds: 42, probeOverrides: {
+      startupProbe: { periodSeconds: 3, failureThreshold: 16 },
+      readinessProbe: { periodSeconds: 1, failureThreshold: 2, successThreshold: 2 },
+      livenessProbe: { periodSeconds: 4, failureThreshold: 2 },
+    } })
+    const lab = { ...seeded.lab, healthFixture: { initializationSeconds: 42, maximumWarmupSeconds: 90 },
+      scenarios: { ...seeded.lab.scenarios, coldStartup: { ...seeded.lab.scenarios.coldStartup, durationSeconds: 30 } } }
+    const active = act(seeded.run, lab, { type: 'aks-probe-start', scenarioId: 'coldStartup' }).run
+    const complete = advanceHealth(active, lab, 50)
+    expect(complete.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1).outcome).toBe('passed')
+  })
 })
