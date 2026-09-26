@@ -79,7 +79,7 @@ export function reconcileHpa(input, clusterId, atMs, lab) {
       adjustedDesired = proposal
       desired = proposal; reason = missing ? 'MissingMetricsAdjusted' : 'MetricDesired'
     }
-    const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const outsideBounds = current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas; const boundDriven = bounded !== desired || outsideBounds
+    const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const outsideBounds = current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas; const boundDriven = outsideBounds
     desired = bounded
     if (desired > current) desired = Math.min(desired, current + Math.max(4, current))
     const window = hpa.spec.behavior?.scaleDown?.stabilizationWindowSeconds ?? 300
