@@ -208,7 +208,7 @@ async function copyLogCommand(command) {
     <header><h2>Verify a Kubernetes service</h2><p>Requests use the current Service and the Pods' captured image. Results transition immediately because this is a simulation.</p></header>
     <div class="experiment-tool__controls">
       <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable && scenario.request.path !== '/api/work' ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
-      <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send">Send simulated request</button>
+      <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send()">Send simulated request</button>
     </div>
     <section v-if="probeCapable" class="aks-probe-controls" aria-label="AKS health probe experiments">
       <h3>Health probe timeline</h3>
