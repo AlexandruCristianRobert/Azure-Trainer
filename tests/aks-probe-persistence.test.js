@@ -21,3 +21,17 @@ it('rejects forged or unbounded active probe experiment state on reload', () => 
   oversized.runtime.kubernetes.clusters[clusterId].health.events = Array(1001).fill({ kind: 'probe', atMs: 0 })
   expect(() => validateBehavioralRun(oversized, lab)).toThrow()
 })
+
+it('retains a valid saved run when repeated experiments roll over the receipt history', () => {
+  const seeded = seedHealthTest({ startupSeconds: 0 })
+  let run = advanceHealth(act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'temporaryAdmissionClosure' }).run, seeded.lab, 30)
+  for (let index = 0; index < 40; index++) {
+    run = act(run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'temporaryAdmissionClosure' }).run
+    run = act(run, seeded.lab, { type: 'aks-probe-cancel' }).run
+  }
+  run = advanceHealth(act(run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'temporaryAdmissionClosure' }).run, seeded.lab, 30)
+  const state = run.runtime.kubernetes.clusters[seeded.clusterId]
+  expect(state.health.receipts).toHaveLength(40)
+  expect(state.health.receipts.at(-1).outcome).toBe('passed')
+  expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)), seeded.lab)).toBeTruthy()
+}, 30000)

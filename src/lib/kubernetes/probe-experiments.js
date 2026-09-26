@@ -2,6 +2,7 @@ import { recordVerification } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { restartDeploymentResult } from './reconcile.js'
 import { routeServiceRequest } from './connectivity.js'
+import { appendHealthReceipt } from './health-history.js'
 const clone = value => structuredClone(value)
 function digest(value) {
   let hash = 2166136261
@@ -230,7 +231,7 @@ export function observeProbeExperiment(input, atMs, lab) {
       && item.atMs >= completed.startedAtMs).slice(-40)
     const receipt = { ...completed, status: 'completed', endedAtMs: run.runtime.simTimeMs }
     receipt.outcome = assess(state, receipt) ? 'passed' : 'failed'
-    state.health.receipts = [...state.health.receipts, receipt].slice(-40)
+    appendHealthReceipt(state, receipt)
     clearExperimentFaults(state, completed)
     state.health.experiment = null
   }
@@ -256,7 +257,7 @@ export function cancelProbeExperiment(input, clusterId) {
   const run = clone(input); const state = run.runtime.kubernetes.clusters?.[clusterId]
   if (!state?.health?.experiment) return { run: input, ...invalid('There is no active probe experiment to cancel.') }
   const experiment = state.health.experiment
-  state.health.receipts = [...state.health.receipts, { ...experiment, status: 'cancelled', endedAtMs: run.runtime.simTimeMs }].slice(-40)
+  appendHealthReceipt(state, { ...experiment, status: 'cancelled', endedAtMs: run.runtime.simTimeMs })
   clearExperimentFaults(state, experiment)
   state.health.experiment = null
   return { run, diagnostics: [] }

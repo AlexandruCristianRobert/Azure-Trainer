@@ -1,5 +1,6 @@
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
+import { appendHealthReceipt } from './health-history.js'
 
 function canPull(run, cluster, image) {
   const host = image?.split('/')[0]?.toLowerCase()
@@ -79,10 +80,9 @@ export function processContainerLifecycle(run, atMs, lab) {
       }, currentLogs: [], previous: container.previous, restartReason: null, restartDelayMs: null,
       restartBlockReason: null, localFaults: { ...container.localFaults, hung: false },
     }
-    state.health.receipts.push({ cause: 'probe', probeType: container.restartReason, podUid: uid,
+    appendHealthReceipt(state, { cause: 'probe', probeType: container.restartReason, podUid: uid,
       oldContainerId: container.containerId, newContainerId: state.health.containers[uid].containerId,
       atMs, restartCount })
-    if (state.health.receipts.length > 40) state.health.receipts.splice(0, state.health.receipts.length - 40)
   }
   return run
 }
