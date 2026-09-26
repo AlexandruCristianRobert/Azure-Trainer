@@ -2,6 +2,7 @@ import { validateKubernetesObject } from './schema.js'
 import { scheduleConfigurationProjection } from './configuration.js'
 import { serviceAllocationDiagnostic } from './services.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+import { registerRevision } from './rollout-history.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -32,7 +33,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
   }
   for (let i = 0; i < documents.length; i++) {
-    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: options.locations?.[i] })
+    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true, kubernetesRollouts: lab?.capabilities?.kubernetesRollouts === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
     const ns = object.metadata.namespace ?? ''
@@ -68,6 +69,10 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, ...generatedService,
       ...(object.kind === 'Service' ? { spec: { ...object.spec, ...(generatedService.spec ?? {}) } } : {}),
       metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
+    if (object.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true) {
+      const revision = registerRevision(next, { clusterId, namespace: object.metadata.namespace, deploymentName: object.metadata.name, deploymentUid: uid }, object.spec.template)
+      next = revision.run
+    }
     if (object.kind === 'HorizontalPodAutoscaler' && old && JSON.stringify(old.spec) !== JSON.stringify(object.spec)) {
       const controller = next.runtime.kubernetes.clusters[clusterId].resourcesRuntime?.hpa?.[uid]
       if (controller) {

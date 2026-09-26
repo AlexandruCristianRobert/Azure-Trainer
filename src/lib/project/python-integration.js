@@ -17,6 +17,7 @@ export function parsePythonIntegration(files, manifest = {}) {
   const tree = parser.parse(text); let bad = null; tree.iterate({ enter(n) { if (n.name === '⚠') bad = n } }); if (bad) return { appSpec: null, diagnostics: [{ code: 'PYTHON_SYNTAX', message: 'Python source contains a syntax error.', ...at(text, bad) }] }
   const diagnostics = []; for (const path of ['server.py', 'training_clients.py', 'schema.sql']) if ((path !== 'schema.sql' || Object.hasOwn(files, path)) && files[path] !== manifest.fixedFiles?.[path]) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Fixed integration scaffold modified.', path, line: 1, column: 1 })
   const sql = parseRetrievalSql(files?.['retrieval.sql']); diagnostics.push(...sql.diagnostics); const answer = fn(tree, text, 'answer'); if (!answer) diagnostics.push({ code: 'PYTHON_UNSUPPORTED', message: 'Define answer(question).', path: 'app.py', line: 1, column: 1 }); if (diagnostics.length) return { appSpec: null, diagnostics }
+  const topConstants = Object.fromEntries(kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName').map(p => [raw(p[0], text), scalar(p.at(-1), text)]))
   const graph = { version: 1, nodes: [], roots: {}, bindings: {} }; const scope = new Map(); let unsupported = null
   const settingsFn = fn(tree, text, 'settings'); const settingsDictionary = settingsFn && kids(body(settingsFn)).find(n => n.name === 'ReturnStatement') && kids(kids(body(settingsFn)).find(n => n.name === 'ReturnStatement')).find(n => n.name === 'DictionaryExpression')
   const add = (op, n, fields = {}) => { const id = `n${graph.nodes.length + 1}`; graph.nodes.push({ id, op, source: at(text, n), ...fields }); return id }
@@ -27,7 +28,7 @@ export function parsePythonIntegration(files, manifest = {}) {
   const member = n => { const p = kids(n); const base = p.find(x => x.name === 'VariableName'); const property = p.find(x => x.name === 'PropertyName'); if (base && property) return { base: raw(base, text), property: raw(property, text) }; const key = p.find(x => x.name === 'String'); if (base && key) return { base: raw(base, text), key: scalar(key, text) }; return null }
   const lower = n => {
     if (!n || unsupported) return null; const fixed = scalar(n, text); if (fixed !== undefined) return add('literal', n, { value: fixed })
-    if (n.name === 'VariableName') return lookup(n, raw(n, text))
+    if (n.name === 'VariableName') return Object.hasOwn(topConstants, raw(n, text)) ? add('literal', n, { value: topConstants[raw(n, text)] }) : lookup(n, raw(n, text))
     if (n.name === 'DictionaryExpression') return dict(n)
     if (n.name === 'TupleExpression') return add('tuple', n, { values: parts(n).map(lower) })
     if (n.name === 'ArrayExpression') return add('literal', n, { value: parts(n).map(x => scalar(x, text)) })
@@ -57,6 +58,6 @@ export function parsePythonIntegration(files, manifest = {}) {
     unsupported = error(text, statement, `Unsupported statement '${statement.name}'.`) }
     return sequence }
   graph.roots.answer = lowerBlock(body(answer)); if (unsupported) return { appSpec: null, diagnostics: [unsupported] }
-  const constants = Object.fromEntries(kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName').map(p => [raw(p[0], text), scalar(p.at(-1), text)]))
-  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info' }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: sql.querySpec, graph } }, diagnostics: [] }
+  const constants = topConstants
+  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info' }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: sql.querySpec, graph }, ...(manifest.releaseVersion ? { release: { version: manifest.releaseVersion, responseBindings: { release: constants.SERVICE_VERSION } } } : {}) }, diagnostics: [] }
 }

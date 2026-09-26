@@ -1,5 +1,6 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
+import { normalizeRolloutSpec } from './rollout-schema.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -142,11 +143,14 @@ function validClusterState(state, run, lab, clusterId) {
   const connectivityEnabled = lab?.capabilities?.kubernetesConnectivity === true
   const probesEnabled = lab?.capabilities?.kubernetesProbes === true
   const resourcesEnabled = lab?.capabilities?.kubernetesResources === true
+  const rolloutsEnabled = lab?.capabilities?.kubernetesRollouts === true
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
   if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
+  if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 100)) return false
+  if (!rolloutsEnabled && state.rollouts !== undefined) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
     || !Array.isArray(state.health.events) || state.health.events.length > 1000)) return false
@@ -177,7 +181,8 @@ function validClusterState(state, run, lab, clusterId) {
       ...(resource.type === undefined ? {} : { type: resource.type }),
       ...(resource.data === undefined ? {} : { data: resource.data }),
     }
-    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments: [...deployments, ...declaredObjects.filter(([, item]) => item.kind === 'HorizontalPodAutoscaler').map(([, item]) => item)], kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments: [...deployments, ...declaredObjects.filter(([, item]) => item.kind === 'HorizontalPodAutoscaler').map(([, item]) => item)], kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}), ...(rolloutsEnabled ? { kubernetesRollouts: true } : {}) } }).diagnostics.length) return false
+    if (rolloutsEnabled && resource.kind === 'Deployment' && normalizeRolloutSpec({ ...(resource.spec.strategy ?? {}), minReadySeconds: resource.spec.minReadySeconds, progressDeadlineSeconds: resource.spec.progressDeadlineSeconds, revisionHistoryLimit: resource.spec.revisionHistoryLimit }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
   if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
