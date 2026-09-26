@@ -1,6 +1,7 @@
 import { parser } from '@lezer/python'
 import { parsePythonIntegration } from './python-integration.js'
 import { parsePythonHealth } from './python-health.js'
+import { parsePythonWorkload } from './python-workload.js'
 
 const diag = (code, message, path = 'app.py', text = '', from = 0) => {
   const prefix = text.slice(0, from)
@@ -140,7 +141,11 @@ export function parsePythonProject(files, manifest = {}) {
     if (!manifest.healthVersion || integration.diagnostics.length) return integration
     const health = parsePythonHealth(files, manifest)
     if (health.diagnostics.length) return { appSpec: null, diagnostics: [...integration.diagnostics, ...health.diagnostics] }
-    return { appSpec: { ...integration.appSpec, health: health.healthSpec }, diagnostics: [] }
+    if (!manifest.workloadVersion) return { appSpec: { ...integration.appSpec, health: health.healthSpec }, diagnostics: [] }
+    const workload = parsePythonWorkload(files, manifest)
+    if (workload.diagnostics.length) return { appSpec: null, diagnostics: workload.diagnostics }
+    return { appSpec: { ...integration.appSpec, routes: [...integration.appSpec.routes, { method: 'GET', path: workload.workloadSpec.route, response: { kind: 'workload', operation: workload.workloadSpec.operation } }],
+      health: health.healthSpec, workload: workload.workloadSpec }, diagnostics: [] }
   }
   const text = files?.['app.py']; if (typeof text !== 'string') return { appSpec: null, diagnostics: [diag('MISSING_FILE', 'A required Python source file is missing.')] }
   const { tree, diagnostics } = syntax(text, manifest.maxTokens ?? 20_000); if (diagnostics.length) return { appSpec: null, diagnostics }

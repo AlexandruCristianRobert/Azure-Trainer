@@ -1,4 +1,5 @@
 import { parseHttpProbe } from './probe-schema.js'
+import { normalizeContainerResources } from './resource-schema.js'
 
 const allowedKinds = new Set(['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret'])
 const namePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
@@ -58,8 +59,8 @@ function configurationReference(value, root, kind) {
   return null
 }
 
-function validateContainer(container, root, configuration, probes) {
-  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env', ...(configuration ? ['volumeMounts'] : []), ...(probes ? ['startupProbe', 'readinessProbe', 'livenessProbe'] : [])]), root)
+function validateContainer(container, root, configuration, probes, resources) {
+  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env', ...(configuration ? ['volumeMounts'] : []), ...(probes ? ['startupProbe', 'readinessProbe', 'livenessProbe'] : []), ...(resources ? ['resources'] : [])]), root)
   if (issue) return issue
   issue = named(container?.name, root, 'container name')
   if (issue) return issue
@@ -108,13 +109,17 @@ function validateContainer(container, root, configuration, probes) {
       if (parsed.diagnostics.length) return parsed.diagnostics[0]
     }
   }
+  if (resources && container.resources !== undefined) {
+    const parsed = normalizeContainerResources(container.resources)
+    if (parsed.diagnostics.length) return diag(parsed.diagnostics[0].code, undefined, root, parsed.diagnostics[0].message)
+  }
   return null
 }
 
-function validateDeployment(value, root, configuration, probes) {
+function validateDeployment(value, root, configuration, probes, resources) {
   let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template']), root)
   if (issue) return issue
-  if (!Number.isInteger(value.spec?.replicas) || value.spec.replicas < 1 || value.spec.replicas > 3) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
+  if (!Number.isInteger(value.spec?.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
   issue = allowed(value.spec.selector, new Set(['matchLabels']), root)
   if (issue || !validLabels(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_LABELS', 'matchLabels', root)
   issue = allowed(value.spec.template, new Set(['metadata', 'spec']), root)
@@ -129,7 +134,7 @@ function validateDeployment(value, root, configuration, probes) {
   if (issue || !Array.isArray(value.spec.template.spec?.containers) || value.spec.template.spec.containers.length !== 1) return issue ?? diag('INVALID_CONTAINERS', 'containers', root, 'Exactly one container is required.')
   if (probes && value.spec.template.spec.terminationGracePeriodSeconds !== undefined && (!Number.isInteger(value.spec.template.spec.terminationGracePeriodSeconds) || value.spec.template.spec.terminationGracePeriodSeconds < 1 || value.spec.template.spec.terminationGracePeriodSeconds > 30)) return diag('INVALID_TERMINATION_GRACE_PERIOD', value.spec.template.spec.terminationGracePeriodSeconds, root, 'terminationGracePeriodSeconds must be an integer from 1 to 30.')
   if (probes && value.spec.template.spec.restartPolicy !== undefined && value.spec.template.spec.restartPolicy !== 'Always') return diag('INVALID_RESTART_POLICY', value.spec.template.spec.restartPolicy, root, 'Deployment restartPolicy must be Always.')
-  issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes)
+  issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes, resources)
   if (issue) return issue
   if (value.spec.template.spec.volumes !== undefined) {
     if (!Array.isArray(value.spec.template.spec.volumes)) return diag('INVALID_VOLUMES', 'volumes', root)
@@ -194,6 +199,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   if (!object(input)) return { object: null, diagnostics: [diag('INVALID_OBJECT', 'A Kubernetes object is required.', root)] }
   const configuration = capabilities.kubernetesConfiguration === true
   const probes = capabilities.kubernetesProbes === true
+  const resources = capabilities.kubernetesResources === true
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
@@ -210,7 +216,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   } else if (input.kind === 'ConfigMap') { if (input.spec !== undefined || input.type !== undefined || input.stringData !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateConfigMap(input, root) }
   else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
-  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes)
+  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources)
   else issue = validateService(input, root, capabilities)
   if (issue) return { object: null, diagnostics: [issue] }
   const output = clone(input)
