@@ -297,7 +297,7 @@ function validResourceExperiment(experiment, state, runtime, lab, clusterId, now
     && ['manual-work', 'guided-cycle', 'ai-wait', 'independent-cycle', 'test-local-work', 'test-ai-wait'].includes(experiment.profileId)
     && scenario.target?.clusterId === clusterId && scenario.target?.namespace === target?.namespace && scenario.target?.deploymentName === target?.deploymentName
     && target && Object.keys(target).sort().join(',') === 'deploymentName,namespace'
-    && (deployment?.kind === 'Deployment' || experiment.phase === 'cancelled') && ['warming', 'running', 'complete', 'unsupported', 'cancelled'].includes(experiment.phase)
+    && (deployment?.kind === 'Deployment' || ['complete', 'cancelled'].includes(experiment.phase)) && ['warming', 'running', 'complete', 'unsupported', 'cancelled'].includes(experiment.phase)
     && Number.isSafeInteger(experiment.startedAtMs) && experiment.startedAtMs >= 0 && experiment.startedAtMs <= nowMs
     && Number.isSafeInteger(experiment.warmupDeadlineMs) && experiment.warmupDeadlineMs === experiment.startedAtMs + 360_000
     && (experiment.phaseZeroAtMs === null || Number.isSafeInteger(experiment.phaseZeroAtMs) && experiment.phaseZeroAtMs >= experiment.startedAtMs && experiment.phaseZeroAtMs <= nowMs)
@@ -444,7 +444,7 @@ function validConnectivity(state, resources, byUid, run, connectivityEnabled, cl
     || !Number.isInteger(value.nextExternalAddress) || value.nextExternalAddress < 10 || value.nextExternalAddress > 255
     || !Array.isArray(value.diagnosticPodUids) || new Set(value.diagnosticPodUids).size !== value.diagnosticPodUids.length
     || !value.diagnosticPodUids.every(uid => validDiagnosticPod(byUid.get(uid), clusterId)) || !Array.isArray(value.applicationLogs) || value.applicationLogs.length > 200
-    || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run, lab))
+    || !value.applicationLogs.every(log => validApplicationLog(log, byUid, state, run, lab, clusterId))
     || new Set(value.applicationLogs.map(log => log.requestId)).size !== value.applicationLogs.length
     || value.applicationLogs.some((log, index, logs) => index > 0 && logs[index - 1].sequence >= log.sequence)
     || !validConnectivityIncident(value.incident, run)) return false
@@ -524,7 +524,7 @@ function validConnectivityIncident(incident, run) {
   return true
 }
 
-function validApplicationLog(log, byUid, state, run, lab) {
+function validApplicationLog(log, byUid, state, run, lab, clusterId) {
   const keys = ['requestId', 'sequence', 'podUid', 'podName', 'namespace', 'image', 'method', 'path', 'status', 'artifactId', 'dependencySummary']
   if (!isPlainObject(log) || Object.keys(log).sort().join(',') !== keys.sort().join(',')
     || !Number.isSafeInteger(log.sequence) || log.sequence < 1 || log.sequence >= run.nextSequence
@@ -536,7 +536,7 @@ function validApplicationLog(log, byUid, state, run, lab) {
   const request = run.runtime?.kubernetes?.requests?.find(item => item.id === log.requestId && item.sequence === log.sequence)
   if (pod ? pod.kind !== 'Pod' || pod.metadata.name !== log.podName || pod.metadata.namespace !== log.namespace
     || pod.spec.containers[0]?.image !== log.image || state.podSnapshots[pod.metadata.uid]?.artifactId !== log.artifactId
-    : !validHistoricalConnectivityLog(log, request, run, state, lab)) return false
+    : !validHistoricalConnectivityLog(log, request, run, state, lab, clusterId)) return false
   if (!log.dependencySummary.every(item => isPlainObject(item) && Object.keys(item).every(key => ['operation', 'status', 'reason'].includes(key))
     && ['embedding', 'postgres-query', 'answer'].includes(item.operation) && ['succeeded', 'failed'].includes(item.status)
     && (item.reason === undefined || ['DNS_NOT_FOUND', 'AUTHENTICATION_FAILED', 'UNAVAILABLE'].includes(item.reason)))) return false
@@ -544,7 +544,7 @@ function validApplicationLog(log, byUid, state, run, lab) {
     && request.route?.namespace === log.namespace && request.route?.artifactId === log.artifactId && request.status === log.status
 }
 
-function validHistoricalConnectivityLog(log, request, run, state, lab) {
+function validHistoricalConnectivityLog(log, request, run, state, lab, clusterId) {
   const supportsIntegrationConnectivity = lab?.capabilities?.kubernetesConnectivity === true && lab?.capabilities?.kubernetesAiIntegration === true
   const supportsLegacyConnectivity = ['aks-connectivity-guided', CONNECTIVITY_TROUBLESHOOTING_LAB_ID, 'aks-connectivity-independent'].includes(run.labId)
   if (!isPlainObject(request) || !isPlainObject(request.route) || !(supportsIntegrationConnectivity || supportsLegacyConnectivity)
@@ -555,10 +555,23 @@ function validHistoricalConnectivityLog(log, request, run, state, lab) {
     const diagnostic = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === origin?.podUid)
     if (origin?.kind === 'pod') return typeof origin.clusterId === 'string' && state.connectivity?.diagnosticPodUids.includes(origin.podUid)
       && validDiagnosticPod(diagnostic, origin.clusterId) && request.status === log.status
-    return lab?.capabilities?.kubernetesProbes === true && origin?.kind === 'external'
+    const probeReceipt = lab?.capabilities?.kubernetesProbes === true && origin?.kind === 'external'
       && [...(state.health?.receipts ?? []), state.health?.experiment].filter(Boolean).some(receipt => receipt.clusterId === origin.clusterId
         && receipt.samples?.some(sample => sample.response?.requestId === request.id && sample.response.status === log.status
           && sample.response.route?.podUid === log.podUid && sample.response.route?.artifactId === log.artifactId))
+    const matchesHistoricalResourceSample = sample => sample?.requestId === request.id && sample.status === log.status
+      && sample.route?.podUid === log.podUid && sample.route?.podName === log.podName
+      && sample.route?.namespace === log.namespace && sample.route?.artifactId === log.artifactId
+    const resourceReceipt = lab?.capabilities?.kubernetesResources === true && origin?.kind === 'external' && origin.clusterId === clusterId
+      && ((state.resourcesRuntime?.experiment?.phase && ['running', 'complete', 'cancelled'].includes(state.resourcesRuntime.experiment.phase)
+        && state.resourcesRuntime.experiment.routeSamples?.some(matchesHistoricalResourceSample))
+        || (state.resourcesRuntime?.receipts ?? []).some(receipt => receipt.kind === 'resource-experiment' && ['complete', 'cancelled'].includes(receipt.phase)
+          && (receipt.phase === 'complete' ? ['passed', 'failed'].includes(receipt.outcome) : receipt.outcome === 'cancelled')
+          && receipt.samples?.some(matchesHistoricalResourceSample))
+        || Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence.completed === true
+          && ['passed', 'failed'].includes(evidence.outcome) && evidence.measurements?.clusterId === clusterId
+          && evidence.measurements?.samples?.some(matchesHistoricalResourceSample)))
+    return probeReceipt || resourceReceipt
   }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence

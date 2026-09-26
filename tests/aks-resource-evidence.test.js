@@ -60,12 +60,61 @@ describe('resource experiment evidence', () => {
     expect(JSON.parse(JSON.stringify(run)).runtime.kubernetes.clusters[first.clusterId].resourcesRuntime.experiment.phase).toBe('cancelled')
   })
 
+  it('retains phase-boundary request provenance through HPA cooldown and cancellation after Pod deletion', () => {
+    const c = seedAdoptedProfile('guided-cycle')
+    let run = act(c.run, c.lab, { type: 'aks-resource-start', scenarioId: c.scenarioId }).run
+    run = advanceResources(run, c.lab, 150)
+    expect(resourceView(run, c.target).experiment.routeSamples.filter(item => item.offsetSeconds === 120)).toHaveLength(1)
+    const pod = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.namespace === c.target.namespace)
+    run = act(run, c.lab, { type: 'command', line: `kubectl delete pod ${pod.metadata.name} -n ${c.target.namespace}` }).run
+    expect(resourceView(run, c.target).experiment).toMatchObject({ phase: 'cancelled', outcome: 'cancelled' })
+    expect(JSON.parse(JSON.stringify(run)).runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.experiment.routeSamples.some(item => item.offsetSeconds === 120)).toBe(true)
+  })
+
   it('validates a cancelled historical experiment after its target Deployment is deleted', () => {
     const c = seedResourceTest()
     let run = act(c.run, c.lab, { type: 'aks-resource-start', scenarioId: 'test-local-work' }).run
     run = act(run, c.lab, { type: 'command', line: 'kubectl delete deployment assistant -n assistant' }).run
     expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.experiment).toMatchObject({ phase: 'cancelled', outcome: 'cancelled' })
     expect(JSON.parse(JSON.stringify(run)).runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.experiment.phase).toBe('cancelled')
+  })
+
+  it('retains completed success/failure records when target Deployment or Namespace deletion invalidates evidence', () => {
+    const passed = seedResourceTest({ replicas: 2 })
+    passed.lab.tasks.push({ id: 'completed-success-proof', verification: { scenarioId: 'test-local-work', scenarioVersion: 1 },
+      dependencies: resourceDependencies(passed.target, { historical: true, profileId: 'test-local-work' }), check: () => false })
+    let run = act(passed.run, passed.lab, { type: 'aks-resource-start', scenarioId: 'test-local-work' }).run
+    run = advanceResources(run, passed.lab, 60)
+    const success = resourceView(run, passed.target).experiment
+    expect(success).toMatchObject({ phase: 'complete', outcome: 'passed' })
+    const successEvidenceId = run.evidence.currentEvidenceByTask['completed-success-proof']
+    const successEvidence = run.evidence.experimentsById[successEvidenceId]
+    const successDependency = Object.keys(successEvidence.dependencyValues)[0]
+    const deletedDeployment = applyRunAction(run, { type: 'command', line: 'kubectl delete deployment assistant -n assistant' }, passed.lab)
+    expect(deletedDeployment.diagnostics).toEqual([])
+    expect(deletedDeployment.run.runtime.kubernetes.clusters[passed.clusterId].resourcesRuntime.experiment).toMatchObject({ phase: 'complete', outcome: 'passed' })
+    expect(deletedDeployment.run.dependencyGenerations[successDependency]).toBeGreaterThan(successEvidence.dependencyGenerations[successDependency])
+    const successReload = JSON.parse(JSON.stringify(deletedDeployment.run))
+    expect(applyRunAction(successReload, { type: 'aks-resource-cancel' }, passed.lab).diagnostics[0].code).toBe('INVALID_RESOURCE_EXPERIMENT')
+
+    const failed = seedResourceTest({ replicas: 2 })
+    failed.lab.scenarios['test-local-work'] = { ...failed.lab.scenarios['test-local-work'], requiredReadyReplicas: 3 }
+    failed.lab.tasks.push({ id: 'completed-failure-proof', verification: { scenarioId: 'test-local-work', scenarioVersion: 1 },
+      dependencies: resourceDependencies(failed.target, { historical: true, profileId: 'test-local-work' }), check: () => false })
+    run = act(failed.run, failed.lab, { type: 'aks-resource-start', scenarioId: 'test-local-work' }).run
+    run = advanceResources(run, failed.lab, 300)
+    run = advanceResources(run, failed.lab, 60)
+    const failure = resourceView(run, failed.target).experiment
+    expect(failure).toMatchObject({ phase: 'complete', outcome: 'failed' })
+    const failureEvidenceId = run.evidence.currentEvidenceByTask['completed-failure-proof']
+    const failureEvidence = run.evidence.experimentsById[failureEvidenceId]
+    const failureDependency = Object.keys(failureEvidence.dependencyValues)[0]
+    const deletedNamespace = applyRunAction(run, { type: 'command', line: 'kubectl delete namespace assistant' }, failed.lab)
+    expect(deletedNamespace.diagnostics).toEqual([])
+    expect(deletedNamespace.run.runtime.kubernetes.clusters[failed.clusterId].resourcesRuntime.experiment).toMatchObject({ phase: 'complete', outcome: 'failed' })
+    expect(deletedNamespace.run.dependencyGenerations[failureDependency]).toBeGreaterThan(failureEvidence.dependencyGenerations[failureDependency])
+    const failureReload = JSON.parse(JSON.stringify(deletedNamespace.run))
+    expect(applyRunAction(failureReload, { type: 'aks-resource-cancel' }, failed.lab).diagnostics[0].code).toBe('INVALID_RESOURCE_EXPERIMENT')
   })
 
   it('enforces resource/probe experiment exclusivity in both start directions', () => {
@@ -163,7 +212,9 @@ describe('resource experiment evidence', () => {
     seeded.lab.tasks.push({ id: 'guided-evidence', verification: { scenarioId, scenarioVersion: 1 },
       dependencies: resourceDependencies(seeded.target, { historical: true, profileId: 'guided-cycle' }), check: () => false })
     run = act(run, seeded.lab, { type: 'aks-resource-start', scenarioId }).run
-    run = advanceResources(run, seeded.lab, 300)
+    run = advanceResources(run, seeded.lab, 240)
+    run = JSON.parse(JSON.stringify(run))
+    run = advanceResources(run, seeded.lab, 60)
     const experiment = resourceView(run, seeded.target).experiment
     expect(experiment.phaseZeroAtMs).toBeGreaterThan(0)
     expect(experiment.baselineReplicas).toBe(2)
@@ -171,6 +222,8 @@ describe('resource experiment evidence', () => {
     expect(experiment.outcome).toBe('passed')
     expect(experiment.scaleReceipts.some(item => item.from === 2 && item.to === 4)).toBe(true)
     expect(experiment.scaleReceipts.some(item => item.from > item.to)).toBe(true)
+    expect(experiment.routeSamples.filter(item => item.offsetSeconds === 120)).toHaveLength(1)
+    expect(experiment.scaleReceipts.some(item => item.from > item.to && item.atMs > experiment.phaseZeroAtMs + 120_000)).toBe(true)
     expect(experiment.totals.remaining).toBe(0)
     const evidenceId = run.evidence.currentEvidenceByTask['guided-evidence']
     expect(evidenceId).toBeTruthy()

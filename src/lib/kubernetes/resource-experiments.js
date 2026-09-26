@@ -148,6 +148,14 @@ function maybeWarm(run, state, experiment, atMs) {
 
 function arrival(profile, seconds) { return profile.phases.find(([start, end]) => seconds >= start && seconds < end)?.[2] ?? 0 }
 function currentBoundaryRecorded(experiment, offset, final) { return experiment.boundaryKeys.includes(`${final ? 'final' : 'phase'}:${offset}`) }
+function profileBoundaryOffsets(profile) {
+  const offsets = new Set([0])
+  for (const [start, end] of profile.phases) {
+    if (start >= 0 && start <= profile.durationSeconds) offsets.add(start)
+    if (end >= 0 && end <= profile.durationSeconds) offsets.add(end)
+  }
+  return offsets
+}
 
 function captureBoundary(run, experiment, offset, final = false) {
   const key = `${final ? 'final' : 'phase'}:${offset}`
@@ -275,17 +283,18 @@ export function observeResourceExperiment(input, atMs, lab) {
     }
     if (experiment.phase === 'running') {
       const profile = PROFILES[experiment.profileId]; const elapsed = (atMs - experiment.phaseZeroAtMs) / 1000
-      if (elapsed >= 0 && Number.isInteger(elapsed) && (elapsed === 0 || profile.phases.some(([start]) => start === elapsed))
-        && !currentBoundaryRecorded(experiment, elapsed, false)) {
-        const routed = captureBoundary(run, experiment, elapsed); run = routed.run
-      }
       const runtime = resourceRuntime(run, clusterId), current = runtime.experiment
+      const legacyFixture = current.profileId.startsWith('test-')
+      const willFinish = elapsed >= profile.durationSeconds && (!legacyFixture || current.totals.remaining < 1e-9)
+      if (elapsed >= 0 && Number.isInteger(elapsed) && profileBoundaryOffsets(profile).has(elapsed) && !willFinish
+        && !currentBoundaryRecorded(current, elapsed, false)) {
+        const routed = captureBoundary(run, current, elapsed); run = routed.run
+      }
       current.pendingObserved ||= current.observations.some(item => item.pods.some(pod => pod.phase === 'Pending' && pod.placementAgeSeconds > 30))
       current.oomObserved ||= runtime.receipts.some(item => item.kind === 'container-termination' && item.reason === 'OOMKilled' && item.atMs >= current.phaseZeroAtMs)
       current.scaleReceipts = runtime.receipts.filter(item => item.kind === 'hpa-scale' && item.controllerUid === current.hpaUid && item.atMs >= current.phaseZeroAtMs)
       current.provenance = run.runtime.kubernetes.requests.filter(item => item.workload?.operation === 'process_batch' && item.sequence >= (current.startSequence ?? 0)).map(item => ({ operation: item.workload.operation, units: item.workload.units, checksum: item.workload.checksum })).slice(-12)
-      const legacyFixture = current.profileId.startsWith('test-')
-      if (elapsed >= profile.durationSeconds && (!legacyFixture || current.totals.remaining < 1e-9)
+      if (willFinish
         && !currentBoundaryRecorded(current, elapsed, true)) {
         const finalSample = captureBoundary(run, current, elapsed, true); run = finalSample.run
         const completed = resourceRuntime(run, clusterId).experiment
