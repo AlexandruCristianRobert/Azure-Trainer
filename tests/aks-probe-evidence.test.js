@@ -4,6 +4,7 @@ import { probeDependencies } from '../src/lib/kubernetes/probe-experiments.js'
 import { inspectProbes } from '../src/lib/kubernetes/probe-inspection.js'
 import { getServiceBackends } from '../src/lib/kubernetes/services.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { HEALTH_SOLUTION_FILES } from '../src/data/templates/aks-python/health.js'
@@ -172,6 +173,25 @@ describe('AKS controlled probe experiments and evidence', () => {
     const applied = act(draft, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
     expect(stateFor(applied, seeded.clusterId).health.experiment).toBeNull()
     expect(stateFor(applied, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('cancels and stales probe evidence when the sampled public Service is applied after its source was saved', () => {
+    const seeded = seedHealthTest()
+    const lab = { ...seeded.lab, tasks: seeded.lab.tasks.map(task => task.id === 'probe-coldStartup' ? { ...task, check: () => true } : task) }
+    const changedService = seeded.run.project.savedFiles['k8s/service-external.yaml']
+      .replace('      targetPort: http\n', '      targetPort: 8080\n')
+    const prepared = act(seeded.run, lab,
+      { type: 'save-file', path: 'k8s/service-external.yaml', text: changedService }).run
+
+    const active = start(prepared, lab)
+    const appliedDuring = act(active, lab, { type: 'command', line: 'kubectl apply -f k8s/service-external.yaml' }).run
+    expect(stateFor(appliedDuring, seeded.clusterId).health.experiment).toBeNull()
+    expect(stateFor(appliedDuring, seeded.clusterId).health.receipts.at(-1)).toMatchObject({ status: 'cancelled', scenarioId: 'coldStartup' })
+
+    const completed = advanceHealth(start(prepared, lab), lab, 30)
+    expect(evaluateLab(lab, completed).tasks.find(item => item.id === 'probe-coldStartup').done).toBe(true)
+    const appliedAfter = act(completed, lab, { type: 'command', line: 'kubectl apply -f k8s/service-external.yaml' }).run
+    expect(evaluateLab(lab, appliedAfter).tasks.find(item => item.id === 'probe-coldStartup').done).toBe(false)
   })
 
   it('records a completed cold-start experiment as failed when startup never becomes healthy', () => {

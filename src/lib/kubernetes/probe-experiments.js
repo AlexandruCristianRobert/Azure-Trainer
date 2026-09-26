@@ -42,6 +42,7 @@ function fingerprint(context, target) {
   return { version: 1, clusterId, namespace, deploymentName, serviceName,
     deploymentUid: deployment?.metadata?.uid ?? null, deployment: desiredObject(deployment),
     service: desiredObject(resources[`Service/${namespace}/${serviceName}`] ?? null), configuration,
+    publicService: desiredObject(resources[`Service/${namespace}/assistant-public`] ?? null),
     image, artifact: artifact ? { id: artifact.id, sourceHash: artifact.sourceHash, digest: artifact.digest } : null,
     savedBuildFiles, savedKubernetesFiles }
 }
