@@ -111,4 +111,42 @@ describe('AKS CPU HPA', () => {
     run = act(run, c.lab, { type: 'command', line: 'kubectl delete namespace assistant' }).run
     expect(Object.keys(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa)).toEqual([])
   })
+
+  it('reports an unavailable target and rejects malformed HPA fields without throwing', () => {
+    const c = seedResourceTest(); const absent = structuredClone(HPA); absent.spec.scaleTargetRef.name = 'missing'
+    let run = applyHpa(c, absent); run = advanceResources(run, c.lab, 15)
+    let hpa = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    expect(hpa.status.conditions).toContainEqual(expect.objectContaining({ type: 'AbleToScale', reason: 'FailedGetScale' }))
+    for (const mutate of [value => { value.spec.behavior = null }, value => { value.status = {} }, value => { value.spec.scaleTargetRef.name = 'other/assistant' }]) {
+      const invalid = structuredClone(HPA); mutate(invalid)
+      let candidate = act(c.run, c.lab, { type: 'save-file', path: 'k8s/hpa.yaml', text: stringifyYaml(invalid) }).run
+      expect(() => act(candidate, c.lab, { type: 'command', line: 'kubectl apply -f k8s/hpa.yaml' })).toThrow()
+    }
+  })
+
+  it('retains history on no-op apply and gives recreated controllers a fresh UID/history', () => {
+    const c = seedResourceTest(); let run = applyHpa(c)
+    let state = run.runtime.kubernetes.clusters[c.clusterId]; let hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    state.resourcesRuntime.hpa[hpa.metadata.uid] = { policyGeneration: 1, nextSyncMs: 15_000, lastSyncMs: 0, recommendations: [{ atMs: 0, replicas: 4 }], lastDecision: null }
+    run = act(run, c.lab, { type: 'command', line: 'kubectl apply -f k8s/hpa.yaml' }).run
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa[hpa.metadata.uid].recommendations).toHaveLength(1)
+    run = act(run, c.lab, { type: 'command', line: 'kubectl delete hpa assistant-cpu -n assistant' }).run
+    run = applyHpa({ ...c, run }); run = advanceResources(run, c.lab, 15); state = run.runtime.kubernetes.clusters[c.clusterId]; hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    expect(state.resourcesRuntime.hpa[hpa.metadata.uid].recommendations).toEqual([])
+  })
+
+  it('holds adjusted missing metrics inside tolerance and records bounded HPA scale receipts', () => {
+    const c = seedResourceTest({ replicas: 4 }); const six = structuredClone(HPA); six.spec.maxReplicas = 6; let run = applyHpa(c, six); run = advanceResources(run, c.lab, 30)
+    const state = run.runtime.kubernetes.clusters[c.clusterId]; const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler')
+    const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
+    for (const pod of pods.slice(0, 2)) state.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: state.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 312.5, memoryPeakBytes: 0, readySinceMs: 0 }]
+    state.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null
+    run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(5)
+    const high = structuredClone(run); const s = high.runtime.kubernetes.clusters[c.clusterId]
+    for (const pod of Object.values(s.resources).filter(item => item.kind === 'Pod')) s.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: s.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 4000, memoryPeakBytes: 0, readySinceMs: 0 }]
+    s.resourcesRuntime.hpa[hpa.metadata.uid].lastSyncMs = null
+    const scaled = reconcileHpa(high, c.clusterId, 30_000, c.lab); const receipt = scaled.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.receipts.filter(item => item.kind === 'hpa-scale').at(-1)
+    expect(receipt).toMatchObject({ controllerUid: hpa.metadata.uid, atMs: 30_000, from: 5, to: 6, cause: 'hpa' })
+  })
 })
