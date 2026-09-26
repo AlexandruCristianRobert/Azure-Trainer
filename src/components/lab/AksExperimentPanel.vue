@@ -50,7 +50,7 @@ const canIntroduceConnectivityIncident = computed(() => {
     && !!connectivityIncidentEvidenceForPhase(run.behavioralRun, run.lab, 'recoveries', phase.phase)
 })
 const questionScenarios = computed(() => scenarios.value.filter(([, scenario]) => scenario.request?.method === 'POST' && scenario.request?.path === '/api/ask' && typeof scenario.request?.body?.question === 'string'))
-const integrationChoices = computed(() => questionScenarios.value.filter(([, scenario]) => INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]))
+const integrationChoices = computed(() => scenarios.value.filter(([, scenario]) => INTEGRATION_PROFILE_LABELS[scenario.integrationProfile] || scenario.request?.path === '/api/work'))
 const canSend = computed(() => integrationCapable.value
   ? integrationChoices.value.some(([id]) => id === choice.value)
   : scenarios.value.some(([id]) => id === choice.value))
@@ -198,7 +198,7 @@ async function copyLogCommand(command) {
   <section class="experiment-tool" aria-label="AKS experiment controls">
     <header><h2>Verify a Kubernetes service</h2><p>Requests use the current Service and the Pods' captured image. Results transition immediately because this is a simulation.</p></header>
     <div class="experiment-tool__controls">
-      <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
+      <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable && scenario.request.path !== '/api/work' ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
       <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send">Send simulated request</button>
     </div>
     <section v-if="probeCapable" class="aks-probe-controls" aria-label="AKS health probe experiments">

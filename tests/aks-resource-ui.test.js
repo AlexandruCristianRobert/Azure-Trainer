@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
+import { createSSRApp } from 'vue'
+import { renderToString } from 'vue/server-renderer'
+import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import { act, advanceResources, resourceView, seedResourceTest } from './helpers/aks.js'
+import AksExperimentPanel from '../src/components/lab/AksExperimentPanel.vue'
+import AksClusterBlade from '../src/components/blade/AksClusterBlade.vue'
+import { useLabRunStore } from '../src/stores/labRun.js'
+import { behavioralRepository } from './helpers/behavioralRepository.js'
+
+async function render(component, lab, behavioralRun, props = {}, readOnly = false) {
+  const pinia = createPinia(); setActivePinia(pinia)
+  const store = useLabRunStore(); await store.load(lab.id, { lab, repository: behavioralRepository() })
+  store.behavioralRun = behavioralRun; store.sandbox = behavioralRun.sandbox; store.readOnly = readOnly
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  return renderToString(createSSRApp(component, props).use(pinia).use(router))
+}
 
 describe('AKS resource diagnostics and controls', () => {
   it('projects resource budgets and unknown metrics without requiring a live target', () => {
@@ -19,7 +35,7 @@ describe('AKS resource diagnostics and controls', () => {
     expect(top).toContain('MEMORY(15s peak)')
     expect(act(seeded.run, seeded.lab, { type: 'command', line: 'kubectl top pods -n assistant' }).lines.map(line => line.text).join('\n')).toContain('<unknown>')
     const nodeTop = act(run, seeded.lab, { type: 'command', line: 'kubectl top nodes' }).lines.map(line => line.text).join('\n')
-    expect(nodeTop).toContain('CPU(instant delivered)')
+    expect(nodeTop).toContain('CPU(15s avg)')
     expect(nodeTop).toContain('RESERVATION REMAINING')
     expect(act(run, seeded.lab, { type: 'command', line: 'kubectl get nodes' }).lines.map(line => line.text).join('\n')).toContain('2000m')
     expect(act(run, seeded.lab, { type: 'command', line: 'kubectl describe node worker-a' }).lines.map(line => line.text).join('\n')).toContain('Fixed reservation')
@@ -40,6 +56,27 @@ describe('AKS resource diagnostics and controls', () => {
     const pod = resourceView(run, seeded.target).pods.find(item => item.containerTerminations.some(event => event.reason === 'OOMKilled'))
     expect(pod).toBeTruthy()
     const previous = act(run, seeded.lab, { type: 'command', line: `kubectl logs ${pod.name} -n assistant --previous` }).lines.map(line => line.text).join('\n')
-    expect(previous).toMatch(/OOMKilled|simulated/i)
+    expect(previous).toContain('OOMKilled')
+    expect(previous).toContain('137')
+  })
+
+  it('renders HPA history, hides empty probes, retains work requests with AI capability, and disables completed controls', async () => {
+    const seeded = seedResourceTest()
+    seeded.lab.scenarios.work = { kind: 'aks-request', version: 1, target: seeded.target, request: { method: 'GET', path: '/api/work' }, expected: { status: 200, body: {} } }
+    seeded.lab.tasks.push({ id: 'work', verification: { scenarioId: 'work', scenarioVersion: 1 }, check: () => false })
+    const state = seeded.run.runtime.kubernetes.clusters[seeded.clusterId]
+    state.resources['HorizontalPodAutoscaler/assistant/assistant-cpu'] = { apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler', metadata: { name: 'assistant-cpu', namespace: 'assistant', uid: 'hpa-ui' }, spec: { minReplicas: 1, maxReplicas: 4, scaleTargetRef: { kind: 'Deployment', name: 'assistant' }, metrics: [{ resource: { target: { averageUtilization: 60 } } }] }, status: { currentReplicas: 2, desiredReplicas: 3, conditions: [{ type: 'ScalingActive', status: 'True', reason: 'ValidMetricFound' }] } }
+    state.resourcesRuntime.hpa['hpa-ui'] = { recommendations: [{ replicas: 3, atMs: 15_000 }] }
+    const panel = await render(AksExperimentPanel, seeded.lab, seeded.run)
+    expect(panel).toContain('GET /api/work')
+    expect(panel).toContain('Start resource profile')
+    expect(panel).not.toContain('Health probe timeline')
+    const cluster = seeded.run.sandbox.aksClusters.find(item => item.id === seeded.clusterId)
+    const blade = await render(AksClusterBlade, seeded.lab, seeded.run, { resourceGroup: cluster.resourceGroup, name: cluster.name })
+    expect(blade).toContain('ScalingActive True (ValidMetricFound)')
+    expect(blade).toContain('3 @ 15s')
+    const completed = { ...seeded.run, completedAt: '2026-09-26T00:00:00.000Z', resultId: 'result-ui' }
+    const readonly = await render(AksExperimentPanel, seeded.lab, completed, {}, true)
+    expect(readonly).toMatch(/aria-label="Start resource profile" disabled/)
   })
 })

@@ -2,16 +2,22 @@ import { getDeploymentPods } from './reconcile.js'
 import { normalizeContainerResources } from './resource-schema.js'
 const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 
-function nodeBudgets(nodes, assignments, usage, metrics) {
+function nodeBudgets(nodes, assignments, usage, metrics, state, nowMs) {
   return Object.fromEntries(Object.entries(nodes ?? {}).map(([name, node]) => {
     const assigned = Object.entries(assignments ?? {}).filter(([, item]) => item.nodeName === name)
     const requested = assigned.reduce((total, [, item]) => ({ cpuM: total.cpuM + (item.cpuRequestM ?? 0), memoryBytes: total.memoryBytes + (item.memoryRequestBytes ?? 0) }), { cpuM: 0, memoryBytes: 0 })
     const current = assigned.reduce((total, [uid]) => ({ cpuDeliveredM: total.cpuDeliveredM + (usage?.[uid]?.cpuDeliveredM ?? 0), cpuThrottledM: total.cpuThrottledM + (usage?.[uid]?.cpuThrottledM ?? 0) }), { cpuDeliveredM: 0, cpuThrottledM: 0 })
-    const samples = assigned.map(([uid]) => metrics?.[uid]?.at(-1) ?? null)
-    const memoryPeakBytes = samples.length && samples.every(Boolean) ? samples.reduce((sum, sample) => sum + sample.memoryPeakBytes, 0) : null
+    const samples = assigned.map(([uid]) => {
+      const pod = Object.values(state.resources ?? {}).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
+      const containerId = state.health?.containers?.[uid]?.containerId
+      return (metrics?.[uid] ?? []).filter(sample => sample.containerId === containerId).at(-1) ?? null
+    })
+    const sameWindow = samples.length && samples.every(Boolean) && samples.every(sample => sample.windowEndMs === samples[0].windowEndMs)
+    const memoryPeakBytes = sameWindow ? samples.reduce((sum, sample) => sum + sample.memoryPeakBytes, 0) : null
+    const cpuAverageM = sameWindow ? samples.reduce((sum, sample) => sum + sample.cpuAverageM, 0) : null
     return [name, { ...node, capacityCpuM: 2000, capacityMemoryBytes: 8192 * 1024 * 1024,
       requestedCpuM: requested.cpuM, requestedMemoryBytes: requested.memoryBytes,
-      ...current, memoryPeakBytes,
+      ...current, cpuAverageM, memoryPeakBytes, metricAgeSeconds: sameWindow ? Math.max(0, (nowMs - samples[0].windowEndMs) / 1000) : null,
       remainingCpuM: node.allocatableCpuM - node.fixedCpuM - requested.cpuM,
       remainingMemoryBytes: node.allocatableMemoryBytes - node.fixedMemoryBytes - requested.memoryBytes }]
   }))
@@ -48,7 +54,7 @@ export function inspectResources(run, target) {
     && item.metadata.namespace === target.namespace && item.spec?.scaleTargetRef?.name === target.deploymentName)
   const deployment = state.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`] ?? null
   const readyReplicas = pods.filter(pod => pod.ready).length
-  return { nodes: nodeBudgets(runtime?.nodes, runtime?.assignments, runtime?.usage, runtime?.metrics), assignments: copy(runtime?.assignments ?? {}), pods,
+  return { nodes: nodeBudgets(runtime?.nodes, runtime?.assignments, runtime?.usage, runtime?.metrics, state, run.runtime.simTimeMs), assignments: copy(runtime?.assignments ?? {}), pods,
     deployment: deployment ? { desiredReplicas: deployment.spec.replicas, readyReplicas } : null,
     hpas: hpas.map(hpa => ({ ...copy(hpa), targetReadyReplicas: readyReplicas, controller: copy(runtime?.hpa?.[hpa.metadata.uid] ?? null) })),
     experiment: copy(experiment), totals: copy(experiment?.totals ?? { arrivals: 0, completed: 0, remaining: 0, peakBacklog: 0 }),

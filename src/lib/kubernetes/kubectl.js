@@ -66,9 +66,12 @@ function resourceNodes(run, selection) {
     status: { phase: 'Ready', capacity: { cpu: '2000m', memory: '8192Mi' }, allocatable: { cpu: `${node.allocatableCpuM}m`, memory: `${node.allocatableMemoryBytes / 1024 / 1024}Mi` } } }))
 }
 function topResources(run, selection, namespace, kind) {
+  if (kind === 'nodes') {
+    const nodes = inspectResources(run, { clusterId: selection.clusterId, namespace: namespace ?? selection.namespace, deploymentName: 'assistant' }).nodes
+    return ['NAME\tCPU(15s avg)\tMEMORY(15s peak)\tAGE\tWINDOW\tRESERVATION REMAINING', ...Object.entries(nodes).map(([name, node]) => `${name}\t${node.cpuAverageM == null ? '<unknown>' : `${node.cpuAverageM}m`}\t${node.memoryPeakBytes == null ? '<unknown>' : `${Math.round(node.memoryPeakBytes / 1024 / 1024)}Mi`}\t${node.metricAgeSeconds == null ? '<unknown>' : `${Math.round(node.metricAgeSeconds)}s`}\t${node.memoryPeakBytes == null ? '<unknown>' : '15s'}\t${node.remainingCpuM}m / ${Math.round(node.remainingMemoryBytes / 1024 / 1024)}Mi`)].join('\n')
+  }
   const targets = Object.values(selection.state.resources).filter(item => item.kind === 'Deployment' && (!namespace || item.metadata.namespace === namespace))
   const views = targets.map(item => inspectResources(run, { clusterId: selection.clusterId, namespace: item.metadata.namespace, deploymentName: item.metadata.name }))
-  if (kind === 'nodes') return ['NAME\tCPU(instant delivered)\tCPU(instant throttled)\tMEMORY(15s peak)\tRESERVATION REMAINING', ...Object.entries(views[0]?.nodes ?? {}).map(([name, node]) => `${name}\t${node.cpuDeliveredM}m\t${node.cpuThrottledM}m\t${node.memoryPeakBytes == null ? '<unknown>' : `${Math.round(node.memoryPeakBytes / 1024 / 1024)}Mi`}\t${node.remainingCpuM}m / ${Math.round(node.remainingMemoryBytes / 1024 / 1024)}Mi`)].join('\n')
   const pods = views.flatMap(view => view.pods)
   return ['NAME\tCPU(15s avg)\tMEMORY(15s peak)\tAGE\tWINDOW', ...pods.map(pod => {
     const metric = pod.metrics?.at(-1)

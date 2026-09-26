@@ -16,11 +16,12 @@ describe('AKS integration fixture catalogue', () => {
 
   it('declares immutable request-local stage scripts for all dependency scenarios', () => {
     const scripts = INTEGRATION_FIXTURES.scenarioProfiles
-    expect(Object.keys(scripts)).toEqual(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
+    expect(Object.keys(scripts)).toEqual(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'answer-wait-150ms', 'embedding-timeout-always', 'retry-after-too-long'])
     expect(scripts['embedding-throttle-once'].stages.embedding).toEqual([
       { latencyMs: 40, code: 'THROTTLED', retryAfterMs: 150 }, { latencyMs: 40, result: 'success' },
     ])
     expect(scripts['answer-unavailable-always'].stages.answer).toEqual(Array(3).fill({ latencyMs: 50, code: 'UNAVAILABLE' }))
+    expect(scripts['answer-wait-150ms'].stages.answer).toEqual([{ latencyMs: 150, result: 'success' }])
     expect(Object.isFrozen(scripts['healthy'].stages.embedding[0])).toBe(true)
   })
 })

@@ -34,7 +34,7 @@ describe('AKS resource scheduling', () => {
     const run = runWithPendingPod({ cpu: 500 })
     run.runtime.kubernetes.clusters.c1.resourcesRuntime.assignments.busy = { nodeName: 'worker-a', cpuRequestM: 600, memoryRequestBytes: 0 }
     const scheduled = schedulePendingPods(run, 'c1', { capabilities: { kubernetesResources: true } })
-    expect(scheduled.runtime.kubernetes.clusters.c1.resourcesRuntime.assignments['pod-1']).toEqual({ nodeName: 'worker-b', cpuRequestM: 500, memoryRequestBytes: 128 * 1024 * 1024 })
+    expect(scheduled.runtime.kubernetes.clusters.c1.resourcesRuntime.assignments['pod-1']).toEqual({ nodeName: 'worker-b', cpuRequestM: 500, memoryRequestBytes: 128 * 1024 * 1024, cpuLimitM: null, memoryLimitBytes: null })
   })
 
   it('keeps a Pod Pending when aggregate free memory exists but no node can fit it', () => {
