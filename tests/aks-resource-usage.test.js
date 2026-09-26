@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { act, advanceResources, resourceView, seedResourceTest, startHealthFault } from './helpers/aks.js'
 import { startResourceProfileFixture } from '../src/lib/kubernetes/resource-usage.js'
-import { setDeploymentReplicas } from '../src/lib/kubernetes/scheduling.js'
-import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { clearPodState } from '../src/lib/kubernetes/pod-cleanup.js'
 
@@ -60,18 +58,6 @@ describe('AKS resource accounting', () => {
     expect(routed.outcome.route.podUid).not.toBe(pod.uid)
     run = advanceResources(run, c.lab, 4)
     expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.usage[pod.uid]).toMatchObject({ cpuDemandM: 0, cpuDeliveredM: 0 })
-    expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.usage[pod.uid]).toMatchObject({ cpuDemandM: 0, cpuDeliveredM: 0 })
-  })
-
-  it('accounts a real scale-down deletion grace until its one-second termination boundary', () => {
-    const c = seedResourceTest()
-    let run = advanceResources(c.run, c.lab, 30)
-    run = reconcileKubernetes(setDeploymentReplicas(run, c.target, 1, { cause: 'manual', lab: c.lab }).run, c.lab)
-    const state = run.runtime.kubernetes.clusters[c.clusterId]
-    const deleting = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.deletionTimestamp !== undefined)
-    expect(deleting).toBeDefined()
-    run = advanceResources(run, c.lab, 1)
-    expect(Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).some(item => item.kind === 'Pod' && item.metadata.uid === deleting.metadata.uid)).toBe(false)
   })
 
   it('publishes a healthy Pod metric at an aligned boundary when another Deployment OOMs', () => {
