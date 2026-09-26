@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { schedulePendingPods } from '../src/lib/kubernetes/scheduling.js'
-import { seedResourceTest, resourceView } from './helpers/aks.js'
+import { seedResourceTest, resourceView, advanceResources, startHealthFault } from './helpers/aks.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 
 function runWithPendingPod({ cpu = 1250, memory = 128 * 1024 * 1024 } = {}) {
   return {
@@ -34,5 +35,26 @@ describe('AKS resource scheduling', () => {
     run.runtime.kubernetes.clusters.c1.resourcesRuntime.assignments.busy = { nodeName: 'worker-a', cpuRequestM: 600, memoryRequestBytes: 0 }
     const scheduled = schedulePendingPods(run, 'c1', { capabilities: { kubernetesResources: true } })
     expect(scheduled.runtime.kubernetes.clusters.c1.resourcesRuntime.assignments['pod-1']).toEqual({ nodeName: 'worker-b', cpuRequestM: 500, memoryRequestBytes: 128 * 1024 * 1024 })
+  })
+
+  it('keeps a Pod Pending when aggregate free memory exists but no node can fit it', () => {
+    const seeded = seedResourceTest({ replicas: 3, resources: { requests: { cpu: '100m', memory: '700Mi' }, limits: { cpu: '200m', memory: '800Mi' } } })
+    expect(resourceView(seeded.run, seeded.target).pods.filter(pod => pod.phase === 'Pending')).toHaveLength(1)
+    expect(validateBehavioralRun(JSON.parse(JSON.stringify(seeded.run)), seeded.lab)).toBeTruthy()
+  })
+
+  it('rejects a reload whose placed Pod reservation or fixed node budget was tampered', () => {
+    const seeded = seedResourceTest(); const bad = JSON.parse(JSON.stringify(seeded.run)); const runtime = bad.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime
+    delete runtime.assignments[Object.keys(runtime.assignments)[0]]
+    expect(() => validateBehavioralRun(bad, seeded.lab)).toThrow()
+    const changed = JSON.parse(JSON.stringify(seeded.run)); changed.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.nodes['worker-a'].fixedCpuM = 1
+    expect(() => validateBehavioralRun(changed, seeded.lab)).toThrow()
+  })
+
+  it('retains a scheduled Pod reservation across a probe-driven container restart', () => {
+    const seeded = seedResourceTest({ replicas: 1 }); let run = advanceResources(seeded.run, seeded.lab, 10)
+    const uid = resourceView(run, seeded.target).pods[0].uid; const prior = run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments[uid]
+    run = startHealthFault(run, seeded.clusterId, uid, 'hung'); run = advanceResources(run, seeded.lab, 60)
+    expect(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments[uid]).toEqual(prior)
   })
 })
