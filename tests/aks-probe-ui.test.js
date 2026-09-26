@@ -4,6 +4,7 @@ import { renderToString } from 'vue/server-renderer'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import AksClusterBlade from '../src/components/blade/AksClusterBlade.vue'
+import { inspectProbes } from '../src/lib/kubernetes/probe-inspection.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { act, advanceHealth, seedHealthTest } from './helpers/aks.js'
@@ -53,4 +54,15 @@ it('shows completed and cancelled experiment history without exposing state-chan
   expect(cancelledHtml).toContain('optionalAiOutage')
   expect(cancelledHtml).toContain('cancelled')
   expect(cancelledHtml).not.toContain('Inject fault')
+})
+
+it('exposes the pending container restart and its cause during backoff', () => {
+  const seeded = seedHealthTest({ startupSeconds: 0 })
+  const started = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
+  const waiting = advanceHealth(started, seeded.lab, 12)
+  const view = inspectProbes(waiting, seeded.clusterId)
+  const restarting = view.containers.find(item => item.restartAtMs !== null && item.restartAtMs !== undefined)
+  expect(restarting).toBeTruthy()
+  expect(restarting.restartAtMs).toBeGreaterThan(waiting.runtime.simTimeMs)
+  expect(restarting.restartReason).toBe('LivenessProbeFailed')
 })

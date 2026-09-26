@@ -2,6 +2,7 @@ import { getServiceBackends } from './services.js'
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 const experimentView = value => value ? {
   scenarioId: value.scenarioId, scenarioVersion: value.scenarioVersion ?? 1, status: value.status,
+  outcome: value.outcome ?? null,
   phase: value.phase ?? null, startedAtMs: value.startedAtMs, baselineReadyAtMs: value.baselineReadyAtMs ?? null,
   endsAtMs: value.endsAtMs, podUids: [...(value.podUids ?? [])], samples: clone(value.samples ?? []), summary: clone(value.summary ?? {}),
 } : null
@@ -29,6 +30,8 @@ export function inspectProbes(run, target) {
     containers: Object.entries(state.health.containers).map(([podUid, health]) => ({
       podUid, podName: pods.get(podUid)?.metadata.name ?? null, containerId: health.containerId,
       startedAtMs: health.startedAtMs, initializedAtMs: health.initializedAtMs,
+      terminatedAtMs: health.terminatedAtMs, restartAtMs: health.restartAtMs,
+      restartReason: health.restartReason ?? health.previous?.reason ?? null,
       ready: health.ready, restartCount: health.restartCount, checks: Object.fromEntries(Object.entries(health.checks).map(([kind, check]) => [kind, check?.nextAtMs === null && check?.pending === null && !health.startupPassed ? null : clone(check)])),
     })).sort((a, b) => a.podUid.localeCompare(b.podUid)),
   }

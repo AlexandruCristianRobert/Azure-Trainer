@@ -101,6 +101,14 @@ async function advanceProbe(seconds) {
     statusMessage.value = error.value ? 'Time advance failed.' : `Advanced ${seconds} simulated seconds.`
   } catch (reason) { error.value = reason.message; statusMessage.value = 'Time advance failed.' }
 }
+async function cancelProbe() {
+  error.value = ''
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-probe-cancel' })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'Cancellation failed.' : 'Experiment cancelled. Its scripted faults have been released.'
+  } catch (reason) { error.value = reason.message }
+}
 async function send(scenarioId = choice.value) {
   const allowed = integrationCapable.value ? integrationChoices.value.some(([id]) => id === scenarioId) : scenarios.value.some(([id]) => id === scenarioId)
   if (!allowed) return
@@ -167,6 +175,7 @@ async function copyLogCommand(command) {
       <div class="experiment-tool__controls">
         <label>Declared experiment<select v-model="probeChoice" :disabled="locked || !!probeInspection?.experiment"><option v-for="[id, scenario] in probeScenarios" :key="id" :value="id">{{ scenario.title ?? id }}</option></select></label>
         <button type="button" class="btn btn--primary" :disabled="locked || !!probeInspection?.experiment || !probeChoice" @click="startProbe">Start experiment (recreates Pods)</button>
+        <button v-if="probeInspection?.experiment" type="button" class="btn" :disabled="locked" @click="cancelProbe">Cancel experiment</button>
       </div>
       <p v-if="probeInspection?.experiment" role="status">{{ probeInspection.experiment.scenarioId }} is {{ probeInspection.experiment.phase ?? probeInspection.experiment.status ?? 'running' }}. Started at {{ probeInspection.experiment.startedAtMs / 1000 }}s; deadline {{ (probeInspection.experiment.deadlineAtMs ?? probeInspection.experiment.endsAtMs ?? 0) / 1000 }}s.</p>
       <p v-else>No probe experiment is active. Select a declared scenario to begin a fresh cold start.</p>
@@ -175,7 +184,9 @@ async function copyLogCommand(command) {
       <div v-if="probeInspection?.containers?.length" class="aks-probe-controls__table"><table><thead><tr><th scope="col">Pod / container</th><th scope="col">Age</th><th scope="col">Initialized</th><th scope="col">Ready</th><th scope="col">Restarts</th><th scope="col">Next checks</th><th scope="col">Next start</th></tr></thead><tbody>
         <tr v-for="item in probeInspection.containers" :key="item.podUid"><th scope="row">{{ item.podName }}<br><small>{{ item.containerId }}</small></th><td>{{ Math.max(0, Math.floor(((run.behavioralRun?.runtime?.simTimeMs ?? 0) - item.startedAtMs) / 1000)) }}s</td><td>{{ (run.behavioralRun?.runtime?.simTimeMs ?? 0) >= item.initializedAtMs ? 'Yes' : 'No' }}</td><td>{{ item.ready ? 'Yes' : 'No' }}</td><td>{{ item.restartCount }}</td><td><span v-for="(check, type) in item.checks" :key="type">{{ type }}: {{ check ? `${(check.pending?.completeAtMs ?? check.nextAtMs ?? 0) / 1000}s` : 'off' }}<br></span></td><td>{{ item.restartAtMs == null ? '—' : `${item.restartAtMs / 1000}s` }}</td></tr>
       </tbody></table></div>
-      <p v-if="probeInspection?.sourceVersion">Captured source/version: {{ probeInspection.sourceVersion }}</p>
+      <p v-if="probeInspection?.sourceVersion">Captured image: <code>{{ probeInspection.sourceVersion.image }}</code>; source version: <code>{{ probeInspection.sourceVersion.sourceHash }}</code>.</p>
+      <ul v-if="probeInspection?.receipts?.some(item => item.scenarioId)"><li v-for="(receipt, index) in probeInspection.receipts.filter(item => item.scenarioId).slice(-5)" :key="`${receipt.scenarioId}:${index}`">{{ receipt.scenarioId }}: {{ receipt.outcome ?? receipt.status }}</li></ul>
+      <ul v-if="probeInspection?.containers?.some(item => item.restartReason)"><li v-for="item in probeInspection.containers.filter(item => item.restartReason)" :key="item.podUid">{{ item.podName }}: {{ item.restartReason }}<span v-if="item.restartAtMs !== null">; next container start at {{ item.restartAtMs / 1000 }}s</span>.</li></ul>
       <p>Inspect current Pod names first: <code>kubectl get pods -n assistant</code>. Then use <code>kubectl describe pod POD_NAME -n assistant</code>, <code>kubectl logs POD_NAME -n assistant</code>, or <code>kubectl logs POD_NAME -n assistant --previous</code>. Previous logs exist only after a container restart.</p>
     </section>
     <section v-if="connectivityView" class="aks-connectivity-trace" aria-labelledby="aks-connectivity-trace-title">
