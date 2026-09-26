@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { seedResourceTest, advanceResources, act } from './helpers/aks.js'
 import { reconcileHpa } from '../src/lib/kubernetes/hpa.js'
+import { startResourceProfileFixture } from '../src/lib/kubernetes/resource-usage.js'
 
 const HPA = {
   apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler',
@@ -78,5 +79,36 @@ describe('AKS CPU HPA', () => {
     run = act(run, c.lab, { type: 'command', line: 'kubectl apply -f k8s/hpa.yaml' }).run
     const controller = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item => item.kind === 'HorizontalPodAutoscaler')
     expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa[controller.metadata.uid].recommendations).toEqual([])
+  })
+
+  it('stabilizes a normal clamped downscale against a recent high recommendation', () => {
+    const c = seedResourceTest({ replicas: 4 }); let run = advanceResources(c.run, c.lab, 30)
+    run = applyHpa({ ...c, run })
+    let state = run.runtime.kubernetes.clusters[c.clusterId]
+    for (const pod of Object.values(state.resources).filter(pod => pod.kind === 'Pod')) state.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: state.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 150, memoryPeakBytes: 0, readySinceMs: 10_000 }]
+    run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    run = advanceResources(run, c.lab, 15)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(4)
+  })
+
+  it('creates HPA replicas at the sync timestamp and keeps partitioned clocks identical', () => {
+    const c = seedResourceTest({ resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '256Mi' } } })
+    let run = applyHpa(c)
+    run = startResourceProfileFixture(run, 'test-local-work', c.lab).run
+    const fixture = structuredClone(run)
+    const whole = advanceResources(fixture, c.lab, 50)
+    const split = advanceResources(advanceResources(run, c.lab, 45), c.lab, 5)
+    const starts = value => Object.values(value.runtime.kubernetes.clusters[c.clusterId].health.containers).map(item => item.startedAtMs).sort()
+    expect(starts(whole)).toEqual(starts(split))
+    expect(starts(whole)).toContain(45_000)
+  })
+
+  it('deletes controller runtime through named, file, and namespace lifecycle paths', () => {
+    const c = seedResourceTest(); let run = applyHpa(c)
+    run = act(run, c.lab, { type: 'command', line: 'kubectl delete -f k8s/hpa.yaml' }).run
+    expect(Object.keys(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa)).toEqual([])
+    run = applyHpa({ ...c, run })
+    run = act(run, c.lab, { type: 'command', line: 'kubectl delete namespace assistant' }).run
+    expect(Object.keys(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa)).toEqual([])
   })
 })

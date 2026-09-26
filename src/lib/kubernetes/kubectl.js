@@ -161,9 +161,10 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
       const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId]
       for (const object of source.documents) {
         const kind = object?.kind, namespace = object?.metadata?.namespace ?? selection.namespace
-        if (!['Deployment', 'Service'].includes(kind) || !object?.metadata?.name) return response(sandbox, [err('delete -f supports saved Deployment and Service manifests only.')])
+        if (!['Deployment', 'Service', 'HorizontalPodAutoscaler'].includes(kind) || !object?.metadata?.name) return response(sandbox, [err('delete -f supports saved Deployment, Service, and HorizontalPodAutoscaler manifests only.')])
         const item = state.resources[kubeObjectKey(kind, namespace, object.metadata.name)]
         if (!item) continue
+        if (kind === 'HorizontalPodAutoscaler') delete state.resourcesRuntime?.hpa?.[item.metadata.uid]
         deleteCascade(state, [item])
       }
       const reconciled = reconcileKubernetesResult(next, lab)
@@ -189,6 +190,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     else {
       if (kind === 'HorizontalPodAutoscaler') delete state.resourcesRuntime?.hpa?.[item.metadata.uid]
       deleteCascade(state, [item], kind === 'Namespace' ? item.metadata.name : null)
+      for (const uid of Object.keys(state.resourcesRuntime?.hpa ?? {})) if (!Object.values(state.resources).some(resource => resource.kind === 'HorizontalPodAutoscaler' && resource.metadata.uid === uid)) delete state.resourcesRuntime.hpa[uid]
     }
     const reconciled = reconcileKubernetesResult(next, lab)
     if (reconciled.diagnostics.length) return response(sandbox, [err(`Error: ${reconciled.diagnostics[0].message}`)], undefined, reconciled.diagnostics)

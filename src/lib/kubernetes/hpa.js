@@ -17,14 +17,14 @@ export function validateHpa(input, { namespace, deployments = [] } = {}) {
   if (meta.namespace !== undefined && meta.namespace !== namespace) return fail('KUBE_NAMESPACE_MISMATCH', 'Manifest namespace does not match the selected namespace.')
   if (!spec || typeof spec !== 'object' || Object.keys(spec).some(key => !['scaleTargetRef', 'minReplicas', 'maxReplicas', 'metrics', 'behavior'].includes(key))) return fail('UNSUPPORTED_FIELD', 'The HPA spec contains an unsupported field.')
   const ref = spec.scaleTargetRef
-  if (!ref || Object.keys(ref).some(key => !['apiVersion', 'kind', 'name'].includes(key)) || ref.apiVersion !== 'apps/v1' || ref.kind !== 'Deployment' || typeof ref.name !== 'string' || !ref.name) return fail('INVALID_HPA_TARGET', 'HPA must target an apps/v1 Deployment in its namespace.')
+  if (!ref || typeof ref !== 'object' || Object.keys(ref).some(key => !['apiVersion', 'kind', 'name'].includes(key)) || ref.apiVersion !== 'apps/v1' || ref.kind !== 'Deployment' || typeof ref.name !== 'string' || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(ref.name)) return fail('INVALID_HPA_TARGET', 'HPA must target an apps/v1 Deployment in its namespace.')
   if (!Number.isInteger(spec.minReplicas) || !Number.isInteger(spec.maxReplicas) || spec.minReplicas < 1 || spec.maxReplicas > 6 || spec.minReplicas > spec.maxReplicas) return fail('INVALID_HPA_REPLICAS', 'HPA minReplicas and maxReplicas must be from 1 through 6.')
   if (!Array.isArray(spec.metrics) || spec.metrics.length !== 1) return fail('INVALID_HPA_METRICS', 'Exactly one CPU utilization Resource metric is required.')
   const metric = spec.metrics[0]; const resource = metric?.resource; const target = resource?.target
   if (!metric || Object.keys(metric).some(key => !['type', 'resource'].includes(key)) || metric.type !== 'Resource' || !resource || Object.keys(resource).some(key => !['name', 'target'].includes(key)) || resource.name !== 'cpu' || !target || Object.keys(target).some(key => !['type', 'averageUtilization'].includes(key)) || target.type !== 'Utilization' || !Number.isInteger(target.averageUtilization) || target.averageUtilization < 10 || target.averageUtilization > 100) return fail('INVALID_HPA_METRICS', 'Only CPU average utilization from 10 through 100 is supported.')
   if (spec.behavior !== undefined) {
     const down = spec.behavior?.scaleDown
-    if (Object.keys(spec.behavior).some(key => key !== 'scaleDown') || !down || Object.keys(down).some(key => key !== 'stabilizationWindowSeconds') || !Number.isInteger(down.stabilizationWindowSeconds) || down.stabilizationWindowSeconds < 0 || down.stabilizationWindowSeconds > 300) return fail('INVALID_HPA_BEHAVIOR', 'scaleDown.stabilizationWindowSeconds must be an integer from 0 through 300.')
+    if (!spec.behavior || typeof spec.behavior !== 'object' || Array.isArray(spec.behavior) || Object.keys(spec.behavior).some(key => key !== 'scaleDown') || !down || typeof down !== 'object' || Array.isArray(down) || Object.keys(down).some(key => key !== 'stabilizationWindowSeconds') || !Number.isInteger(down.stabilizationWindowSeconds) || down.stabilizationWindowSeconds < 0 || down.stabilizationWindowSeconds > 300) return fail('INVALID_HPA_BEHAVIOR', 'scaleDown.stabilizationWindowSeconds must be an integer from 0 through 300.')
   }
   const resolved = clone(input); resolved.metadata.namespace ??= namespace
   const duplicate = deployments.find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.namespace === resolved.metadata.namespace && item.spec.scaleTargetRef.name === ref.name && item.metadata.name !== resolved.metadata.name)
@@ -68,25 +68,25 @@ export function reconcileHpa(input, clusterId, atMs, lab) {
       active = true
       observed = measured.reduce((sum, item) => sum + item.utilization, 0) / measured.length
       let ratio = observed / target; let proposal = Math.ceil(current * ratio); rawDesired = proposal
-      if (ratio > .9 && ratio < 1.1) proposal = current
+      if (ratio >= .9 && ratio <= 1.1) proposal = current
       if (proposal < current && unready) proposal = current
       else if (proposal < current && missing) proposal = Math.ceil((measured.reduce((sum, item) => sum + item.utilization, 0) + (pods.length - measured.length) * target) / Math.max(1, pods.length) / target * current)
       else if (proposal > current && missing) {
         const adjusted = measured.reduce((sum, item) => sum + item.utilization, 0) / Math.max(1, pods.length)
         const candidate = Math.ceil(current * adjusted / target)
-        proposal = candidate < current || (candidate / current > .9 && candidate / current < 1.1) ? current : candidate
+        proposal = candidate < current || (adjusted / target >= .9 && adjusted / target <= 1.1) ? current : candidate
       }
       adjustedDesired = proposal
       desired = proposal; reason = missing ? 'MissingMetricsAdjusted' : 'MetricDesired'
     }
-    const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const boundDriven = bounded !== desired || current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas
+    const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const outsideBounds = current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas; const boundDriven = bounded !== desired || outsideBounds
     desired = bounded
     if (desired > current) desired = Math.min(desired, current + Math.max(4, current))
     const window = hpa.spec.behavior?.scaleDown?.stabilizationWindowSeconds ?? 300
     if (active && measured.length) controller.recommendations = [...controller.recommendations, { atMs, replicas: desired }].filter(item => item.atMs >= atMs - 300_000).slice(-22)
     const beforeStabilization = desired
-    if (desired < current && window && !boundDriven) desired = Math.max(...controller.recommendations.filter(item => item.atMs >= atMs - window * 1000).map(item => item.replicas), desired)
-    if (desired !== current) run = setDeploymentReplicas(run, { clusterId, namespace: hpa.metadata.namespace, deploymentName: ref.name }, desired, { cause: 'hpa', controllerUid: hpa.metadata.uid, lab }).run
+    if (desired < current && window && !outsideBounds) desired = Math.max(...controller.recommendations.filter(item => item.atMs >= atMs - window * 1000).map(item => item.replicas), desired)
+    if (desired !== current) run = setDeploymentReplicas(run, { clusterId, namespace: hpa.metadata.namespace, deploymentName: ref.name }, desired, { cause: 'hpa', controllerUid: hpa.metadata.uid, atMs, lab }).run
     const currentHpa = run.runtime.kubernetes.clusters[clusterId].resources[kubeObjectKey('HorizontalPodAutoscaler', hpa.metadata.namespace, hpa.metadata.name)]
     const currentController = run.runtime.kubernetes.clusters[clusterId].resourcesRuntime.hpa[hpa.metadata.uid]
     const limited = desired === hpa.spec.minReplicas || desired === hpa.spec.maxReplicas

@@ -94,7 +94,7 @@ function resourceTimestamp(run, atMs, lab) {
   run = reconcileProbeServices(run)
   run = sampleResourceMetrics(run, atMs, lab)
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, atMs, lab)
-  return run
+  return reconcileResourceTerminations(run, atMs, lab)
 }
 
 function reconcileResourceTerminations(run, atMs, lab) {
@@ -114,6 +114,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = accountResourceSecond(run, run.runtime.simTimeMs, lab)
   run = sampleResourceMetrics(run, run.runtime.simTimeMs, lab)
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, run.runtime.simTimeMs, lab)
+  run = reconcileResourceTerminations(run, run.runtime.simTimeMs, lab)
   run = observeProbeExperiment(run, run.runtime.simTimeMs, lab)
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
@@ -133,6 +134,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = accountResourceSecond(run, target, lab)
   run = sampleResourceMetrics(run, target, lab)
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileHpa(run, clusterId, target, lab)
+  run = reconcileResourceTerminations(run, target, lab)
   run = observeProbeExperiment(run, target, lab)
   return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }

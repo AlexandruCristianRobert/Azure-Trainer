@@ -250,9 +250,10 @@ function validResourceRuntime(state, run, lab, clusterId) {
     || !isPlainObject(value.usage) || !isPlainObject(value.metrics) || !isPlainObject(value.hpa) || !isPlainObject(value.terminationDue)
     || !Array.isArray(value.receipts) || value.receipts.length > 40 || value.incident !== null
     || !(value.accountedUntilMs === null || Number.isSafeInteger(value.accountedUntilMs) && value.accountedUntilMs >= 0 && value.accountedUntilMs <= run.runtime.simTimeMs)
-    || !value.receipts.every(item => isPlainObject(item) && item.kind === 'container-termination' && typeof item.podUid === 'string'
+    || !value.receipts.every(item => isPlainObject(item) && (item.kind === 'container-termination' && typeof item.podUid === 'string'
       && /^container-\d+$/.test(item.containerId ?? '') && item.reason === 'OOMKilled' && item.exitCode === 137
-      && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs)) return false
+      && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs
+      || item.kind === 'hpa-scale' && typeof item.controllerUid === 'string' && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs && Number.isInteger(item.from) && Number.isInteger(item.to) && item.from >= 1 && item.from <= 6 && item.to >= 1 && item.to <= 6 && item.cause === 'hpa'))) return false
   if (JSON.stringify(value.nodes) !== JSON.stringify(RESOURCE_FIXTURES.nodes)) return false
   if (value.experiment !== null && !validResourceExperiment(value.experiment, state, value, lab, clusterId, run.runtime.simTimeMs)) return false
   if (!Object.entries(value.usage).every(([uid, usage]) => validResourceUsage(uid, usage, state, run))) return false

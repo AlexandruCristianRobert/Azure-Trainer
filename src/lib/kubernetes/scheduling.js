@@ -59,7 +59,7 @@ export function schedulePendingPods(input, clusterId, lab) {
   return run
 }
 
-export function setDeploymentReplicas(input, target, replicas, { cause, controllerUid = null, lab = null } = {}) {
+export function setDeploymentReplicas(input, target, replicas, { cause, controllerUid = null, atMs = null, lab = null } = {}) {
   const run = clone(input); const state = run.runtime?.kubernetes?.clusters?.[target.clusterId]
   const deployment = state?.resources?.[kubeObjectKey('Deployment', target.namespace, target.deploymentName)]
   const maximum = state?.resourcesRuntime?.version === 1 ? 6 : 3
@@ -71,6 +71,11 @@ export function setDeploymentReplicas(input, target, replicas, { cause, controll
   deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
   deployment.metadata.generation = (deployment.metadata.generation ?? 1) + 1
   if (cause === 'hpa') deployment.metadata.annotations = { ...(deployment.metadata.annotations ?? {}), 'trainer.azure/hpa-controller': controllerUid ?? '' }
+  if (cause === 'hpa') {
+    const receipts = state.resourcesRuntime.receipts ??= []
+    receipts.push({ kind: 'hpa-scale', controllerUid, atMs: atMs ?? run.runtime.simTimeMs, from: input.runtime.kubernetes.clusters[target.clusterId].resources[kubeObjectKey('Deployment', target.namespace, target.deploymentName)].spec.replicas, to: replicas, cause: 'hpa' })
+    if (receipts.length > 40) receipts.splice(0, receipts.length - 40)
+  }
   return { run, diagnostics: [] }
 }
 
