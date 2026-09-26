@@ -14,6 +14,12 @@ export const RESOURCE_SOLUTION_FILES = Object.freeze({ ...RESOURCE_FILES,
   'app.py': `${HEALTH_SOLUTION_FILES['app.py']}${workloadSource(20, 96)}`,
   'k8s/deployment.yaml': RESOURCE_FILES['k8s/deployment.yaml'].replace('          env:', `${resources}          env:`),
 })
+const independentResources = `          resources:\n            requests:\n              cpu: "300m"\n              memory: "256Mi"\n            limits:\n              cpu: "600m"\n              memory: "384Mi"\n`
+export const RESOURCE_INDEPENDENT_SOLUTION_FILES = Object.freeze({ ...RESOURCE_FILES,
+  'app.py': `${HEALTH_SOLUTION_FILES['app.py']}${workloadSource(30, 160)}`,
+  'k8s/deployment.yaml': RESOURCE_FILES['k8s/deployment.yaml'].replace('acraksprobesguided.azurecr.io/assistant:health-v1', 'acraksresourcesindependent.azurecr.io/assistant:workload-v1').replace('          env:', `${independentResources}          env:`),
+  'k8s/hpa.yaml': RESOURCE_FILES['k8s/hpa.yaml'].replace('  maxReplicas: 4', '  maxReplicas: 6'),
+})
 export const RESOURCE_MANIFEST = Object.freeze({ ...HEALTH_MANIFEST, id: 'aks-python-resources-v1', workloadVersion: 1,
   files: Object.freeze([...HEALTH_MANIFEST.files, 'training_workload.py', 'k8s/hpa.yaml']),
   buildFiles: Object.freeze([...HEALTH_MANIFEST.buildFiles.slice(0, -1), 'training_workload.py', 'Dockerfile']),
