@@ -234,6 +234,8 @@ export function startProbeExperiment(input, scenarioId, lab) {
   const clusterId = scenario.target?.clusterId
   if (scenario.kind !== 'aks-probe' || scenario.version !== 1 || !Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 300 || typeof clusterId !== 'string') return { run: input, ...invalid('The declared probe experiment has invalid bounded timing.') }
   let run = clone(input); let state = run.runtime.kubernetes.clusters?.[clusterId]
+  if (Object.values(run.runtime.kubernetes.clusters ?? {}).some(cluster => ['warming', 'running'].includes(cluster.resourcesRuntime?.experiment?.phase)))
+    return { run: input, ...invalid('A resource experiment is already active.') }
   if (!state?.health || state.health.experiment !== null) return { run: input, ...invalid('A probe experiment is already active or its target cluster is unavailable.') }
   const deployment = state.resources?.[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]
   if (!deployment) return { run: input, ...invalid('The declared probe experiment target Deployment is unavailable.') }

@@ -67,7 +67,7 @@ function validIntegrationIncident(runtime, run) {
 
 function validIntegrationTrace(trace) {
   const safeBindingKeys = new Set(['collection', 'audience', 'published', 'vector', 'cutoff', 'limit'])
-  const profileIds = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
+  const profileIds = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'answer-wait-150ms', 'embedding-timeout-always', 'retry-after-too-long'])
   const validAttempt = attempt => isPlainObject(attempt) && Object.keys(attempt).every(key => ['operation', 'attemptNumber', 'startMs', 'durationMs', 'timeoutMs', 'errorCode', 'delayBeforeNextMs'].includes(key))
     && typeof attempt.operation === 'string' && ['embedding', 'postgres-query', 'answer'].includes(attempt.operation)
     && Number.isInteger(attempt.attemptNumber) && attempt.attemptNumber >= 1 && attempt.attemptNumber <= 3
@@ -253,7 +253,12 @@ function validResourceRuntime(state, run, lab, clusterId) {
     || !value.receipts.every(item => isPlainObject(item) && (item.kind === 'container-termination' && typeof item.podUid === 'string'
       && /^container-\d+$/.test(item.containerId ?? '') && item.reason === 'OOMKilled' && item.exitCode === 137
       && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs
-      || item.kind === 'hpa-scale' && typeof item.controllerUid === 'string' && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs && Number.isInteger(item.from) && Number.isInteger(item.to) && item.from >= 1 && item.from <= 6 && item.to >= 1 && item.to <= 6 && item.cause === 'hpa'))) return false
+      || item.kind === 'hpa-scale' && typeof item.controllerUid === 'string' && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs && Number.isInteger(item.from) && Number.isInteger(item.to) && item.from >= 1 && item.from <= 6 && item.to >= 1 && item.to <= 6 && item.cause === 'hpa'
+      || item.kind === 'resource-experiment' && typeof item.profileId === 'string' && ['complete', 'cancelled'].includes(item.phase)
+        && (item.phase === 'complete' ? ['passed', 'failed'].includes(item.outcome) : item.outcome === 'cancelled')
+        && Number.isSafeInteger(item.startedAtMs) && Number.isSafeInteger(item.endedAtMs)
+        && item.endedAtMs >= item.startedAtMs && item.endedAtMs <= run.runtime.simTimeMs && typeof item.deploymentUid === 'string'
+        && (item.hpaUid === null || typeof item.hpaUid === 'string') && Array.isArray(item.samples) && item.samples.length <= 8))) return false
   if (JSON.stringify(value.nodes) !== JSON.stringify(RESOURCE_FIXTURES.nodes)) return false
   if (value.experiment !== null && !validResourceExperiment(value.experiment, state, value, lab, clusterId, run.runtime.simTimeMs)) return false
   if (!Object.entries(value.usage).every(([uid, usage]) => validResourceUsage(uid, usage, state, run))) return false
@@ -283,24 +288,36 @@ function validResourceRuntime(state, run, lab, clusterId) {
 function validResourceExperiment(experiment, state, runtime, lab, clusterId, nowMs) {
   const target = experiment?.target
   const deployment = target && state.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]
-  const scenario = lab?.scenarios?.[experiment?.profileId]
+  const scenario = lab?.scenarios?.[experiment?.scenarioId]
   const totals = experiment?.totals
-  return isPlainObject(experiment) && experiment.version === 1 && ['test-local-work', 'test-ai-wait'].includes(experiment.profileId)
-    && experiment.clusterId === clusterId && scenario?.kind === 'aks-resource-profile' && scenario.version === 1
+  return isPlainObject(experiment) && experiment.version === 1 && typeof experiment.profileId === 'string'
+    && experiment.clusterId === clusterId && experiment.scenarioId && scenario?.kind === 'aks-resource-profile' && scenario.version === 1
     && scenario.requiredReadyReplicas === experiment.requiredReadyReplicas
+    && scenario.profileId === experiment.profileId
+    && ['manual-work', 'guided-cycle', 'ai-wait', 'independent-cycle', 'test-local-work', 'test-ai-wait'].includes(experiment.profileId)
     && scenario.target?.clusterId === clusterId && scenario.target?.namespace === target?.namespace && scenario.target?.deploymentName === target?.deploymentName
     && target && Object.keys(target).sort().join(',') === 'deploymentName,namespace'
-    && deployment?.kind === 'Deployment' && ['warming', 'running', 'complete', 'unsupported'].includes(experiment.phase)
+    && (deployment?.kind === 'Deployment' || experiment.phase === 'cancelled') && ['warming', 'running', 'complete', 'unsupported', 'cancelled'].includes(experiment.phase)
     && Number.isSafeInteger(experiment.startedAtMs) && experiment.startedAtMs >= 0 && experiment.startedAtMs <= nowMs
     && Number.isSafeInteger(experiment.warmupDeadlineMs) && experiment.warmupDeadlineMs === experiment.startedAtMs + 360_000
     && (experiment.phaseZeroAtMs === null || Number.isSafeInteger(experiment.phaseZeroAtMs) && experiment.phaseZeroAtMs >= experiment.startedAtMs && experiment.phaseZeroAtMs <= nowMs)
     && Number.isInteger(experiment.requiredReadyReplicas) && experiment.requiredReadyReplicas >= 1 && experiment.requiredReadyReplicas <= 6
     && Number.isSafeInteger(experiment.atMs) && experiment.atMs >= experiment.startedAtMs && experiment.atMs <= nowMs
+    && isPlainObject(experiment.fingerprint) && isPlainObject(experiment.historicalFingerprint)
+    && Array.isArray(experiment.routeSamples) && experiment.routeSamples.length <= 12
+    && Array.isArray(experiment.observations) && experiment.observations.length <= 700
+    && experiment.observations.every(item => isPlainObject(item) && Number.isSafeInteger(item.atMs) && Number.isInteger(item.second)
+      && item.second >= 0 && Number.isFinite(item.arrivals) && item.arrivals >= 0 && Number.isFinite(item.completed) && item.completed >= 0
+      && Number.isFinite(item.remaining) && item.remaining >= 0 && Number.isInteger(item.readyReplicas) && item.readyReplicas >= 0 && Array.isArray(item.pods))
+    && Array.isArray(experiment.boundaryKeys) && experiment.boundaryKeys.length <= 20 && new Set(experiment.boundaryKeys).size === experiment.boundaryKeys.length
+    && (experiment.baselineReplicas === null || Number.isInteger(experiment.baselineReplicas) && experiment.baselineReplicas >= 1 && experiment.baselineReplicas <= 6)
     && Number.isFinite(experiment.overflowBacklog) && experiment.overflowBacklog >= 0
     && isPlainObject(totals) && ['arrivals', 'completed', 'remaining', 'peakBacklog'].every(key => Number.isFinite(totals[key]) && totals[key] >= 0)
     && totals.completed <= totals.arrivals && totals.peakBacklog >= totals.remaining
-    && (experiment.phase === 'unsupported' ? ['UNSUPPORTED_NODE_MEMORY_PRESSURE', 'RESOURCE_WARMUP_TIMEOUT'].includes(experiment.unsupported) : experiment.unsupported === null)
-    && (experiment.phase === 'warming' || experiment.phase === 'unsupported' && experiment.unsupported === 'RESOURCE_WARMUP_TIMEOUT'
+    && (experiment.unsupported === null || ['UNSUPPORTED_NODE_MEMORY_PRESSURE', 'RESOURCE_WARMUP_TIMEOUT'].includes(experiment.unsupported)
+      && ['unsupported', 'complete'].includes(experiment.phase))
+    && (experiment.phase === 'warming' || experiment.phase === 'complete' && experiment.unsupported === 'RESOURCE_WARMUP_TIMEOUT'
+      || experiment.phase === 'cancelled' && experiment.phaseZeroAtMs === null
       ? experiment.phaseZeroAtMs === null : Number.isSafeInteger(experiment.phaseZeroAtMs))
 }
 

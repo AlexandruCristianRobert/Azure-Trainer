@@ -28,6 +28,7 @@ import { initializeConnectivity } from '../kubernetes/services.js'
 import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
 import { advanceConnectivityIncident } from '../kubernetes/connectivity-incidents.js'
 import { cancelChangedProbeExperiments } from '../kubernetes/probe-experiments.js'
+import { cancelChangedResourceExperiments } from '../kubernetes/resource-experiments.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -96,7 +97,7 @@ export function applyCommandEffects(run, effects, lab) {
       next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext: effect.name } } }
     } else if (effect.type === 'kubernetes-state') {
       if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'kubernetes', 'nextSequence'].includes(key)) || !Number.isInteger(effect.nextSequence) || effect.nextSequence < next.nextSequence) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed or unavailable in this Lab.')
-      const candidate = cancelChangedProbeExperiments({ ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence })
+      const candidate = cancelChangedResourceExperiments(cancelChangedProbeExperiments({ ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence }))
       if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed.')
       next = candidate
     } else if (effect.type === 'publish-build') {
@@ -553,7 +554,7 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
-  if (action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel') {
+  if (action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel') {
     const aks = applyAksAction(run, action, lab)
     const refreshed = refreshKubernetesDependencies(run, aks.run, lab)
     const result = { ...aks, run: refreshed }
@@ -683,6 +684,7 @@ export function applyRunAction(run, action, lab) {
     }
   }
   result.run = cancelChangedProbeExperiments(result.run)
+  result.run = cancelChangedResourceExperiments(result.run)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result

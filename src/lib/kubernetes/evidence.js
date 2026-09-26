@@ -1,6 +1,67 @@
 import { canonicalize } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { parseKubernetesYaml } from './yaml.js'
+import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+
+function digest(value) {
+  let hash = 2166136261
+  for (const character of JSON.stringify(canonicalize(value))) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  return (hash >>> 0).toString(16)
+}
+
+/** Resource exercise proof dependencies. The manual lesson remains historical after HPA adoption. */
+export function resourceDependencies(target, { historical = false, profileId = null } = {}) {
+  const { clusterId, namespace, deploymentName } = target ?? {}
+  const manualHistory = historical && profileId === 'manual-work'
+  return { [`aks-resource:${clusterId}:${namespace}:${deploymentName}:${manualHistory ? 'manual-history' : historical ? 'history' : 'live'}`]: context => {
+    const state = context.runtime.kubernetes?.clusters?.[clusterId]
+    const resources = state?.resources ?? {}
+    const deployment = resources[`Deployment/${namespace}/${deploymentName}`] ?? null
+    const targetPods = Object.values(resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === namespace
+      && item.metadata.ownerReferences?.some(ref => Object.values(resources).some(rs => rs.kind === 'ReplicaSet' && rs.metadata.uid === ref.uid
+        && rs.metadata.ownerReferences?.some(owner => owner.uid === deployment?.metadata.uid))))
+    const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
+    const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
+    const artifact = artifactId ? context.artifacts.buildsById?.[artifactId] ?? null : null
+    const services = Object.values(resources).filter(item => item.kind === 'Service' && item.metadata.namespace === namespace)
+      .map(item => ({ uid: item.metadata.uid, name: item.metadata.name, digest: digest(item.spec) })).sort((a, b) => a.name.localeCompare(b.name))
+    const configuration = Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata.namespace === namespace)
+      .map(item => ({ kind: item.kind, name: item.metadata.name, uid: item.metadata.uid, digest: digest(item.data ?? {}) }))
+      .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`))
+    const manifest = getProjectManifest(context.project.manifestId)
+    const buildFiles = Object.fromEntries((manifest.buildFiles ?? []).map(path => [path, {
+      digest: digest(context.project.savedFiles[path] ?? null), version: context.project.fileVersions[path] ?? 0,
+    }]))
+    const savedManifests = Object.entries(context.project.savedFiles).flatMap(([path, text]) => {
+      if (!/^k8s\/.*\.ya?ml$/i.test(path)) return []
+      const docs = parseKubernetesYaml(text, path).documents.flatMap(doc => {
+        if (!doc || doc.metadata?.namespace !== namespace) return []
+        if (doc.kind === 'Deployment' && doc.metadata.name === deploymentName) {
+          const normalized = structuredClone(doc)
+          if (manualHistory) delete normalized.spec?.replicas
+          return [['Deployment', digest(normalized)]]
+        }
+        if (doc.kind === 'HorizontalPodAutoscaler' && doc.spec?.scaleTargetRef?.name === deploymentName) return manualHistory ? [] : [['HPA', digest(doc)]]
+        if (doc.kind === 'Service' || doc.kind === 'ConfigMap' || doc.kind === 'Secret') return [[doc.kind, digest(doc)]]
+        return []
+      })
+      // YAML file versions are too broad: a document for another namespace may
+      // share this file, and replica omission is the intended HPA adoption path.
+      // Per-document canonical digests plus dependency generations cover edits.
+      return docs.length ? [[path, docs]] : []
+    })
+    const hpa = manualHistory ? null : Object.values(resources).find(item => item.kind === 'HorizontalPodAutoscaler' && item.metadata.namespace === namespace
+      && item.spec?.scaleTargetRef?.kind === 'Deployment' && item.spec.scaleTargetRef.name === deploymentName)
+    const key = `Deployment/${namespace}/${deploymentName}`
+    return { version: 1, clusterId, namespace, deploymentName, deploymentUid: deployment?.metadata.uid ?? null,
+      templateDigest: digest(deployment?.spec?.template ?? null), services, configuration, buildFiles, savedManifests,
+      artifactId, sourceHash: artifact?.sourceHash ?? null, fixtureVersion: RESOURCE_FIXTURES.version,
+      ...(manualHistory ? {} : { hpaUid: hpa?.metadata.uid ?? null, hpaPolicyDigest: hpa ? digest(hpa.spec) : null,
+        replicasOwnership: state?.applyOwnership?.[key]?.replicas ?? null,
+        liveReplicas: historical ? null : deployment?.spec?.replicas ?? null }),
+      ...(historical ? {} : { podUids: targetPods.map(item => item.metadata.uid).sort() }) }
+  } }
+}
 
 function redactedDigest(value) {
   const text = JSON.stringify(value)

@@ -188,7 +188,7 @@ export function routeServiceRequest(input, probe, lab) {
   const requests = [...runtime.requests, { id, sequence, connectivity: true, scenarioId: null, transport: outcome.transport, status: outcome.status,
     route: outcome.route, namespace: outcome.route.namespace ?? clientNamespace, dependencyTrace: outcome.dependencyTrace, origin: probe.origin,
     hostname: probe.hostname, port: probe.port, integrationTrace: outcome.integrationTrace ?? null,
-    request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) },
+    request: { method: probe.method, path: probe.path, ...(probe.body == null ? {} : { body: probe.body }) },
     ...(outcome.workload ? { workload: outcome.workload } : {}) }].slice(-100)
   const retainedRequestIds = new Set(requests.map(request => request.id))
   for (const clusterState of Object.values(runtime.clusters)) if (clusterState.connectivity) {

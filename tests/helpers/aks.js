@@ -223,9 +223,9 @@ export function seedResourceTest({ resources = null, replicas = 2, hpa = null, u
   for (const line of ['az group create -n rgaksresources -l eastus', 'az acr create -g rgaksresources -n acraksprobesguided --sku Basic', 'az acr build --registry acraksprobesguided -t assistant:health-v1 .', 'az aks create -g rgaksresources -n aksresources --enable-managed-identity --generate-ssh-keys --attach-acr acraksprobesguided', 'az aks get-credentials -g rgaksresources -n aksresources', ...RESOURCE_MANIFEST.kubernetesFiles.filter(path => path !== 'k8s/hpa.yaml').map(path => `kubectl apply -f ${path}`)]) run = act(run, lab, { type: 'command', line }).run
   const clusterId = run.sandbox.aksClusters[0].id; const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' }
   lab.scenarios = { ...(lab.scenarios ?? {}), 'test-local-work': { kind: 'aks-resource-profile', version: 1,
-    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas },
+    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas, profileId: 'test-local-work' },
   'test-ai-wait': { kind: 'aks-resource-profile', version: 1,
-    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas } }
+    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas, profileId: 'test-ai-wait' } }
   run = initializeConnectivity(run, clusterId)
   run = reconcileServices(run, clusterId)
   if (hpa) {

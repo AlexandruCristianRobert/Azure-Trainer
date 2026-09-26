@@ -3,13 +3,11 @@ import { kubeObjectKey } from './objects.js'
 import { getDeploymentPods } from './reconcile.js'
 import { terminateForMemoryLimit } from './container-lifecycle.js'
 import { normalizeContainerResources } from './resource-schema.js'
+import { startResourceExperiment } from './resource-experiments.js'
 
 const clone = value => structuredClone(value)
 const MiB = 1024 * 1024
-const PROFILES = Object.freeze({
-  'test-local-work': Object.freeze({ durationSeconds: 30, arrivalRate: 10, kind: 'workload' }),
-  'test-ai-wait': Object.freeze({ durationSeconds: 60, arrivalRate: 28, kind: 'ai-wait' }),
-})
+const PROFILES = RESOURCE_FIXTURES.profiles
 const isReady = (pod, container) => pod?.status?.phase === 'Running' && pod.metadata.deletionTimestamp === undefined
   && container?.restartAtMs === null && container?.terminatedAtMs === null && container.ready === true
 
@@ -23,46 +21,18 @@ function workloadFor(run, state, pod) {
 }
 
 export function startResourceProfileFixture(input, scenarioId, lab) {
-  if (!Object.hasOwn(PROFILES, scenarioId) || lab?.capabilities?.kubernetesResources !== true) return { run: input, diagnostics: [{ code: 'INVALID_RESOURCE_PROFILE', message: 'The immutable resource fixture is unavailable.' }] }
-  const scenario = lab.scenarios?.[scenarioId]
-  const target = scenario?.target
-  const state = target && clusterState(input, target.clusterId)
-  const deployment = state?.resources?.[kubeObjectKey('Deployment', target.namespace, target.deploymentName)]
-  if (scenario?.kind !== 'aks-resource-profile' || scenario.version !== 1 || Object.keys(scenario).sort().join(',') !== 'kind,requiredReadyReplicas,target,version'
-    || !target || Object.keys(target).sort().join(',') !== 'clusterId,deploymentName,namespace'
-    || !Number.isInteger(scenario.requiredReadyReplicas)
-    || scenario.requiredReadyReplicas < 1 || scenario.requiredReadyReplicas > 6
-    || !deployment || !getDeploymentPods(input, target.clusterId, target.namespace, target.deploymentName).length) {
-    return { run: input, diagnostics: [{ code: 'INVALID_RESOURCE_PROFILE', message: 'The declared resource fixture target is invalid.' }] }
-  }
-  if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(cluster => ['warming', 'running'].includes(cluster.resourcesRuntime?.experiment?.phase)
-    || cluster.health?.experiment?.status === 'active')) return { run: input, diagnostics: [{ code: 'RESOURCE_PROFILE_ACTIVE', message: 'A probe or resource profile is already active.' }] }
-  const run = clone(input); const runtime = resourceState(run, target.clusterId)
-  if (['warming', 'running'].includes(runtime.experiment?.phase)) return { run: input, diagnostics: [{ code: 'RESOURCE_PROFILE_ACTIVE', message: 'A resource profile is already active.' }] }
-  runtime.experiment = { version: 1, profileId: scenarioId, clusterId: target.clusterId,
-    target: { namespace: target.namespace, deploymentName: target.deploymentName }, phase: 'warming',
-    startedAtMs: run.runtime.simTimeMs, warmupDeadlineMs: run.runtime.simTimeMs + 360_000, phaseZeroAtMs: null,
-    requiredReadyReplicas: scenario.requiredReadyReplicas, atMs: run.runtime.simTimeMs, overflowBacklog: 0,
-    totals: { arrivals: 0, completed: 0, remaining: 0, peakBacklog: 0 }, unsupported: null }
-  return { run: sampleResourceMetrics(run, run.runtime.simTimeMs, lab), diagnostics: [] }
+  return startResourceExperiment(input, scenarioId, lab)
 }
 
 function latestComplete(runtime, uid, containerId, beforeMs) {
   return (runtime.metrics[uid] ?? []).some(item => item.containerId === containerId && item.windowEndMs <= beforeMs)
 }
 
-function readyProfile(run, state, experiment, atMs) {
-  const runtime = state.resourcesRuntime
-  const pods = podsFor(run, experiment).filter(pod => isReady(pod, containerFor(state, pod)) && runtime.assignments[pod.metadata.uid]
-    && workloadFor(run, state, pod)?.version === 1)
-  return pods.length >= experiment.requiredReadyReplicas && pods.every(pod => latestComplete(runtime, pod.metadata.uid,
-    containerFor(state, pod).containerId, atMs))
-}
-
 function profileRate(experiment, startMs) {
   const profile = PROFILES[experiment.profileId]
   const elapsed = startMs - experiment.phaseZeroAtMs
-  return elapsed >= 0 && elapsed < profile.durationSeconds * 1000 ? profile.arrivalRate : 0
+  const seconds = elapsed / 1000
+  return profile.phases.find(([start, end]) => seconds >= start && seconds < end)?.[2] ?? 0
 }
 
 function maxMin(items, capacity) {
@@ -113,9 +83,6 @@ export function sampleResourceMetrics(input, atMs, lab) {
     const runtime = cluster.resourcesRuntime; if (!runtime) continue
     for (const [uid, usage] of Object.entries(runtime.usage)) publishMetric(runtime, uid, usage, atMs)
     const experiment = runtime.experiment
-    if (experiment?.phase === 'warming' && readyProfile(run, cluster, experiment, atMs)) {
-      experiment.phase = 'running'; experiment.phaseZeroAtMs = atMs; experiment.atMs = atMs
-    }
   }
   return run
 }
@@ -136,9 +103,6 @@ export function accountResourceSecond(input, atMs, lab) {
     const experiment = runtime.experiment
     if (experiment?.clusterId === clusterId) {
       experiment.atMs = atMs
-      if (experiment.phase === 'warming' && atMs >= experiment.warmupDeadlineMs) {
-        experiment.phase = 'unsupported'; experiment.unsupported = 'RESOURCE_WARMUP_TIMEOUT'
-      }
     }
     const pods = experiment?.clusterId === clusterId ? podsFor(run, experiment) : []
     const profilePodIds = new Set(pods.map(pod => pod.metadata.uid))
@@ -212,16 +176,38 @@ export function accountResourceSecond(input, atMs, lab) {
       updateBacklog(runtime, experiment, readyPods, totalAvailableWork, done)
       const totalBacklog = experiment.overflowBacklog + Object.values(runtime.usage).reduce((sum, usage) => sum + usage.backlog, 0)
       experiment.totals.remaining = totalBacklog; experiment.totals.peakBacklog = Math.max(experiment.totals.peakBacklog, totalBacklog)
+      if (totalBacklog < 1e-9 && Math.abs(experiment.totals.arrivals - experiment.totals.completed) < 1e-9)
+        experiment.totals.completed = experiment.totals.arrivals
+      const observationSecond = Math.floor((atMs - experiment.phaseZeroAtMs) / 1000)
+      if (observationSecond >= 1 && !experiment.observations?.some(item => item.second === observationSecond)) {
+        const activeIds = new Set(active.map(item => item.uid))
+        const allPods = podsFor(run, experiment)
+        const deployment = cluster.resources[`Deployment/${experiment.target.namespace}/${experiment.target.deploymentName}`]
+        const observation = { atMs, second: observationSecond, arrivals, completed: [...done.values()].reduce((sum, value) => sum + value, 0),
+          remaining: totalBacklog, readyReplicas: readyPods.length, desiredReplicas: deployment?.spec?.replicas ?? 0,
+          pods: allPods.map(pod => {
+            const uid = pod.metadata.uid; const health = containerFor(cluster, pod); const usage = runtime.usage[uid]
+            const seenAtMs = experiment.podSeenAt[uid] ??= atMs
+            const resources = pod.spec?.containers?.[0]?.resources ?? {}
+            return { uid, nodeName: runtime.assignments[uid]?.nodeName ?? null, phase: pod.status?.phase ?? null,
+              ready: isReady(pod, health), createdAtMs: seenAtMs, placementAgeSeconds: (atMs - seenAtMs) / 1000,
+              restartCount: health?.restartCount ?? 0, containerId: health?.containerId ?? null,
+              cpuRequestM: runtime.assignments[uid]?.cpuRequestM ?? 0, memoryRequestBytes: runtime.assignments[uid]?.memoryRequestBytes ?? 0,
+              cpuLimitM: normalizeContainerResources(resources).effective.cpuLimitM ?? null,
+              memoryLimitBytes: normalizeContainerResources(resources).effective.memoryLimitBytes ?? null,
+              cpuDemandM: activeIds.has(uid) ? usage.cpuDemandM : 0, cpuDeliveredM: activeIds.has(uid) ? usage.cpuDeliveredM : 0,
+              cpuThrottledM: activeIds.has(uid) ? usage.cpuThrottledM : 0,
+              memoryPeakBytes: usage?.memoryBytes ?? 0, backlog: usage?.backlog ?? 0 }
+          }).sort((a, b) => a.uid.localeCompare(b.uid)) }
+        experiment.observations ??= []; experiment.observations.push(observation)
+        if (experiment.observations.length > 700) experiment.observations.splice(0, experiment.observations.length - 700)
+      }
       const pressure = Object.entries(runtime.nodes).some(([nodeName, node]) => {
         const bytes = active.filter(item => runtime.assignments[item.uid].nodeName === nodeName && !item.oom)
           .reduce((sum, item) => sum + item.memoryBytes, 0)
         return bytes > node.allocatableMemoryBytes - node.fixedMemoryBytes
       })
       if (pressure) { experiment.phase = 'unsupported'; experiment.unsupported = 'UNSUPPORTED_NODE_MEMORY_PRESSURE' }
-      const drained = totalBacklog < 1e-9
-      const boundedEnd = experiment.phaseZeroAtMs + (PROFILES[experiment.profileId].durationSeconds + 300) * 1000
-      if (experiment.phase === 'running' && atMs >= experiment.phaseZeroAtMs + PROFILES[experiment.profileId].durationSeconds * 1000
-        && (drained || atMs >= boundedEnd)) experiment.phase = 'complete'
     }
     for (const item of active) if (item.oom) {
       oomTargets.push({ clusterId, podUid: item.uid, containerId: item.health.containerId })

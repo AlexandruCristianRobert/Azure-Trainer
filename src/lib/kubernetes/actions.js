@@ -8,6 +8,7 @@ import { recordConnectivityIncidentEvidence } from './connectivity-incidents.js'
 import { advanceIntegrationIncident } from './integration-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 import { cancelProbeExperiment, startProbeExperiment } from './probe-experiments.js'
+import { cancelResourceExperiment, startResourceExperiment } from './resource-experiments.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -23,6 +24,19 @@ function validConnectivityExpected(expected) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (action.type === 'aks-resource-start') {
+    if (Object.keys(action).sort().join(',') !== 'scenarioId,type' || lab?.capabilities?.kubernetesResources !== true)
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Resource experiment starts accept only a declared scenario ID.' }] }
+    const result = startResourceExperiment(run, action.scenarioId, lab)
+    return { run: result.run, lines: result.diagnostics.length ? [] : [{ kind: 'out', text: `Started resource experiment ${action.scenarioId}; waiting for its declared baseline.` }], portalEvents: [], diagnostics: result.diagnostics }
+  }
+  if (action.type === 'aks-resource-cancel') {
+    if (Object.keys(action).join(',') !== 'type' || lab?.capabilities?.kubernetesResources !== true)
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Resource experiment cancellation accepts no caller-selected values.' }] }
+    const active = Object.entries(run.runtime.kubernetes.clusters ?? {}).find(([, state]) => ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase))
+    const result = active ? cancelResourceExperiment(run, active[0]) : { run, diagnostics: [{ code: 'INVALID_RESOURCE_EXPERIMENT', message: 'There is no active resource experiment to cancel.' }] }
+    return { run: result.run, lines: result.diagnostics.length ? [] : [{ kind: 'out', text: 'Cancelled resource experiment; injected arrivals have stopped.' }], portalEvents: [], diagnostics: result.diagnostics }
+  }
   if (action.type === 'aks-probe-start') {
     if (Object.keys(action).sort().join(',') !== 'scenarioId,type' || lab?.capabilities?.kubernetesProbes !== true) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Probe experiment starts accept only a declared scenario ID.' }] }
     const result = startProbeExperiment(run, action.scenarioId, lab)

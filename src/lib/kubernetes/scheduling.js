@@ -67,6 +67,16 @@ export function setDeploymentReplicas(input, target, replicas, { cause, controll
     return { run: input, diagnostics: [{ code: 'INVALID_REPLICA_SCALE', message: 'Replica scaling requires an existing Deployment and a value from 1 through 6.' }] }
   }
   if (deployment.spec.replicas === replicas) return { run, diagnostics: [] }
+  if (cause === 'manual' && ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase)) {
+    const experiment = state.resourcesRuntime.experiment
+    experiment.phase = 'cancelled'; experiment.outcome = 'cancelled'; experiment.cancellationReason = 'Manual replica scaling changed the active experiment.'
+    experiment.endedAtMs = run.runtime.simTimeMs
+    state.resourcesRuntime.receipts.push({ kind: 'resource-experiment', profileId: experiment.profileId, phase: 'cancelled', outcome: 'cancelled',
+      reason: experiment.cancellationReason, startedAtMs: experiment.phaseZeroAtMs ?? experiment.startedAtMs, endedAtMs: run.runtime.simTimeMs,
+      deploymentUid: experiment.deploymentUid, hpaUid: experiment.hpaUid, totals: structuredClone(experiment.totals),
+      fingerprint: structuredClone(experiment.historicalFingerprint), evidenceId: null, samples: (experiment.routeSamples ?? []).slice(-8) })
+    if (state.resourcesRuntime.receipts.length > 40) state.resourcesRuntime.receipts.splice(0, state.resourcesRuntime.receipts.length - 40)
+  }
   deployment.spec.replicas = replicas
   deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1)
   deployment.metadata.generation = (deployment.metadata.generation ?? 1) + 1
