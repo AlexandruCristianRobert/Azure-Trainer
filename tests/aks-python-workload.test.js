@@ -31,6 +31,11 @@ describe('AKS Python local-work workload compiler', () => {
     expect(parsePythonWorkload(files, RESOURCE_MANIFEST)).toMatchObject({ diagnostics: [], workloadSpec: { units: 20, scratchMiB: 96 } })
   })
 
+  it('does not confuse function-local names with module workload bindings', () => {
+    const files = { ...RESOURCE_SOLUTION_FILES, 'app.py': `${RESOURCE_SOLUTION_FILES['app.py']}\ndef helper(WORK_UNITS):\n    return WORK_UNITS\n` }
+    expect(parsePythonWorkload(files, RESOURCE_MANIFEST)).toMatchObject({ diagnostics: [], workloadSpec: { units: 20, scratchMiB: 96 } })
+  })
+
   it.each([
     ['a duplicate work function', files => ({ ...files, 'app.py': `${files['app.py']}\ndef work():\n    return training_workload.process_batch(WORK_UNITS, SCRATCH_MIB)\n` })],
     ['a reassigned workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nWORK_UNITS = 20\n` })],
@@ -49,6 +54,11 @@ describe('AKS Python local-work workload compiler', () => {
     ['a class that shadows the workload module', files => ({ ...files, 'app.py': `${files['app.py']}\nclass training_workload:\n    pass\n` })],
     ['a delete of a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\ndel WORK_UNITS\n` })],
     ['a chained assignment that overwrites the workload module', files => ({ ...files, 'app.py': files['app.py'].replace('WORK_UNITS = 20', 'WORK_UNITS = training_workload = 20') })],
+    ['a chained assignment with a protected second target', files => ({ ...files, 'app.py': files['app.py'].replace('WORK_UNITS = 20', 'other = WORK_UNITS = 1') })],
+    ['a destructuring assignment of workload bindings', files => ({ ...files, 'app.py': files['app.py'].replace('WORK_UNITS = 20\nSCRATCH_MIB = 96', '(WORK_UNITS, SCRATCH_MIB) = (1, 1)') })],
+    ['a with target that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nwith helper() as WORK_UNITS:\n    pass\n` })],
+    ['an except target that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\ntry:\n    pass\nexcept Exception as WORK_UNITS:\n    pass\n` })],
+    ['a walrus assignment of a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nif (WORK_UNITS := 1):\n    pass\n` })],
   ])('rejects %s even when matching source text is present', (_name, change) => {
     expect(parsePythonWorkload(change(RESOURCE_SOLUTION_FILES), RESOURCE_MANIFEST).diagnostics)
       .toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))

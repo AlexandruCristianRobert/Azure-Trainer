@@ -3,6 +3,21 @@ import { parser } from '@lezer/python'
 const digest = source => { let hash = 2166136261; for (const char of source) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619); return `sha256:${(hash >>> 0).toString(16)}` }
 const kids = node => { const items = []; for (let child = node?.firstChild; child; child = child.nextSibling) items.push(child); return items }
 const raw = (node, text) => text.slice(node.from, node.to)
+const descendants = node => [node, ...kids(node).flatMap(descendants)]
+const variableNames = (node, text) => descendants(node).filter(child => child.name === 'VariableName').map(child => raw(child, text))
+const binderNames = (node, text) => {
+  const children = kids(node)
+  const before = name => children.slice(0, children.findIndex(child => child.name === name))
+  if (node.name === 'AssignStatement') return children.flatMap((child, index) => children[index + 1]?.name === 'AssignOp' ? variableNames(child, text) : [])
+  if (['UpdateStatement', 'NamedExpression'].includes(node.name)) return variableNames(children[0], text)
+  if (node.name === 'ForStatement') return before('in').slice(1).flatMap(child => variableNames(child, text))
+  if (node.name === 'WithStatement' || node.name === 'TryStatement') return children.flatMap((child, index) => child.name === 'as' ? variableNames(children[index + 1], text) : [])
+  if (node.name === 'DeleteStatement') return children.slice(1).flatMap(child => variableNames(child, text))
+  if (node.name === 'ImportStatement') return variableNames(node, text)
+  if (node.name === 'FunctionDefinition' || node.name === 'ClassDefinition') return variableNames(children.find(child => child.name === 'VariableName'), text)
+  if (node.name === 'GlobalStatement') return variableNames(node, text)
+  return []
+}
 const diagnostic = (text, node, message, code = 'PYTHON_UNSUPPORTED') => {
   const prefix = text.slice(0, node?.from ?? 0)
   return { code, message, path: 'app.py', line: prefix.split('\n').length, column: (node?.from ?? 0) - prefix.lastIndexOf('\n') }
@@ -66,14 +81,21 @@ export function parsePythonWorkload(files, manifest = {}) {
   }
   const valuesByBinding = bindingNames.map(name => assignments.get(name) ?? [])
   const protectedNames = new Set(['training_workload', 'work', ...bindingNames])
+  const localScopes = []
+  tree.iterate({ enter(cursor) {
+    if (!['FunctionDefinition', 'ClassDefinition'].includes(cursor.name)) return
+    const body = kids(cursor.node).find(child => child.name === 'Body')
+    if (body) localScopes.push(body)
+  } })
+  const isModuleBinding = node => !localScopes.some(scope => node.from >= scope.from && node.to <= scope.to)
+  const sameNode = (left, right) => left && right && left.from === right.from && left.to === right.to
+  const allowedAssignments = valuesByBinding.flatMap(entries => entries.map(entry => entry.statement))
   tree.iterate({ enter(cursor) {
     const node = cursor.node
-    const mentionsProtectedName = kids(node).some(child => child.name === 'VariableName' && protectedNames.has(raw(child, app)))
-    if (node.name === 'ImportStatement' && raw(node, app).replace(/\s/g, '') !== 'importtraining_workload' && mentionsProtectedName) protectedWrites.push(node)
-    if (node.name === 'ForStatement' && mentionsProtectedName) protectedWrites.push(node)
-    if (node.name === 'DeleteStatement' && mentionsProtectedName) protectedWrites.push(node)
-    if (node.name === 'ClassDefinition' && mentionsProtectedName) protectedWrites.push(node)
-    if (node.name === 'FunctionDefinition' && mentionsProtectedName && (!work || raw(node, app) !== raw(work, app))) protectedWrites.push(node)
+    if (!isModuleBinding(node)) return
+    const bindsProtectedName = binderNames(node, app).some(name => protectedNames.has(name))
+    const allowed = sameNode(node, imports[0]) || sameNode(node, work) || allowedAssignments.some(item => sameNode(node, item))
+    if (bindsProtectedName && !allowed) protectedWrites.push(node)
   } })
   if (bindingNames.length === 2 && (valuesByBinding.some(entries => entries.length !== 1 || !Number.isInteger(entries[0].value))
     || bindingNames.some(name => writes.filter(item => item.target === name).length !== 1))) {
