@@ -14,6 +14,7 @@ it('rejects forged or unbounded active probe experiment state on reload', () => 
     experiment => { experiment.samples = Array(101).fill({ atMs: 0 }) },
     experiment => { experiment.summary.facts.restartSchedules = Array(9).fill({ atMs: 0 }) },
     experiment => { experiment.summary.facts.readiness['foreign-pod'] = { withdrawnAt: 0, reenteredAt: 0 } },
+    experiment => { experiment.summary.facts.livenessTimeoutAt = 999_999 },
   ]) {
     const candidate = structuredClone(active)
     corrupt(candidate.runtime.kubernetes.clusters[clusterId].health.experiment)

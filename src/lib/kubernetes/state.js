@@ -226,6 +226,7 @@ function validProbeFacts(facts, experiment, nowMs) {
   if (facts === undefined) return true
   const observedAt = value => value === null || Number.isFinite(value) && value >= experiment.startedAtMs && value <= nowMs
   return isPlainObject(facts) && observedAt(facts.firstStartupSuccessAt) && typeof facts.earlyGatedCheck === 'boolean'
+    && observedAt(facts.livenessTimeoutAt ?? null)
     && isPlainObject(facts.readiness) && Object.entries(facts.readiness).every(([uid, value]) => experiment.podUids.includes(uid)
       && isPlainObject(value) && observedAt(value.withdrawnAt) && observedAt(value.reenteredAt))
     && Array.isArray(facts.restartSchedules) && facts.restartSchedules.length <= 8
