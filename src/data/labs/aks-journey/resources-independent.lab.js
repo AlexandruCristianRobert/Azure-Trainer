@@ -75,8 +75,11 @@ const cycle = context => {
   const down = (measures?.scaleReceipts ?? []).some(item => item.cause === 'hpa' && item.to === 2 && item.from > item.to)
   const at90 = experiment?.observations?.find(item => item.second === 90)
   const at150 = experiment?.observations?.find(item => item.second === 150)
+  const routedWork = measures?.samples?.filter(sample => sample.request?.path === '/api/work') ?? []
   return hpaDesign(context) && !!measures && scaled && down && measures.totals?.remaining === 0 && measures.totals?.completed === measures.totals?.arrivals
     && at90?.completed >= 32 - 1e-9 && at150?.remaining === 0 && measures.observations?.at(-1)?.readyReplicas === 2
+    && routedWork.length >= 3 && routedWork.every(sample => sample.status === 200 && sample.workload?.operation === 'process_batch'
+      && sample.workload.units === 30 && sample.workload.checksum === 7395 && sample.body?.checksum === 7395)
 }
 const placement = context => {
   const measures = resourceReceipt(context, 'steady-burst-cooldown', 'independent-resource-cycle', cycleDependencies)
