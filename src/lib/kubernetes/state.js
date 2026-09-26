@@ -187,7 +187,7 @@ function validClusterState(state, run, lab, clusterId) {
       if (resource.kind === 'ReplicaSet') {
         if (!isPlainObject(resource.spec) || !isPlainObject(parent.spec) || JSON.stringify(resource.spec.selector) !== JSON.stringify(parent.spec.selector)
           || JSON.stringify(resource.spec.template) !== JSON.stringify(parent.spec.template)) return false
-      } else if (!isPlainObject(parent.spec?.template) || JSON.stringify(resource.spec) !== JSON.stringify(parent.spec.template.spec)
+      } else if (!isPlainObject(parent.spec?.template) || JSON.stringify((({ nodeName, ...spec }) => spec)(resource.spec)) !== JSON.stringify(parent.spec.template.spec)
         || JSON.stringify(resource.metadata.labels) !== JSON.stringify(parent.spec.template.metadata.labels)) return false
     }
   }

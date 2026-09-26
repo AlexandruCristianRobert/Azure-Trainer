@@ -3,6 +3,8 @@ import { reconcileServicesResult } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 import { reconcileHealth } from './probes.js'
+import { schedulePendingPods } from './scheduling.js'
+import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -47,9 +49,10 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   const reason = !grant ? 'RegistryAccessDenied' : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const uid = `kube-${run.nextSequence++}`
   const podName = `${deployment.metadata.name}-${hash(template)}-${ordinal}-${uid.slice(5)}`
+  const resourceManaged = run.__resourceLab === true
   const value = {
     apiVersion: 'v1', kind: 'Pod', metadata: { name: podName, namespace: deployment.metadata.namespace, uid, resourceVersion: '1', labels: clone(template.metadata.labels), ownerReferences: [{ uid: replicaSet.metadata.uid, kind: 'ReplicaSet', name: replicaSet.metadata.name }] },
-    spec: clone(template.spec), status: reason ? { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason } } }] } : { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
+    spec: clone(template.spec), status: reason || resourceManaged ? { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason: reason ?? 'Pending' } } }] } : { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
   }
   state.resources[kubeObjectKey('Pod', value.metadata.namespace, podName)] = value
   if (reason) {
@@ -67,6 +70,7 @@ function retryPendingPod(run, cluster, deployment, pod) {
   const reason = !hasKubeletPull(run.sandbox, cluster, container.image) ? 'RegistryAccessDenied'
     : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const previous = pod.status.containerStatuses?.[0]?.state?.waiting?.reason
+  if (run.__resourceLab === true && !pod.spec.nodeName) return
   if (reason === previous) return
   if (reason) {
     if (configuration.diagnostics.length && hasKubeletPull(run.sandbox, cluster, container.image) && artifactId) waitingConfiguration(run.runtime.kubernetes.clusters[cluster.id], pod, configuration.diagnostics)
@@ -107,9 +111,11 @@ function recordReplacement(state, deleted, replacement, cause = 'template') {
 export function reconcileKubernetesResult(input, lab) {
   const original = input
   let run = clone(input)
+  run.__resourceLab = lab?.capabilities?.kubernetesResources === true
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
+    if (run.__resourceLab && !state.resourcesRuntime) state.resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {} }
     const deployments = Object.values(state.resources).filter(item => item.kind === 'Deployment')
     for (const deployment of deployments) {
       const templateHash = hash(deployment.spec.template)
@@ -122,12 +128,18 @@ export function reconcileKubernetesResult(input, lab) {
       }
       const ownedPods = getDeploymentPods(run, cluster.id, deployment.metadata.namespace, deployment.metadata.name)
       const previous = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid !== replicaSet.metadata.uid))
-      const current = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid))
+      const current = ownedPods.filter(item => item.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid) && !item.metadata.deletionTimestamp)
       const removed = [...previous, ...current.slice(deployment.spec.replicas)]
       for (const stale of removed) {
-        delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
-        delete state.podSnapshots[stale.metadata.uid]
-        delete state.projectionDue[stale.metadata.uid]
+        if (run.__resourceLab && stale.metadata.ownerReferences?.some(ref => ref.uid === replicaSet.metadata.uid)) {
+          stale.metadata.deletionTimestamp ??= run.runtime.simTimeMs
+          stale.status = { ...stale.status, phase: 'Terminating', conditions: [] }
+          state.resourcesRuntime.terminationDue[stale.metadata.uid] ??= run.runtime.simTimeMs + 1000
+        } else {
+          delete state.resources[kubeObjectKey('Pod', stale.metadata.namespace, stale.metadata.name)]
+          delete state.podSnapshots[stale.metadata.uid]
+          delete state.projectionDue[stale.metadata.uid]
+        }
       }
       for (const old of Object.values(state.resources).filter(item => item.kind === 'ReplicaSet'
         && item.metadata.namespace === deployment.metadata.namespace && item.metadata.ownerReferences?.some(ref => ref.uid === deployment.metadata.uid)
@@ -154,12 +166,22 @@ export function reconcileKubernetesResult(input, lab) {
       }
     }
   }
+  if (run.__resourceLab) {
+    for (const cluster of run.sandbox.aksClusters ?? []) {
+      const state = run.runtime.kubernetes.clusters[cluster.id]
+      run = schedulePendingPods(run, cluster.id, lab)
+      for (const deployment of Object.values(state.resources).filter(item => item.kind === 'Deployment')) {
+        for (const pod of getDeploymentPods(run, cluster.id, deployment.metadata.namespace, deployment.metadata.name)) retryPendingPod(run, cluster, deployment, pod)
+      }
+    }
+  }
   run = reconcileHealth(run, lab)
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const result = reconcileServicesResult(run, cluster.id)
     if (result.diagnostics.length) return { run: original, diagnostics: result.diagnostics }
     run = result.run
   }
+  delete run.__resourceLab
   return { run, diagnostics: [] }
 }
 

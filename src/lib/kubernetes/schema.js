@@ -119,7 +119,7 @@ function validateContainer(container, root, configuration, probes, resources) {
 function validateDeployment(value, root, configuration, probes, resources) {
   let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template']), root)
   if (issue) return issue
-  if (!Number.isInteger(value.spec?.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
+  if ((!resources && value.spec?.replicas === undefined) || (value.spec?.replicas !== undefined && (!Number.isInteger(value.spec.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)))) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
   issue = allowed(value.spec.selector, new Set(['matchLabels']), root)
   if (issue || !validLabels(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_LABELS', 'matchLabels', root)
   issue = allowed(value.spec.template, new Set(['metadata', 'spec']), root)
@@ -227,6 +227,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
       if (templateSpec.containers[0][field] !== undefined) templateSpec.containers[0][field] = parseHttpProbe(templateSpec.containers[0][field], type, sourceLocation).probe
     }
   }
+  if (output.kind === 'Deployment' && resources && output.spec.replicas === undefined) output.spec.replicas = 1
   if (output.kind === 'Service') {
     output.spec.type ??= 'ClusterIP'
     output.spec.ports[0].targetPort ??= output.spec.ports[0].port

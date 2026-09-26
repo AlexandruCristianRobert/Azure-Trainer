@@ -36,6 +36,14 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       return { run: next, lines, diagnostics: [{ code: 'KUBE_NAMESPACE_NOT_FOUND', message: `Namespace '${ns}' was not found.` }] }
     }
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
+    const explicitReplicas = documents[i]?.kind === 'Deployment' && Object.hasOwn(documents[i]?.spec ?? {}, 'replicas')
+    if (object.kind === 'Deployment' && lab?.capabilities?.kubernetesResources === true) {
+      const ownership = next.runtime.kubernetes.clusters[clusterId].applyOwnership ??= {}
+      if (!old) ownership[key] = { replicas: explicitReplicas }
+      else if (explicitReplicas) ownership[key] = { replicas: true }
+      else if (ownership[key]?.replicas) { object.spec.replicas = 1; ownership[key] = { replicas: false } }
+      else object.spec.replicas = old.spec.replicas
+    }
     const allocationIssue = object.kind === 'Service' ? serviceAllocationDiagnostic(next, clusterId, object, old) : null
     if (allocationIssue) return { run: next, lines, diagnostics: [allocationIssue] }
     if (object.kind === 'Deployment' && old?.spec?.template?.metadata?.annotations?.['kubectl.kubernetes.io/restarted-at']
