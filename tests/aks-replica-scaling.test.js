@@ -28,6 +28,9 @@ const lab = { capabilities: { kubernetesResources: true, kubernetesConfiguration
 describe('AKS replica ownership', () => {
   it('uses saved manifest applies to relinquish replicas once and preserve later live scale across reload', () => {
     const seeded = seedResourceTest(); let value = reconcileKubernetes(setDeploymentReplicas(seeded.run, seeded.target, 4, { cause: 'manual' }).run, seeded.lab)
+    expect(value.runtime.kubernetes.clusters[seeded.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(4)
+    value = act(value, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+    expect(value.runtime.kubernetes.clusters[seeded.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(2)
     let manifest = parseYaml(value.project.savedFiles['k8s/deployment.yaml']); delete manifest.spec.replicas
     value = act(value, seeded.lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(manifest) }).run
     value = act(value, seeded.lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run

@@ -183,7 +183,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
         deletedPodName: item.metadata.name, deletedReplicaSetUid: item.metadata.ownerReferences?.[0]?.uid ?? null,
         templateHash, replacementPodUid: null, replacementPodName: null, replacementReplicaSetUid: null,
         replacementTemplateHash: null }].slice(-100)
-      delete state.podSnapshots[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
+      delete state.podSnapshots[item.metadata.uid]; delete state.projectionDue[item.metadata.uid]; delete state.resourcesRuntime?.assignments?.[item.metadata.uid]; delete state.resourcesRuntime?.usage?.[item.metadata.uid]; delete state.resourcesRuntime?.terminationDue?.[item.metadata.uid]; delete state.resources[kubeObjectKey(kind, selection.namespace, name)]
     }
     else { const ids = new Set([item.metadata.uid]); let changed = true; while (changed) { changed = false; for (const candidate of Object.values(state.resources)) if (candidate.metadata.ownerReferences?.some(ref => ids.has(ref.uid)) && !ids.has(candidate.metadata.uid)) { ids.add(candidate.metadata.uid); changed = true } }; for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) { delete state.resources[kubeObjectKey(candidate.kind, candidate.metadata.namespace, candidate.metadata.name)]; delete state.podSnapshots[candidate.metadata.uid] } }
     const reconciled = reconcileKubernetesResult(next, lab)

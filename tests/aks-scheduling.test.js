@@ -38,8 +38,8 @@ describe('AKS resource scheduling', () => {
   })
 
   it('keeps a Pod Pending when aggregate free memory exists but no node can fit it', () => {
-    const seeded = seedResourceTest({ replicas: 3, resources: { requests: { cpu: '100m', memory: '700Mi' }, limits: { cpu: '200m', memory: '800Mi' } } })
-    expect(resourceView(seeded.run, seeded.target).pods.filter(pod => pod.phase === 'Pending')).toHaveLength(1)
+    const seeded = seedResourceTest({ replicas: 3, resources: { requests: { cpu: '100m', memory: '600Mi' }, limits: { cpu: '200m', memory: '800Mi' } } })
+    expect(resourceView(seeded.run, seeded.target).pods.filter(pod => pod.phase === 'Pending' && pod.schedulingReason === 'Insufficient memory')).toHaveLength(1)
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(seeded.run)), seeded.lab)).toBeTruthy()
   })
 
@@ -47,6 +47,10 @@ describe('AKS resource scheduling', () => {
     const seeded = seedResourceTest(); const bad = JSON.parse(JSON.stringify(seeded.run)); const runtime = bad.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime
     delete runtime.assignments[Object.keys(runtime.assignments)[0]]
     expect(() => validateBehavioralRun(bad, seeded.lab)).toThrow()
+    const detached = JSON.parse(JSON.stringify(seeded.run)); const uid = Object.keys(detached.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)[0]
+    delete detached.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments[uid]
+    delete Object.values(detached.runtime.kubernetes.clusters[seeded.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid).spec.nodeName
+    expect(() => validateBehavioralRun(detached, seeded.lab)).toThrow()
     const changed = JSON.parse(JSON.stringify(seeded.run)); changed.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.nodes['worker-a'].fixedCpuM = 1
     expect(() => validateBehavioralRun(changed, seeded.lab)).toThrow()
   })
@@ -54,7 +58,18 @@ describe('AKS resource scheduling', () => {
   it('retains a scheduled Pod reservation across a probe-driven container restart', () => {
     const seeded = seedResourceTest({ replicas: 1 }); let run = advanceResources(seeded.run, seeded.lab, 10)
     const uid = resourceView(run, seeded.target).pods[0].uid; const prior = run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments[uid]
+    const containerId = run.runtime.kubernetes.clusters[seeded.clusterId].health.containers[uid].containerId
     run = startHealthFault(run, seeded.clusterId, uid, 'hung'); run = advanceResources(run, seeded.lab, 60)
+    expect(run.runtime.kubernetes.clusters[seeded.clusterId].health.containers[uid].containerId).not.toBe(containerId)
     expect(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments[uid]).toEqual(prior)
+  })
+
+  it('clears a deleted Pod reservation before reconciliation creates its replacement', () => {
+    const seeded = seedResourceTest({ replicas: 1 }); const pod = resourceView(seeded.run, seeded.target).pods[0]
+    const name = Object.values(seeded.run.runtime.kubernetes.clusters[seeded.clusterId].resources).find(item => item.kind === 'Pod' && item.metadata.uid === pod.uid).metadata.name
+    const run = act(seeded.run, seeded.lab, { type: 'command', line: `kubectl delete pod ${name} -n assistant` }).run
+    expect(validateBehavioralRun(run, seeded.lab)).toBeTruthy()
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).toHaveLength(1)
+    expect(Object.keys(run.runtime.kubernetes.clusters[seeded.clusterId].resourcesRuntime.assignments)).not.toContain(pod.uid)
   })
 })
