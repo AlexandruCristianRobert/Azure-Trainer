@@ -8,6 +8,7 @@ const text = value => typeof value === 'number' && Number.isFinite(value) ? Stri
 export function parseCpuQuantity(value) {
   const source = text(value)
   if (source === null || source.startsWith('-')) return result('millicores', null, [diagnostic('INVALID_QUANTITY', 'CPU quantities must be finite nonnegative cores or millicores.')])
+  if (/^\d+(?:\.\d+)?e[+-]?\d+$/i.test(source)) return result('millicores', null, [diagnostic('UNSUPPORTED_QUANTITY', 'This valid Kubernetes CPU notation is outside the trainer quantity subset.')])
   let millicores = null
   const milli = /^(\d+)m$/.exec(source)
   const cores = /^(\d+)(?:\.(\d+))?$/.exec(source)

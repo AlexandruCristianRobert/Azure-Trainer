@@ -4,6 +4,10 @@ import { normalizeContainerResources } from '../src/lib/kubernetes/resource-sche
 import { validateKubernetesObject } from '../src/lib/kubernetes/schema.js'
 import { parseKubernetesYaml } from '../src/lib/kubernetes/yaml.js'
 import { RESOURCE_SOLUTION_FILES } from '../src/data/templates/aks-python/resources.js'
+import { RESOURCE_MANIFEST } from '../src/data/templates/aks-python/resources.js'
+import { act, createAksTestRun } from './helpers/aks.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 describe('AKS resource quantity schema', () => {
   it('normalizes equivalent CPU and memory quantities exactly', () => {
@@ -35,6 +39,7 @@ describe('AKS resource quantity schema', () => {
 
   it.each([
     ['sub-millicore CPU precision', () => parseCpuQuantity('0.0005'), 'UNSUPPORTED_QUANTITY'],
+    ['valid-but-unmodeled CPU exponent notation', () => parseCpuQuantity('1e-3'), 'UNSUPPORTED_QUANTITY'],
     ['unknown CPU suffix', () => parseCpuQuantity('250x'), 'INVALID_QUANTITY'],
     ['unknown memory suffix', () => parseMemoryQuantity('128MB'), 'INVALID_QUANTITY'],
     ['valid-but-unmodeled milli-byte memory', () => parseMemoryQuantity('1m'), 'UNSUPPORTED_QUANTITY'],
@@ -53,5 +58,38 @@ describe('AKS resource quantity schema', () => {
     const accepted = validateKubernetesObject(deployment, { namespace: 'assistant', capabilities: { kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: true } })
     expect(accepted.diagnostics).toEqual([])
     expect(accepted.object.spec.template.spec.containers[0].resources).toMatchObject({ limits: { cpu: '500m' } })
+  })
+
+  it('applies and dry-runs resource workloads only when the Lab enables resource support', () => {
+    const seed = resourcesEnabled => {
+      const { lab: initialLab, run: initial } = createAksTestRun({
+      manifestId: RESOURCE_MANIFEST.id,
+      capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: resourcesEnabled },
+      initialProjectFiles: structuredClone(RESOURCE_SOLUTION_FILES),
+      })
+      const lab = { ...initialLab, capabilities: { ...initialLab.capabilities, kubernetesResources: resourcesEnabled }, healthFixture: { initializationSeconds: 24 } }
+      let run = initial
+      for (const line of [
+      'az group create -n rgaksresources -l eastus',
+      'az acr create -g rgaksresources -n acraksprobesguided --sku Basic',
+      'az acr build --registry acraksprobesguided -t assistant:health-v1 .',
+      'az aks create -g rgaksresources -n aksresources --enable-managed-identity --generate-ssh-keys --attach-acr acraksprobesguided',
+      'az aks get-credentials -g rgaksresources -n aksresources',
+      'kubectl apply -f k8s/namespace.yaml',
+      'kubectl apply -f k8s/configmap.yaml',
+      'kubectl apply -f k8s/secret.yaml',
+    ]) run = act(run, lab, { type: 'command', line }).run
+      return { lab, run }
+    }
+    const { lab, run: seeded } = seed(true)
+    let run = act(seeded, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml --dry-run=client -o json' }).run
+    run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+
+    expect(validateBehavioralRun(run, lab)).toBe(run)
+    const { lab: oldLab, run: oldRun } = seed(false)
+    const dryRun = applyRunAction(oldRun, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml --dry-run=client -o json' }, oldLab)
+    expect(dryRun.lines).toContainEqual(expect.objectContaining({ kind: 'err', text: expect.stringContaining("field 'resources'") }))
+    const apply = applyRunAction(oldRun, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }, oldLab)
+    expect(apply.lines).toContainEqual(expect.objectContaining({ kind: 'err', text: expect.stringContaining("field 'resources'") }))
   })
 })

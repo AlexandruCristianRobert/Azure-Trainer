@@ -136,6 +136,7 @@ function validConfigIncident(runtime, run) {
 function validClusterState(state, run, lab, clusterId) {
   const connectivityEnabled = lab?.capabilities?.kubernetesConnectivity === true
   const probesEnabled = lab?.capabilities?.kubernetesProbes === true
+  const resourcesEnabled = lab?.capabilities?.kubernetesResources === true
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
@@ -169,7 +170,7 @@ function validClusterState(state, run, lab, clusterId) {
       ...(resource.type === undefined ? {} : { type: resource.type }),
       ...(resource.data === undefined ? {} : { data: resource.data }),
     }
-    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}) } }).diagnostics.length) return false
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments, kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
   if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false

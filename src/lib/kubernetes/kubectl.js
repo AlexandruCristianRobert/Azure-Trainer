@@ -78,7 +78,7 @@ function apply(run, selection, options, lab) {
   if (options.dryRun) {
     if (options.dryRun !== 'client' || !['json', 'yaml'].includes(options.output)) return response(run.sandbox, [err('Only --dry-run=client with -o json or -o yaml is supported.')])
     for (let i = 0; i < source.documents.length; i++) {
-      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true }, sourceLocation: source.locations[i] })
+      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: source.locations[i] })
       if (checked.diagnostics.length) return response(run.sandbox, [err(`Error: ${checked.diagnostics[0].message}`)])
     }
     const value = source.documents.length === 1 ? source.documents[0] : source.documents

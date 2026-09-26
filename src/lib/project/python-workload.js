@@ -31,9 +31,11 @@ export function parsePythonWorkload(files, manifest = {}) {
       continue
     }
     if (statement.name === 'AssignStatement') {
-      const parts = named(statement); const name = parts[0]?.name === 'VariableName' ? raw(parts[0], app) : null
+      const parts = named(statement); const variables = parts.filter(part => part.name === 'VariableName')
+      const name = variables.length === 1 ? raw(variables[0], app) : null
       const last = parts.at(-1); const value = last?.name === 'Number' && /^\d+$/.test(raw(last, app)) ? Number(raw(last, app)) : null
       if (name) assignments.set(name, [...(assignments.get(name) ?? []), { statement, value }])
+      if (variables.length !== 1 && variables.some(part => ['training_workload', 'work'].includes(raw(part, app)))) protectedWrites.push(statement)
       continue
     }
     if (statement.name === 'FunctionDefinition') {
@@ -63,6 +65,16 @@ export function parsePythonWorkload(files, manifest = {}) {
     diagnostics.push(diagnostic(app, work ?? tree.topNode, 'work() must directly return training_workload.process_batch with two module-level integer bindings.'))
   }
   const valuesByBinding = bindingNames.map(name => assignments.get(name) ?? [])
+  const protectedNames = new Set(['training_workload', 'work', ...bindingNames])
+  tree.iterate({ enter(cursor) {
+    const node = cursor.node
+    const mentionsProtectedName = kids(node).some(child => child.name === 'VariableName' && protectedNames.has(raw(child, app)))
+    if (node.name === 'ImportStatement' && raw(node, app).replace(/\s/g, '') !== 'importtraining_workload' && mentionsProtectedName) protectedWrites.push(node)
+    if (node.name === 'ForStatement' && mentionsProtectedName) protectedWrites.push(node)
+    if (node.name === 'DeleteStatement' && mentionsProtectedName) protectedWrites.push(node)
+    if (node.name === 'ClassDefinition' && mentionsProtectedName) protectedWrites.push(node)
+    if (node.name === 'FunctionDefinition' && mentionsProtectedName && (!work || raw(node, app) !== raw(work, app))) protectedWrites.push(node)
+  } })
   if (bindingNames.length === 2 && (valuesByBinding.some(entries => entries.length !== 1 || !Number.isInteger(entries[0].value))
     || bindingNames.some(name => writes.filter(item => item.target === name).length !== 1))) {
     diagnostics.push(diagnostic(app, work, 'The work-unit and scratch bindings must each be assigned once to integer literals.'))

@@ -44,6 +44,11 @@ describe('AKS Python local-work workload compiler', () => {
     ['a rewritten workload operation', files => ({ ...files, 'app.py': `${files['app.py']}\ntraining_workload.process_batch = other\n` })],
     ['a non-assignment workload update', files => ({ ...files, 'app.py': `${files['app.py']}\nWORK_UNITS += 1\n` })],
     ['a conditional workload reassignment', files => ({ ...files, 'app.py': `${files['app.py']}\nif True:\n    SCRATCH_MIB = 96\n` })],
+    ['a loop target that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nfor WORK_UNITS in (1,):\n    pass\n` })],
+    ['a from-import that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nfrom other import WORK_UNITS\n` })],
+    ['a class that shadows the workload module', files => ({ ...files, 'app.py': `${files['app.py']}\nclass training_workload:\n    pass\n` })],
+    ['a delete of a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\ndel WORK_UNITS\n` })],
+    ['a chained assignment that overwrites the workload module', files => ({ ...files, 'app.py': files['app.py'].replace('WORK_UNITS = 20', 'WORK_UNITS = training_workload = 20') })],
   ])('rejects %s even when matching source text is present', (_name, change) => {
     expect(parsePythonWorkload(change(RESOURCE_SOLUTION_FILES), RESOURCE_MANIFEST).diagnostics)
       .toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
