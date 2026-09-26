@@ -140,6 +140,7 @@ export const useLabRunStore = defineStore('labRun', {
         const session = createBehavioralSession({ lab, repository: nativeRepository,
           reduce: (run, action) => applyRunAction(run, action, lab), createAttemptId: attemptId })
         const context = { lab, repository: nativeRepository, session, generation, queue: Promise.resolve(), pending: 0, foregroundPending: 0,
+          queuedDraft: null,
           navigating: false, suppressEffects: false }
         behavioralContexts.set(storeKey(this), context)
         Object.assign(this, { labId, generation, behavioralRun: null, loading: true, running: false,
@@ -393,20 +394,29 @@ export const useLabRunStore = defineStore('labRun', {
       if (context.navigating) return Promise.reject(new LabEngineError('NAVIGATING', 'The Lab is changing.'))
       const generation = this.generation
       const attempt = context.session.snapshot().run?.attemptId
-      context.pending++
-      const foreground = action.type !== 'elapsed'
-      if (foreground) {
-        context.foregroundPending++
-        this.running = true
+      const foreground = action.type !== 'elapsed' && action.type !== 'draft'
+      if (action.type === 'draft' && context.queuedDraft && !context.queuedDraft.started
+        && context.queuedDraft.action.path === action.path) {
+        const queued = context.queuedDraft
+        queued.action = action
+        this.unsaved = true
+        return new Promise((resolve, reject) => queued.waiters.push({ resolve, reject }))
       }
+      const job = { action, started: false, waiters: action.type === 'draft' ? [] : null }
+      if (action.type === 'draft') context.queuedDraft = job
+      else context.queuedDraft = null
+      context.pending++
+      if (foreground) { context.foregroundPending++; this.running = true }
       this.unsaved = true
       const operation = context.queue.catch(() => {}).then(async () => {
+        job.started = true
+        if (context.queuedDraft === job) context.queuedDraft = null
         if (generation !== this.generation || attempt !== context.session.snapshot().run?.attemptId) return null
         try {
-          const settled = await context.session.dispatch(action)
+          const settled = await context.session.dispatch(job.action)
           if (generation !== this.generation || !settled) return null
           projectBehavioral(this, settled)
-          deliverBehavioralEffects(this, context, settled, { preserveDiagnostics: action.type === 'elapsed' })
+          deliverBehavioralEffects(this, context, settled, { preserveDiagnostics: job.action.type === 'elapsed' })
           if (!this.completedAt && evaluateLab(context.lab, toRaw(this.behavioralRun)).isComplete) await this.completeBehavioral()
           return settled
         } catch (error) {
@@ -422,6 +432,12 @@ export const useLabRunStore = defineStore('labRun', {
         }
       })
       context.queue = operation
+      if (job.waiters) {
+        const promise = new Promise((resolve, reject) => job.waiters.push({ resolve, reject }))
+        operation.then((value) => job.waiters.forEach(({ resolve }) => resolve(value)),
+          (error) => job.waiters.forEach(({ reject }) => reject(error)))
+        return promise
+      }
       return operation
     },
   },
