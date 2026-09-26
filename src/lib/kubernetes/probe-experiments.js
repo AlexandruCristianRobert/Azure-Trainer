@@ -155,15 +155,19 @@ function assess(state, receipt) {
     && containers.every(item => item.restartCount === 0) && withdrew?.atMs <= faultAt + 4_000 && reentered?.atMs <= clearAt + 5_000
   }
   if (scenarioType(receipt) === 'hang') {
-    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const faultedUid = receipt.podUids[0]
+    const events = (state.health.events ?? []).filter(item => item.podUid === faultedUid)
     const hangAt = receipt.baselineReadyAtMs + 5_000
+    const withdrew = events.find(item => item.type === 'readiness-transition' && item.ready === false && item.atMs >= hangAt)
     const termination = events.find(item => item.type === 'restart-scheduled' && item.probeType === 'liveness' && item.atMs >= hangAt)
     const replacement = receipt.summary.restartReceipts.find(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
-      && receipt.podUids.includes(item.podUid) && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
-    return !!termination && termination.terminatedAtMs <= hangAt + 30_000 && !!replacement && replacement.atMs <= hangAt + 90_000
-    && receipt.podUids.some(uid => state.health.containers[uid]?.containerId !== receipt.containerIds[uid])
+      && item.podUid === faultedUid && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
+    const reentered = events.find(item => item.type === 'readiness-transition' && item.ready === true && replacement && item.atMs >= replacement.atMs)
+    return !!withdrew && withdrew.atMs <= hangAt + 4_000 && !!termination && termination.atMs <= hangAt + 30_000
+    && !!replacement && !!reentered && reentered.atMs <= hangAt + 90_000
+    && state.health.containers[faultedUid]?.containerId !== receipt.containerIds[faultedUid]
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
-      && item.response?.body?.sources?.includes('training-backups'))
+      && item.response?.route?.podUid === faultedUid && item.response?.body?.sources?.includes('training-backups'))
   }
   const kind = faultType(receipt.script)
   if (kind === 'ai-coupling') return receipt.summary.restartReceipts.some(item => item.cause === 'probe'
@@ -173,9 +177,18 @@ function assess(state, receipt) {
     && receipt.samples.some(item => item.second === 10 && item.response?.status === 200)
     && receipt.samples.some(item => item.second === 12 && item.response?.status === 503)
     && receipt.samples.some(item => item.second === 40 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
-  if (kind === 'database') return allReady
-    && receipt.samples.some(item => item.second === 10 && (item.response?.status === 503 || item.response?.transport?.reason === 'NO_READY_ENDPOINTS'))
-    && receipt.samples.some(item => item.second === 30 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
+  if (kind === 'database') {
+    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const faultAt = receipt.baselineReadyAtMs + 5_000
+    const clearAt = receipt.baselineReadyAtMs + 25_000
+    const withdrew = receipt.podUids.every(uid => events.some(item => item.type === 'readiness-transition' && item.podUid === uid
+      && item.ready === false && item.atMs >= faultAt && item.atMs <= faultAt + 4_000))
+    const reentered = receipt.podUids.every(uid => events.some(item => item.type === 'readiness-transition' && item.podUid === uid
+      && item.ready === true && item.atMs >= clearAt && item.atMs <= clearAt + 5_000))
+    return allReady && withdrew && reentered && containers.every(item => item.restartCount === 0)
+      && receipt.samples.some(item => item.second === 10 && item.readyBackendCount === 0 && item.response?.transport?.reason === 'NO_READY_ENDPOINTS')
+      && receipt.samples.some(item => item.second === 30 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
+  }
   return allReady && receipt.samples.length > 0
 }
 
