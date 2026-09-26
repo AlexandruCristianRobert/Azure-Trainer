@@ -77,4 +77,13 @@ describe('AKS probe experiment runtime cleanup', () => {
     const complete = advanceHealth(active, lab, 50)
     expect(complete.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1).outcome).toBe('passed')
   })
+
+  it('accepts a fast liveness recovery that exits before the first client sample', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0, probeOverrides: { livenessProbe: { periodSeconds: 1, failureThreshold: 1, timeoutSeconds: 1 } } })
+    const active = act(seeded.run, seeded.lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
+    const complete = advanceHealth(active, seeded.lab, 100)
+    const receipt = complete.runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1)
+    expect(receipt.summary.facts.livenessTimeoutAt).toBeGreaterThanOrEqual(receipt.baselineReadyAtMs + 5_000)
+    expect(receipt.outcome).toBe('passed')
+  })
 })

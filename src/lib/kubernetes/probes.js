@@ -133,6 +133,7 @@ function complete(state, container, pod, appSpec, type, nowMs) {
   }
   if ((type === 'startup' || type === 'liveness') && !success && item.failures >= probe.failureThreshold) {
     scheduleProbeRestart(container, pod, type, nowMs)
+    if (wasReady && !container.ready) recordHealthEvent(state, { type: 'readiness-transition', atMs: nowMs, podUid: pod.metadata.uid, ready: false })
     if (container.terminatedAtMs !== null) recordHealthEvent(state, { type: 'restart-scheduled', atMs: nowMs, podUid: pod.metadata.uid,
       probeType: type, terminatedAtMs: container.terminatedAtMs, restartAtMs: container.restartAtMs })
   }

@@ -129,13 +129,15 @@ function faultType(script) {
 }
 
 function updateExperimentFacts(state, experiment) {
-  const facts = experiment.summary.facts ??= { firstStartupSuccessAt: null, earlyGatedCheck: false, readiness: {}, restartSchedules: [] }
+  const facts = experiment.summary.facts ??= { firstStartupSuccessAt: null, earlyGatedCheck: false, livenessTimeoutAt: null, readiness: {}, restartSchedules: [] }
   for (const event of state.health.events ?? []) {
     if (!experiment.podUids.includes(event.podUid) || event.atMs < experiment.startedAtMs) continue
     if (event.type === 'probe-result' && event.probeType === 'startup' && event.success
       && (facts.firstStartupSuccessAt === null || event.atMs < facts.firstStartupSuccessAt)) facts.firstStartupSuccessAt = event.atMs
     if (event.type === 'probe-start' && ['readiness', 'liveness'].includes(event.probeType)
       && (facts.firstStartupSuccessAt === null || event.atMs < facts.firstStartupSuccessAt)) facts.earlyGatedCheck = true
+    if (event.type === 'probe-start' && event.probeType === 'liveness' && event.timeout === true
+      && (facts.livenessTimeoutAt === null || event.atMs < facts.livenessTimeoutAt)) facts.livenessTimeoutAt = event.atMs
     if (event.type === 'readiness-transition') {
       const item = facts.readiness[event.podUid] ??= { withdrawnAt: null, reenteredAt: null }
       if (event.ready === false && item.withdrawnAt === null) item.withdrawnAt = event.atMs
@@ -181,7 +183,7 @@ function assess(state, receipt) {
   }
   if (scenarioType(receipt) === 'hang') {
     const faultedUid = receipt.podUids[0]
-    const facts = receipt.summary.facts ?? { readiness: {}, restartSchedules: [] }
+    const facts = receipt.summary.facts ?? { readiness: {}, restartSchedules: [], livenessTimeoutAt: null }
     const hangAt = receipt.baselineReadyAtMs + 5_000
     const readiness = facts.readiness[faultedUid] ?? {}
     const withdrew = readiness.withdrawnAt >= hangAt ? { atMs: readiness.withdrawnAt } : null
@@ -192,7 +194,7 @@ function assess(state, receipt) {
     return !!withdrew && withdrew.atMs <= hangAt + 4_000 && !!termination && termination.atMs <= hangAt + 30_000
     && !!replacement && !!reentered && reentered.atMs <= hangAt + 90_000
     && state.health.containers[faultedUid]?.containerId !== receipt.containerIds[faultedUid]
-    && receipt.samples.some(item => item.faultedPodResponse?.transport?.reason === 'PROCESS_TIMEOUT')
+    && Number.isFinite(facts.livenessTimeoutAt) && facts.livenessTimeoutAt >= hangAt
     && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds && item.response?.status === 200
       && item.response?.route?.podUid === faultedUid && item.response?.body?.sources?.includes('training-backups'))
   }
