@@ -192,7 +192,8 @@ export function startProbeExperiment(input, scenarioId, lab) {
   const diagnosticStartup = scenarioId.includes('short-start')
   const configuredWarmup = lab?.healthFixture?.maximumWarmupSeconds
   const warmupSeconds = diagnosticStartup ? 60 : Number.isInteger(configuredWarmup) ? configuredWarmup : durationSeconds
-  const warmupDeadlineAtMs = run.runtime.simTimeMs + Math.min(durationSeconds, warmupSeconds) * 1000
+  const warmupDeadlineAtMs = run.runtime.simTimeMs + (Number.isInteger(configuredWarmup) || diagnosticStartup
+    ? warmupSeconds : Math.min(durationSeconds, warmupSeconds)) * 1000
   state.health.experiment = { version: 1, scenarioId, scenarioVersion: 1, clusterId, target: clone(scenario.target),
     deploymentUid: state.resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.uid ?? null,
     fingerprint: fingerprint(run, scenario.target), podUids,
@@ -222,8 +223,10 @@ export function observeProbeExperiment(input, atMs, lab) {
       // observation window. Authored Labs declare an explicit warmup cap.
       if (Number.isInteger(relativeFinishSeconds) && (Number.isInteger(lab?.healthFixture?.maximumWarmupSeconds)
         || experiment.scenarioId !== 'coldStartup')) {
+        const scriptedDeadline = experiment.baselineReadyAtMs + relativeFinishSeconds * 1000
         const durationDeadline = experiment.startedAtMs + (lab?.scenarios?.[experiment.scenarioId]?.durationSeconds ?? 300) * 1000
-        experiment.endsAtMs = Math.min(durationDeadline, experiment.baselineReadyAtMs + relativeFinishSeconds * 1000)
+        experiment.endsAtMs = Number.isInteger(lab?.healthFixture?.maximumWarmupSeconds)
+          ? scriptedDeadline : Math.min(durationDeadline, scriptedDeadline)
       }
     }
     run = captureSample(run, clusterId, experiment, run.runtime.simTimeMs)

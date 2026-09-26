@@ -19,7 +19,7 @@ describe('AKS probe experiment runtime cleanup', () => {
 
   it('uses the Lab warmup cap before starting a relative experiment window', () => {
     const seeded = seedHealthTest({ startupSeconds: 42, probeOverrides: { startupProbe: { failureThreshold: 10 } } })
-    const scenario = { ...seeded.lab.scenarios.coldStartup, durationSeconds: 60 }
+    const scenario = { ...seeded.lab.scenarios.coldStartup, durationSeconds: 30 }
     const lab = { ...seeded.lab, healthFixture: { initializationSeconds: 42, maximumWarmupSeconds: 60 },
       scenarios: { ...seeded.lab.scenarios, coldStartup: scenario } }
     const active = act(seeded.run, lab, { type: 'aks-probe-start', scenarioId: 'coldStartup' }).run
@@ -34,5 +34,14 @@ describe('AKS probe experiment runtime cleanup', () => {
       scenarios: { ...seeded.lab.scenarios, processHang: { ...seeded.lab.scenarios.processHang, durationSeconds: 150 } } }
     const active = act(seeded.run, lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
     expect(advanceHealth(active, lab, 60).runtime.kubernetes.clusters[seeded.clusterId].health.receipts.at(-1)).toMatchObject({ outcome: 'failed', endedAtMs: 60_000 })
+  })
+
+  it('runs the full hang window after a baseline reached at the warmup boundary', () => {
+    const seeded = seedHealthTest({ startupSeconds: 59, probeOverrides: { startupProbe: { initialDelaySeconds: 59, failureThreshold: 1 } } })
+    const lab = { ...seeded.lab, healthFixture: { initializationSeconds: 59, maximumWarmupSeconds: 60 },
+      scenarios: { ...seeded.lab.scenarios, processHang: { ...seeded.lab.scenarios.processHang, durationSeconds: 150 } } }
+    const active = act(seeded.run, lab, { type: 'aks-probe-start', scenarioId: 'processHang' }).run
+    const atBaseline = advanceHealth(active, lab, 59)
+    expect(atBaseline.runtime.kubernetes.clusters[seeded.clusterId].health.experiment.endsAtMs).toBe(159_000)
   })
 })
