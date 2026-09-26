@@ -195,4 +195,24 @@ describe('AKS CPU HPA', () => {
     expect(Object.keys(next.resourcesRuntime.hpa)).toHaveLength(2)
     expect(next.resourcesRuntime.receipts.filter(item => item.kind === 'hpa-scale').map(item => item.controllerUid)).toEqual(expect.arrayContaining(Object.keys(next.resourcesRuntime.hpa)))
   })
+
+  it('holds an upward proposal when missing-ready adjustment reverses its direction', () => {
+    const c = seedResourceTest({ replicas: 4 }); let run = advanceResources(c.run, c.lab, 30); run = applyHpa({ ...c, run })
+    const state = run.runtime.kubernetes.clusters[c.clusterId]; const hpa = Object.values(state.resources).find(item => item.kind === 'HorizontalPodAutoscaler'); const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
+    for (const pod of pods) state.resourcesRuntime.metrics[pod.metadata.uid] = []
+    state.resourcesRuntime.metrics[pods[0].metadata.uid] = [{ containerId: state.health.containers[pods[0].metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 312.5, memoryPeakBytes: 0, readySinceMs: 0 }]
+    run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(4)
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resourcesRuntime.hpa[hpa.metadata.uid].lastDecision.adjustedDesired).toBe(4)
+  })
+
+  it('reports a steady target at max bound as not ScalingLimited', () => {
+    const c = seedResourceTest({ replicas: 4 }); let run = advanceResources(c.run, c.lab, 30); run = applyHpa({ ...c, run })
+    const state = run.runtime.kubernetes.clusters[c.clusterId];
+    for (const pod of Object.values(state.resources).filter(item => item.kind === 'Pod')) state.resourcesRuntime.metrics[pod.metadata.uid] = [{ containerId: state.health.containers[pod.metadata.uid].containerId, windowStartMs: 15_000, windowEndMs: 30_000, cpuAverageM: 150, memoryPeakBytes: 0, readySinceMs: 0 }]
+    run = reconcileHpa(run, c.clusterId, 30_000, c.lab)
+    const limited = Object.values(run.runtime.kubernetes.clusters[c.clusterId].resources).find(item => item.kind === 'HorizontalPodAutoscaler').status.conditions.find(item => item.type === 'ScalingLimited')
+    expect(run.runtime.kubernetes.clusters[c.clusterId].resources['Deployment/assistant/assistant'].spec.replicas).toBe(4)
+    expect(limited).toMatchObject({ status: 'False', reason: 'DesiredWithinRange' })
+  })
 })
