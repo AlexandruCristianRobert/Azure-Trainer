@@ -17,7 +17,7 @@ export function validateHpa(input, { namespace, deployments = [] } = {}) {
   if (meta.namespace !== undefined && meta.namespace !== namespace) return fail('KUBE_NAMESPACE_MISMATCH', 'Manifest namespace does not match the selected namespace.')
   if (!spec || typeof spec !== 'object' || Object.keys(spec).some(key => !['scaleTargetRef', 'minReplicas', 'maxReplicas', 'metrics', 'behavior'].includes(key))) return fail('UNSUPPORTED_FIELD', 'The HPA spec contains an unsupported field.')
   const ref = spec.scaleTargetRef
-  if (!ref || typeof ref !== 'object' || Object.keys(ref).some(key => !['apiVersion', 'kind', 'name'].includes(key)) || ref.apiVersion !== 'apps/v1' || ref.kind !== 'Deployment' || typeof ref.name !== 'string' || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(ref.name)) return fail('INVALID_HPA_TARGET', 'HPA must target an apps/v1 Deployment in its namespace.')
+  if (!ref || typeof ref !== 'object' || Object.keys(ref).some(key => !['apiVersion', 'kind', 'name'].includes(key)) || ref.apiVersion !== 'apps/v1' || ref.kind !== 'Deployment' || typeof ref.name !== 'string' || ref.name.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(ref.name)) return fail('INVALID_HPA_TARGET', 'HPA must target an apps/v1 Deployment in its namespace.')
   if (!Number.isInteger(spec.minReplicas) || !Number.isInteger(spec.maxReplicas) || spec.minReplicas < 1 || spec.maxReplicas > 6 || spec.minReplicas > spec.maxReplicas) return fail('INVALID_HPA_REPLICAS', 'HPA minReplicas and maxReplicas must be from 1 through 6.')
   if (!Array.isArray(spec.metrics) || spec.metrics.length !== 1) return fail('INVALID_HPA_METRICS', 'Exactly one CPU utilization Resource metric is required.')
   const metric = spec.metrics[0]; const resource = metric?.resource; const target = resource?.target
@@ -79,7 +79,7 @@ export function reconcileHpa(input, clusterId, atMs, lab) {
       adjustedDesired = proposal
       desired = proposal; reason = missing ? 'MissingMetricsAdjusted' : 'MetricDesired'
     }
-    const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const outsideBounds = current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas; const boundDriven = outsideBounds
+    const preClampDesired = desired; const bounded = Math.min(hpa.spec.maxReplicas, Math.max(hpa.spec.minReplicas, desired)); const outsideBounds = current < hpa.spec.minReplicas || current > hpa.spec.maxReplicas; const boundDriven = outsideBounds
     desired = bounded
     if (desired > current) desired = Math.min(desired, current + Math.max(4, current))
     const window = hpa.spec.behavior?.scaleDown?.stabilizationWindowSeconds ?? 300
@@ -89,7 +89,7 @@ export function reconcileHpa(input, clusterId, atMs, lab) {
     if (desired !== current) run = setDeploymentReplicas(run, { clusterId, namespace: hpa.metadata.namespace, deploymentName: ref.name }, desired, { cause: 'hpa', controllerUid: hpa.metadata.uid, atMs, lab }).run
     const currentHpa = run.runtime.kubernetes.clusters[clusterId].resources[kubeObjectKey('HorizontalPodAutoscaler', hpa.metadata.namespace, hpa.metadata.name)]
     const currentController = run.runtime.kubernetes.clusters[clusterId].resourcesRuntime.hpa[hpa.metadata.uid]
-    const limited = bounded !== (rawDesired ?? current) || outsideBounds
+    const limited = bounded !== preClampDesired || outsideBounds
     const limitReason = !limited ? 'DesiredWithinRange' : outsideBounds ? 'CurrentReplicasOutsideRange' : bounded === hpa.spec.maxReplicas ? 'TooManyReplicas' : bounded === hpa.spec.minReplicas ? 'TooFewReplicas' : 'DesiredWithinRange'
     currentHpa.status = { currentReplicas: current, desiredReplicas: desired, currentMetrics: observed === null ? [] : [{ type: 'Resource', resource: { name: 'cpu', current: { averageUtilization: Math.round(observed) } } }], lastScaleTime: desired !== current ? atMs : (currentHpa.status?.lastScaleTime ?? null), conditions: [condition('AbleToScale', true, 'ReadyForNewScale', 'The controller can scale the target.'), condition('ScalingActive', active, active ? 'ValidMetricFound' : reason, active ? 'A CPU metric is available.' : 'No usable CPU metric is available.'), condition('ScalingLimited', limited, limitReason, limited ? 'Replica bounds constrained the recommendation.' : 'The desired count is within range.')] }
     currentController.lastDecision = { reason: boundDriven ? 'bound-driven' : (desired !== current ? 'metric-driven' : reason), rawDesired, adjustedDesired, stabilizedDesired: desired, observedUtilization: observed, missingSamples: missing, unreadySamples: unready, atMs, beforeStabilization }
