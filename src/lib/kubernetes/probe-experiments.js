@@ -128,6 +128,25 @@ function faultType(script) {
   return null
 }
 
+function updateExperimentFacts(state, experiment) {
+  const facts = experiment.summary.facts ??= { firstStartupSuccessAt: null, earlyGatedCheck: false, readiness: {}, restartSchedules: [] }
+  for (const event of state.health.events ?? []) {
+    if (!experiment.podUids.includes(event.podUid) || event.atMs < experiment.startedAtMs) continue
+    if (event.type === 'probe-result' && event.probeType === 'startup' && event.success
+      && (facts.firstStartupSuccessAt === null || event.atMs < facts.firstStartupSuccessAt)) facts.firstStartupSuccessAt = event.atMs
+    if (event.type === 'probe-start' && ['readiness', 'liveness'].includes(event.probeType)
+      && (facts.firstStartupSuccessAt === null || event.atMs < facts.firstStartupSuccessAt)) facts.earlyGatedCheck = true
+    if (event.type === 'readiness-transition') {
+      const item = facts.readiness[event.podUid] ??= { withdrawnAt: null, reenteredAt: null }
+      if (event.ready === false && item.withdrawnAt === null) item.withdrawnAt = event.atMs
+      if (event.ready === true) item.reenteredAt = event.atMs
+    }
+    if (event.type === 'restart-scheduled' && !facts.restartSchedules.some(item => item.podUid === event.podUid && item.atMs === event.atMs))
+      facts.restartSchedules.push({ podUid: event.podUid, atMs: event.atMs, probeType: event.probeType, terminatedAtMs: event.terminatedAtMs, restartAtMs: event.restartAtMs })
+  }
+  facts.restartSchedules = facts.restartSchedules.slice(-8)
+}
+
 function assess(state, receipt) {
   const containers = receipt.podUids.map(uid => state.health.containers[uid]).filter(Boolean)
   const allReady = containers.length === receipt.podUids.length && containers.every(item => item.ready)
@@ -142,20 +161,19 @@ function assess(state, receipt) {
       && !events.some(item => item.probeType === 'readiness')
   }
   if (scenarioType(receipt) === 'cold') {
-    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
-    const firstStartupSuccess = Math.min(...events.filter(item => item.type === 'probe-result' && item.probeType === 'startup' && item.success).map(item => item.atMs))
+    const facts = receipt.summary.facts ?? {}
+    const firstStartupSuccess = facts.firstStartupSuccessAt
     const initializedAt = receipt.startedAtMs + (receipt.initializationSeconds ?? receipt.script.initializationSeconds ?? 0) * 1000
-    const earlyGatedCheck = events.some(item => item.type === 'probe-start' && ['readiness', 'liveness'].includes(item.probeType)
-      && (!Number.isFinite(firstStartupSuccess) || item.atMs < firstStartupSuccess))
     return allReady && healthyChecks && containers.every(item => item.restartCount === 0)
-      && Number.isFinite(firstStartupSuccess) && firstStartupSuccess >= initializedAt && !earlyGatedCheck
+      && Number.isFinite(firstStartupSuccess) && firstStartupSuccess >= initializedAt && facts.earlyGatedCheck === false
   }
   if (scenarioType(receipt) === 'readiness') {
-    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const facts = receipt.summary.facts ?? { readiness: {} }
     const faultAt = receipt.baselineReadyAtMs + 5_000
     const clearAt = receipt.baselineReadyAtMs + 20_000
-    const withdrew = events.find(item => item.type === 'readiness-transition' && item.ready === false && item.atMs >= faultAt)
-    const reentered = events.find(item => item.type === 'readiness-transition' && item.ready === true && item.atMs >= clearAt)
+    const stateFacts = facts.readiness[receipt.podUids[0]] ?? {}
+    const withdrew = stateFacts.withdrawnAt >= faultAt ? { atMs: stateFacts.withdrawnAt } : null
+    const reentered = stateFacts.reenteredAt >= clearAt ? { atMs: stateFacts.reenteredAt } : null
     return allReady && receipt.samples.length >= 2
     && receipt.samples.some(item => item.readyBackendCount < receipt.podUids.length && item.response?.route?.podUid !== receipt.podUids[0])
     && receipt.samples.some(item => item.second === 25 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
@@ -163,13 +181,14 @@ function assess(state, receipt) {
   }
   if (scenarioType(receipt) === 'hang') {
     const faultedUid = receipt.podUids[0]
-    const events = (state.health.events ?? []).filter(item => item.podUid === faultedUid)
+    const facts = receipt.summary.facts ?? { readiness: {}, restartSchedules: [] }
     const hangAt = receipt.baselineReadyAtMs + 5_000
-    const withdrew = events.find(item => item.type === 'readiness-transition' && item.ready === false && item.atMs >= hangAt)
-    const termination = events.find(item => item.type === 'restart-scheduled' && item.probeType === 'liveness' && item.atMs >= hangAt)
+    const readiness = facts.readiness[faultedUid] ?? {}
+    const withdrew = readiness.withdrawnAt >= hangAt ? { atMs: readiness.withdrawnAt } : null
+    const termination = facts.restartSchedules.find(item => item.probeType === 'liveness' && item.podUid === faultedUid && item.atMs >= hangAt)
     const replacement = receipt.summary.restartReceipts.find(item => item.cause === 'probe' && item.probeType === 'LivenessProbeFailed'
       && item.podUid === faultedUid && item.atMs >= receipt.startedAtMs && item.oldContainerId !== item.newContainerId)
-    const reentered = events.find(item => item.type === 'readiness-transition' && item.ready === true && replacement && item.atMs >= replacement.atMs)
+    const reentered = readiness.reenteredAt >= replacement?.atMs ? { atMs: readiness.reenteredAt } : null
     return !!withdrew && withdrew.atMs <= hangAt + 4_000 && !!termination && termination.atMs <= hangAt + 30_000
     && !!replacement && !!reentered && reentered.atMs <= hangAt + 90_000
     && state.health.containers[faultedUid]?.containerId !== receipt.containerIds[faultedUid]
@@ -186,13 +205,11 @@ function assess(state, receipt) {
     && receipt.samples.some(item => item.second === 12 && item.response?.status === 503)
     && receipt.samples.some(item => item.second === 40 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
   if (kind === 'database') {
-    const events = (state.health.events ?? []).filter(item => receipt.podUids.includes(item.podUid))
+    const facts = receipt.summary.facts ?? { readiness: {} }
     const faultAt = receipt.baselineReadyAtMs + 5_000
     const clearAt = receipt.baselineReadyAtMs + 25_000
-    const withdrew = receipt.podUids.every(uid => events.some(item => item.type === 'readiness-transition' && item.podUid === uid
-      && item.ready === false && item.atMs >= faultAt && item.atMs <= faultAt + 4_000))
-    const reentered = receipt.podUids.every(uid => events.some(item => item.type === 'readiness-transition' && item.podUid === uid
-      && item.ready === true && item.atMs >= clearAt && item.atMs <= clearAt + 5_000))
+    const withdrew = receipt.podUids.every(uid => facts.readiness[uid]?.withdrawnAt >= faultAt && facts.readiness[uid].withdrawnAt <= faultAt + 4_000)
+    const reentered = receipt.podUids.every(uid => facts.readiness[uid]?.reenteredAt >= clearAt && facts.readiness[uid].reenteredAt <= clearAt + 5_000)
     return allReady && withdrew && reentered && containers.every(item => item.restartCount === 0)
       && receipt.samples.some(item => item.second === 10 && item.readyBackendCount === 0 && item.response?.transport?.reason === 'NO_READY_ENDPOINTS')
       && receipt.samples.some(item => item.second === 30 && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
@@ -264,6 +281,7 @@ export function observeProbeExperiment(input, atMs, lab) {
           ? scriptedDeadline : Math.min(durationDeadline, scriptedDeadline)
       }
     }
+    updateExperimentFacts(state, experiment)
     run = captureSample(run, clusterId, experiment, run.runtime.simTimeMs)
     state = run.runtime.kubernetes.clusters[clusterId]
     const current = state.health.experiment
