@@ -104,6 +104,15 @@ it('deletes a saved Deployment and its controller-owned Pods without deleting it
   expect(resources['Service/assistant/assistant']).toBeTruthy()
 })
 
+it('rejects deletion of required system namespaces without mutating the cluster', () => {
+  const { run, lab } = seedFoundation()
+  for (const name of ['default', 'kube-system', 'kube-public']) {
+    const result = applyRunAction(run, { type: 'command', line: `kubectl delete namespace ${name}` }, lab)
+    expect(result.lines.at(-1).text).toMatch(/protected/i)
+    expect(result.run.runtime.kubernetes).toEqual(run.runtime.kubernetes)
+  }
+})
+
 it('does not leak case-sensitive namespaces or contexts', () => {
   const { run, lab } = seedFoundation()
   expect(() => act(run, lab, { type: 'command', line: 'kubectl get pods -n Assistant' })).toThrow(/Namespace 'Assistant'/)

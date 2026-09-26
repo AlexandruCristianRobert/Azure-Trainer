@@ -17,6 +17,23 @@ describe('AKS probe experiment runtime cleanup', () => {
     expect(advanceHealth(cancelled, seeded.lab, 10).runtime.kubernetes.clusters[seeded.clusterId].health.experiment).toBeNull()
   })
 
+  it('records cancellation and clears probe faults when a captured Pod is deleted', () => {
+    const seeded = seedHealthTest({ startupSeconds: 0 })
+    const active = act(advanceHealth(seeded.run, seeded.lab, 1), seeded.lab,
+      { type: 'aks-probe-start', scenarioId: 'temporaryAdmissionClosure' }).run
+    const faulted = advanceHealth(active, seeded.lab, 9)
+    const state = faulted.runtime.kubernetes.clusters[seeded.clusterId]
+    const target = state.resources[Object.keys(state.resources).find(key => state.resources[key].kind === 'Pod'
+      && state.resources[key].metadata.uid === state.health.experiment.podUids[0])]
+    expect(state.health.containers[target.metadata.uid].localFaults.admissionClosed).toBe(true)
+
+    const deleted = act(faulted, seeded.lab, { type: 'command', line: `kubectl delete pod ${target.metadata.name} -n assistant` }).run
+    const after = deleted.runtime.kubernetes.clusters[seeded.clusterId]
+    expect(after.health.experiment).toBeNull()
+    expect(after.health.receipts.at(-1)).toMatchObject({ scenarioId: 'temporaryAdmissionClosure', status: 'cancelled', reason: 'Captured experiment inputs changed.' })
+    expect(Object.values(after.health.containers).every(container => container.localFaults.admissionClosed === false && container.localFaults.hung === false)).toBe(true)
+  })
+
   it('uses the Lab warmup cap before starting a relative experiment window', () => {
     const seeded = seedHealthTest({ startupSeconds: 42, probeOverrides: { startupProbe: { failureThreshold: 10 } } })
     const scenario = { ...seeded.lab.scenarios.coldStartup, durationSeconds: 30 }

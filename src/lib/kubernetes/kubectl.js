@@ -172,6 +172,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     }
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
     if (!['Pod', 'Deployment', 'Service', 'Namespace'].includes(kind) || !name || parsed.positional.length !== 2 || parsed.values.allNamespaces || parsed.values.output) return response(sandbox, [err('delete requires pod, deployment, service, or namespace NAME.')])
+    if (kind === 'Namespace' && ['default', 'kube-system', 'kube-public'].includes(name)) return response(sandbox, [err(`Namespace '${name}' is protected and cannot be deleted.`)])
     if (kind !== 'Namespace' && namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const next = structuredClone(run), state = next.runtime.kubernetes.clusters[selection.clusterId]
     const item = state.resources[kubeObjectKey(kind, kind === 'Namespace' ? '' : selection.namespace, name)]

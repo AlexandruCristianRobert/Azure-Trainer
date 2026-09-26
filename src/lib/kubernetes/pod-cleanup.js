@@ -5,8 +5,6 @@ export function clearPodState(state, uid) {
   delete state.resourcesRuntime?.usage?.[uid]
   delete state.resourcesRuntime?.terminationDue?.[uid]
   delete state.health?.containers?.[uid]
-  if (state.health?.experiment?.podUids?.includes(uid)) state.health.experiment = null
-  if (state.resourcesRuntime?.experiment?.podUids?.includes(uid)) state.resourcesRuntime.experiment = null
 }
 
 export function deleteCascade(state, roots, namespace = null) {
