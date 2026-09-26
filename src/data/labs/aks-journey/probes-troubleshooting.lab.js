@@ -177,11 +177,11 @@ function realHangRecovered(context) {
   const restarted = receipt?.summary.restartReceipts.some(item => item.probeType === 'LivenessProbeFailed'
     && receipt.podUids.includes(item.podUid) && item.oldContainerId !== item.newContainerId
     && state.health.containers[item.podUid]?.containerId === item.newContainerId)
+  const timeoutAt = receipt?.summary?.facts?.livenessTimeoutAt
   return !!receipt && currentReadyPods(context)
     && restarted && receipt.samples.some(item => item.second === receipt.script.finishAfterStartSeconds
       && item.response?.status === 200 && item.response?.body?.sources?.includes('training-backups'))
-    && receipt.samples.some(item => receipt.podUids.includes(item.faultedPodResponse?.podUid)
-      && item.faultedPodResponse?.transport?.reason === 'PROCESS_TIMEOUT')
+    && Number.isFinite(timeoutAt) && timeoutAt >= receipt.baselineReadyAtMs + 5_000
 }
 
 function finalAnswer(context) {

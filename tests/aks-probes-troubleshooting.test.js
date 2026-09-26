@@ -76,8 +76,7 @@ describe('AKS probe restart-loop troubleshooting Lab 14', () => {
     expect(receipt(run, 'trouble-probe-ai-coupling')).toMatchObject({ outcome: 'passed' })
     expect(receipt(run, 'trouble-probe-ai-tolerated')).toMatchObject({ outcome: 'passed' })
     expect(receipt(run, 'trouble-probe-real-hang')).toMatchObject({ outcome: 'passed' })
-    expect(receipt(run, 'trouble-probe-real-hang').samples.some(item =>
-      item.faultedPodResponse?.transport?.reason === 'PROCESS_TIMEOUT')).toBe(true)
+    expect(Number.isFinite(receipt(run, 'trouble-probe-real-hang').summary.facts.livenessTimeoutAt)).toBe(true)
     const clusterId = run.sandbox.aksClusters[0].id
     const state = run.runtime.kubernetes.clusters[clusterId]
     expect(getDeploymentPods(run, clusterId, 'assistant', 'assistant')).toHaveLength(2)
