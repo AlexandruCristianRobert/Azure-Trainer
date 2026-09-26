@@ -20,7 +20,9 @@ const steps = computed(() => typeof props.task.solution === 'string' ? null : pr
 const stepText = (step) => {
   if (step.kind === 'command') return step.resolver && step.instruction ? `${step.instruction}\n${step.line ?? ''}`.trim() : step.line ?? step.instruction ?? ''
   if (step.kind === 'file') return `${step.path}\n${step.content}`
-  if (step.kind === 'inspect' || step.kind === 'scenario') return step.instruction ?? step.command ?? ''
+  if (step.kind === 'scenario') return step.instruction ?? step.command ?? `Run ${step.scenarioId} in Experiments.`
+  if (step.kind === 'advance') return step.instruction ?? `Advance the AKS simulation by ${step.seconds} seconds using the experiment controls.`
+  if (step.kind === 'inspect') return step.instruction ?? step.command ?? 'Inspect the current experiment results and workload state.'
   return `Send ${step.request.method} ${step.request.path} to ${step.request.appId.split('/').at(-1)}. Expect HTTP ${step.expected?.status}.`
 }
 const stepLabel = (step) => step.kind === 'command' ? 'Cloud Shell' : step.kind === 'file' ? `Files · ${step.path}`
