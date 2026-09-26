@@ -15,7 +15,7 @@ const binderNames = (node, text) => {
   if (node.name === 'DeleteStatement') return children.slice(1).flatMap(child => variableNames(child, text))
   if (node.name === 'ImportStatement') return variableNames(node, text)
   if (node.name === 'FunctionDefinition' || node.name === 'ClassDefinition') return variableNames(children.find(child => child.name === 'VariableName'), text)
-  if (node.name === 'GlobalStatement') return variableNames(node, text)
+  if (node.name === 'ScopeStatement') return variableNames(node, text)
   return []
 }
 const diagnostic = (text, node, message, code = 'PYTHON_UNSUPPORTED') => {
@@ -92,8 +92,9 @@ export function parsePythonWorkload(files, manifest = {}) {
   const allowedAssignments = valuesByBinding.flatMap(entries => entries.map(entry => entry.statement))
   tree.iterate({ enter(cursor) {
     const node = cursor.node
-    if (!isModuleBinding(node)) return
     const bindsProtectedName = binderNames(node, app).some(name => protectedNames.has(name))
+    if (node.name === 'ScopeStatement' && bindsProtectedName) { protectedWrites.push(node); return }
+    if (!isModuleBinding(node)) return
     const allowed = sameNode(node, imports[0]) || sameNode(node, work) || allowedAssignments.some(item => sameNode(node, item))
     if (bindsProtectedName && !allowed) protectedWrites.push(node)
   } })

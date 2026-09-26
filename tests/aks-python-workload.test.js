@@ -59,6 +59,8 @@ describe('AKS Python local-work workload compiler', () => {
     ['a with target that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nwith helper() as WORK_UNITS:\n    pass\n` })],
     ['an except target that shadows a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\ntry:\n    pass\nexcept Exception as WORK_UNITS:\n    pass\n` })],
     ['a walrus assignment of a workload binding', files => ({ ...files, 'app.py': `${files['app.py']}\nif (WORK_UNITS := 1):\n    pass\n` })],
+    ['a global workload binding declared inside a function', files => ({ ...files, 'app.py': `${files['app.py']}\ndef helper():\n    global WORK_UNITS\n    if (WORK_UNITS := 1):\n        return WORK_UNITS\nhelper()\n` })],
+    ['a global workload module declared inside a function', files => ({ ...files, 'app.py': `${files['app.py']}\ndef helper():\n    global training_workload\n    training_workload = object()\nhelper()\n` })],
   ])('rejects %s even when matching source text is present', (_name, change) => {
     expect(parsePythonWorkload(change(RESOURCE_SOLUTION_FILES), RESOURCE_MANIFEST).diagnostics)
       .toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' }))
