@@ -40,6 +40,7 @@ export const INTEGRATION_FIXTURES = freeze({
     'embedding-throttle-once': { stages: { embedding: [stage(40, undefined, 'THROTTLED', 150), stage(40)], postgres: [stage(30)], answer: [stage(50)] } },
     'postgres-unavailable-once': { stages: { embedding: [stage(40)], postgres: [stage(30, undefined, 'UNAVAILABLE'), stage(30)], answer: [stage(50)] } },
     'answer-unavailable-always': { stages: { embedding: [stage(40)], postgres: [stage(30)], answer: [stage(50, undefined, 'UNAVAILABLE'), stage(50, undefined, 'UNAVAILABLE'), stage(50, undefined, 'UNAVAILABLE')] } },
+    'answer-wait-150ms': { stages: { embedding: [stage(40)], postgres: [stage(30)], answer: [stage(150)] } },
     'embedding-timeout-always': { stages: { embedding: [stage(500, undefined), stage(500, undefined), stage(500, undefined)], postgres: [stage(30)], answer: [stage(50)] } },
     'retry-after-too-long': { stages: { embedding: [stage(40, undefined, 'THROTTLED', 1500), stage(40)], postgres: [stage(30)], answer: [stage(50)] } },
   },

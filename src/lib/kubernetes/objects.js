@@ -19,7 +19,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
   if (!state) return { run, lines, diagnostics: [{ code: 'KUBE_CLUSTER_NOT_FOUND', message: 'The selected Kubernetes cluster is unavailable.' }] }
   const connectivity = state.connectivity
   if (lab?.capabilities?.kubernetesResources === true && !next.runtime.kubernetes.clusters[clusterId].resourcesRuntime) {
-    next.runtime.kubernetes.clusters[clusterId].resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {} }
+    next.runtime.kubernetes.clusters[clusterId].resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {}, accountedUntilMs: null }
   }
   if (connectivity) {
     const incoming = documents.filter(item => item?.kind === 'Service').filter(item => {

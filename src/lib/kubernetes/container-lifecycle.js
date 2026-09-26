@@ -36,13 +36,43 @@ export function scheduleProbeRestart(container, pod, type, nowMs) {
   container.restartReason = type === 'startup' ? 'StartupProbeFailed' : 'LivenessProbeFailed'
 }
 
+export function terminateForMemoryLimit(input, clusterId, podUid, atMs) {
+  const run = structuredClone(input)
+  const state = run.runtime?.kubernetes?.clusters?.[clusterId]
+  const container = state?.health?.containers?.[podUid]
+  const pod = Object.values(state?.resources ?? {}).find(item => item.kind === 'Pod' && item.metadata.uid === podUid)
+  if (!container || !pod || container.terminatedAtMs !== null || container.restartAtMs !== null) return run
+  if (atMs - container.startedAtMs >= 600_000) container.consecutiveRestarts = 0
+  const backoff = Math.min(10 * 2 ** container.consecutiveRestarts, 300) * 1000
+  container.ready = false
+  container.terminatedAtMs = atMs
+  container.restartAtMs = atMs + backoff
+  container.restartDelayMs = backoff
+  container.restartReason = 'OOMKilled'
+  container.restartBlockReason = null
+  for (const check of Object.values(container.checks)) if (check) { check.nextAtMs = null; check.pending = null }
+  const ready = (pod.status.conditions ?? []).filter(item => item.type !== 'Ready' && item.type !== 'ContainersReady')
+  pod.status.conditions = [...ready, { type: 'Ready', status: 'False' }, { type: 'ContainersReady', status: 'False' }]
+  pod.status.containerStatuses = [{ name: pod.spec.containers[0].name, ready: false, started: false,
+    restartCount: container.restartCount, state: { terminated: { reason: 'OOMKilled', exitCode: 137, finishedAtMs: atMs } },
+    ...(container.previous ? { lastState: { terminated: { reason: container.previous.reason, exitCode: container.previous.exitCode ?? null } } } : {}) }]
+  state.health.events ??= []
+  state.health.events.push({ type: 'container-terminated', atMs, podUid, containerId: container.containerId, reason: 'OOMKilled', exitCode: 137 })
+  if (state.health.events.length > 1000) state.health.events.splice(0, state.health.events.length - 1000)
+  state.events = [...(state.events ?? []), { apiVersion: 'v1', kind: 'Event',
+    metadata: { name: `event-${(state.events ?? []).length + 1}`, namespace: pod.metadata.namespace },
+    reason: 'OOMKilled', message: `Container ${pod.spec.containers[0].name} exceeded its memory limit and was terminated with exit code 137.`, simulated: true }].slice(-300)
+  return run
+}
+
 export function processContainerLifecycle(run, atMs, lab) {
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const [clusterId, state] of Object.entries(run.runtime.kubernetes.clusters ?? {})) for (const [uid, container] of Object.entries(state.health?.containers ?? {})) {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     if (!pod) continue
     if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
-      container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason }
+      container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason,
+        ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }
       container.currentLogs = []
       container.terminatedAtMs = null
     }
@@ -80,7 +110,13 @@ export function processContainerLifecycle(run, atMs, lab) {
       }, currentLogs: [], previous: container.previous, restartReason: null, restartDelayMs: null,
       restartBlockReason: null, localFaults: { ...container.localFaults, hung: false },
     }
-    appendHealthReceipt(state, { cause: 'probe', probeType: container.restartReason, podUid: uid,
+    if (state.resourcesRuntime?.usage?.[uid]) {
+      const usage = state.resourcesRuntime.usage[uid]
+      state.resourcesRuntime.usage[uid] = { ...usage, containerId: state.health.containers[uid].containerId,
+        cpuDemandM: 0, cpuDeliveredM: 0, cpuThrottledM: 0, cpuDemandTotalM: 0, cpuDeliveredTotalM: 0,
+        cpuThrottledTotalM: 0, memoryBytes: 96 * 1024 * 1024, readySinceMs: null, window: null }
+    }
+    appendHealthReceipt(state, { cause: container.restartReason === 'OOMKilled' ? 'oom' : 'probe', probeType: container.restartReason, podUid: uid,
       oldContainerId: container.containerId, newContainerId: state.health.containers[uid].containerId,
       atMs, restartCount })
   }

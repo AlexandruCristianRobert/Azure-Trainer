@@ -116,7 +116,7 @@ export function reconcileKubernetesResult(input, lab) {
   for (const cluster of run.sandbox.aksClusters ?? []) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
-    if (run.__resourceLab && !state.resourcesRuntime) state.resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {} }
+    if (run.__resourceLab && !state.resourcesRuntime) state.resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {}, accountedUntilMs: null }
     const deployments = Object.values(state.resources).filter(item => item.kind === 'Deployment')
     for (const deployment of deployments) {
       const templateHash = hash(deployment.spec.template)

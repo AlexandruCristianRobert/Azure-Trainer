@@ -205,7 +205,7 @@ export function seedHealthTest({ startupSeconds = 24, files = HEALTH_SOLUTION_FI
   return { lab: seededLab, run, clusterId, podUids, target }
 }
 
-export function seedResourceTest({ resources = null, replicas = 2 } = {}) {
+export function seedResourceTest({ resources = null, replicas = 2, units = 20, scratchMiB = 96 } = {}) {
   const { lab: initialLab, run: initial } = createAksTestRun({ manifestId: RESOURCE_MANIFEST.id,
     capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesResources: true }, initialProjectFiles: structuredClone(RESOURCE_SOLUTION_FILES) })
   const lab = { ...initialLab, healthFixture: { initializationSeconds: 6 } }
@@ -216,8 +216,18 @@ export function seedResourceTest({ resources = null, replicas = 2 } = {}) {
     if (resources) deployment.spec.template.spec.containers[0].resources = resources
     run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
   }
+  const workload = run.project.savedFiles['app.py']
+    .replace(/WORK_UNITS = \d+/, `WORK_UNITS = ${units}`)
+    .replace(/SCRATCH_MIB = \d+/, `SCRATCH_MIB = ${scratchMiB}`)
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: workload }).run
   for (const line of ['az group create -n rgaksresources -l eastus', 'az acr create -g rgaksresources -n acraksprobesguided --sku Basic', 'az acr build --registry acraksprobesguided -t assistant:health-v1 .', 'az aks create -g rgaksresources -n aksresources --enable-managed-identity --generate-ssh-keys --attach-acr acraksprobesguided', 'az aks get-credentials -g rgaksresources -n aksresources', ...RESOURCE_MANIFEST.kubernetesFiles.filter(path => path !== 'k8s/hpa.yaml').map(path => `kubectl apply -f ${path}`)]) run = act(run, lab, { type: 'command', line }).run
   const clusterId = run.sandbox.aksClusters[0].id; const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant', serviceName: 'assistant-internal' }
+  lab.scenarios = { ...(lab.scenarios ?? {}), 'test-local-work': { kind: 'aks-resource-profile', version: 1,
+    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas },
+  'test-ai-wait': { kind: 'aks-resource-profile', version: 1,
+    target: { clusterId, namespace: 'assistant', deploymentName: 'assistant' }, requiredReadyReplicas: replicas } }
+  run = initializeConnectivity(run, clusterId)
+  run = reconcileServices(run, clusterId)
   return { lab, run, clusterId, target, podUids: getDeploymentPods(run, clusterId, target.namespace, target.deploymentName).map(pod => pod.metadata.uid).sort() }
 }
 

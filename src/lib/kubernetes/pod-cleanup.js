@@ -1,8 +1,13 @@
 export function clearPodState(state, uid) {
+  const usage = state.resourcesRuntime?.usage?.[uid]
+  if (usage?.backlog > 0 && state.resourcesRuntime?.experiment) {
+    state.resourcesRuntime.experiment.overflowBacklog += usage.backlog
+  }
   delete state.podSnapshots[uid]
   delete state.projectionDue[uid]
   delete state.resourcesRuntime?.assignments?.[uid]
   delete state.resourcesRuntime?.usage?.[uid]
+  delete state.resourcesRuntime?.metrics?.[uid]
   delete state.resourcesRuntime?.terminationDue?.[uid]
   delete state.health?.containers?.[uid]
 }

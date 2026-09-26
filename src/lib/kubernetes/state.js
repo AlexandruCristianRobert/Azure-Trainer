@@ -29,13 +29,14 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
         ? (item.scenarioId === null || typeof item.scenarioId === 'string') && (item.status === null || Number.isInteger(item.status) && item.status >= 100 && item.status <= 599)
           && isPlainObject(item.transport) && typeof item.transport.ok === 'boolean'
           && (item.transport.reason === null || typeof item.transport.reason === 'string') && isPlainObject(item.route)
-          && (item.request?.method === 'GET' && item.request?.path === '/api/info'
+          && (item.request?.method === 'GET' && ['/api/info', '/api/work'].includes(item.request?.path)
             || item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string')
         : typeof item.scenarioId === 'string' && Number.isInteger(item.status)
-          && ((item.request?.method === 'GET' && item.request?.path === '/api/info')
+          && ((item.request?.method === 'GET' && ['/api/info', '/api/work'].includes(item.request?.path))
             || (item.request?.method === 'POST' && item.request?.path === '/api/ask' && typeof item.request?.body?.question === 'string')))
       && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace))
-      && (item.integrationTrace === undefined || item.integrationTrace === null || validIntegrationTrace(item.integrationTrace)))
+      && (item.integrationTrace === undefined || item.integrationTrace === null || validIntegrationTrace(item.integrationTrace))
+      && (item.workload === undefined || validWorkloadRequest(item, run)))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   if (!validConfigIncident(runtime, run)) return false
@@ -142,7 +143,7 @@ function validClusterState(state, run, lab, clusterId) {
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
-  if (resourcesEnabled && !validResourceRuntime(state)) return false
+  if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
@@ -228,17 +229,90 @@ function validClusterState(state, run, lab, clusterId) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
-function validResourceRuntime(state) {
+function validWorkloadRequest(item, run) {
+  const workload = item.workload
+  const artifact = run.artifacts.buildsById?.[item.route?.artifactId]
+  const captured = artifact?.appSpec?.workload
+  if (item.request?.method !== 'GET' || item.request?.path !== '/api/work' || item.status !== 200
+    || !isPlainObject(workload) || Object.keys(workload).sort().join(',') !== 'checksum,cpuM,operation,scratchMiB,units'
+    || workload.operation !== 'process_batch' || !Number.isInteger(workload.units) || !Number.isInteger(workload.scratchMiB)
+    || !Number.isInteger(workload.checksum) || workload.cpuM !== workload.units
+    || workload.units < 1 || workload.units > 100 || workload.scratchMiB < 1 || workload.scratchMiB > 512) return false
+  let checksum = 0
+  for (let index = 0; index < workload.units; index++) checksum = (checksum + index * 17) % 1_000_003
+  return workload.checksum === checksum && captured?.operation === workload.operation
+    && captured.units === workload.units && captured.scratchMiB === workload.scratchMiB
+}
+
+function validResourceRuntime(state, run, lab, clusterId) {
   const value = state.resourcesRuntime
   if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.nodes) || !isPlainObject(value.assignments)
     || !isPlainObject(value.usage) || !isPlainObject(value.metrics) || !isPlainObject(value.hpa) || !isPlainObject(value.terminationDue)
-    || value.experiment !== null || !Array.isArray(value.receipts) || value.incident !== null) return false
+    || !Array.isArray(value.receipts) || value.receipts.length > 40 || value.incident !== null
+    || !(value.accountedUntilMs === null || Number.isSafeInteger(value.accountedUntilMs) && value.accountedUntilMs >= 0 && value.accountedUntilMs <= run.runtime.simTimeMs)
+    || !value.receipts.every(item => isPlainObject(item) && item.kind === 'container-termination' && typeof item.podUid === 'string'
+      && /^container-\d+$/.test(item.containerId ?? '') && item.reason === 'OOMKilled' && item.exitCode === 137
+      && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= run.runtime.simTimeMs)) return false
   if (JSON.stringify(value.nodes) !== JSON.stringify(RESOURCE_FIXTURES.nodes)) return false
+  if (value.experiment !== null && !validResourceExperiment(value.experiment, state, value, lab, clusterId, run.runtime.simTimeMs)) return false
+  if (!Object.entries(value.usage).every(([uid, usage]) => validResourceUsage(uid, usage, state, run))) return false
+  if (!Object.entries(value.metrics).every(([uid, samples]) => typeof uid === 'string' && Array.isArray(samples) && samples.length <= 40
+    && samples.every(item => isPlainObject(item) && /^container-\d+$/.test(item.containerId ?? '') && Number.isSafeInteger(item.windowStartMs)
+      && Number.isSafeInteger(item.windowEndMs) && item.windowEndMs - item.windowStartMs === 15_000 && item.windowEndMs % 15_000 === 0
+      && Number.isFinite(item.cpuAverageM) && item.cpuAverageM >= 0 && item.cpuAverageM <= 4000 && item.windowEndMs <= run.runtime.simTimeMs
+      && Number.isSafeInteger(item.memoryPeakBytes) && item.memoryPeakBytes >= 0 && item.memoryPeakBytes <= 16 * 1024 * 1024 * 1024
+      && Number.isSafeInteger(item.readySinceMs) && item.readySinceMs >= 0 && item.readySinceMs <= item.windowStartMs))) return false
   return Object.entries(value.terminationDue).every(([uid, atMs]) => {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     return typeof uid === 'string' && Number.isFinite(atMs) && atMs >= 0 && pod?.metadata.deletionTimestamp !== undefined
   })
     && (!state.applyOwnership || isPlainObject(state.applyOwnership) && Object.values(state.applyOwnership).every(item => isPlainObject(item) && typeof item.replicas === 'boolean'))
+}
+
+function validResourceExperiment(experiment, state, runtime, lab, clusterId, nowMs) {
+  const target = experiment?.target
+  const deployment = target && state.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]
+  const scenario = lab?.scenarios?.[experiment?.profileId]
+  const totals = experiment?.totals
+  return isPlainObject(experiment) && experiment.version === 1 && ['test-local-work', 'test-ai-wait'].includes(experiment.profileId)
+    && experiment.clusterId === clusterId && scenario?.kind === 'aks-resource-profile' && scenario.version === 1
+    && scenario.requiredReadyReplicas === experiment.requiredReadyReplicas
+    && scenario.target?.clusterId === clusterId && scenario.target?.namespace === target?.namespace && scenario.target?.deploymentName === target?.deploymentName
+    && target && Object.keys(target).sort().join(',') === 'deploymentName,namespace'
+    && deployment?.kind === 'Deployment' && ['warming', 'running', 'complete', 'unsupported'].includes(experiment.phase)
+    && Number.isSafeInteger(experiment.startedAtMs) && experiment.startedAtMs >= 0 && experiment.startedAtMs <= nowMs
+    && Number.isSafeInteger(experiment.warmupDeadlineMs) && experiment.warmupDeadlineMs === experiment.startedAtMs + 360_000
+    && (experiment.phaseZeroAtMs === null || Number.isSafeInteger(experiment.phaseZeroAtMs) && experiment.phaseZeroAtMs >= experiment.startedAtMs && experiment.phaseZeroAtMs <= nowMs)
+    && Number.isInteger(experiment.requiredReadyReplicas) && experiment.requiredReadyReplicas >= 1 && experiment.requiredReadyReplicas <= 6
+    && Number.isSafeInteger(experiment.atMs) && experiment.atMs >= experiment.startedAtMs && experiment.atMs <= nowMs
+    && Number.isFinite(experiment.overflowBacklog) && experiment.overflowBacklog >= 0
+    && isPlainObject(totals) && ['arrivals', 'completed', 'remaining', 'peakBacklog'].every(key => Number.isFinite(totals[key]) && totals[key] >= 0)
+    && totals.completed <= totals.arrivals && totals.peakBacklog >= totals.remaining
+    && (experiment.phase === 'unsupported' ? ['UNSUPPORTED_NODE_MEMORY_PRESSURE', 'RESOURCE_WARMUP_TIMEOUT'].includes(experiment.unsupported) : experiment.unsupported === null)
+    && (experiment.phase === 'warming' || experiment.phase === 'unsupported' && experiment.unsupported === 'RESOURCE_WARMUP_TIMEOUT'
+      ? experiment.phaseZeroAtMs === null : Number.isSafeInteger(experiment.phaseZeroAtMs))
+}
+
+function validResourceUsage(uid, usage, state, run) {
+  const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
+  const container = state.health?.containers?.[uid]
+  const artifact = run.artifacts.buildsById?.[state.podSnapshots?.[uid]?.artifactId]
+  const window = usage?.window
+  return !!pod && !!container && !!state.resourcesRuntime.assignments[uid] && isPlainObject(usage)
+    && usage.containerId === container.containerId && usage.workloadDigest === artifact?.appSpec?.workload?.helperDigest
+    && ['cpuDemandM', 'cpuDeliveredM', 'cpuThrottledM', 'memoryBytes', 'backlog'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e9)
+    && usage.memoryBytes <= 16 * 1024 * 1024 * 1024
+    && ['cpuDemandTotalM', 'cpuDeliveredTotalM', 'cpuThrottledTotalM'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e12)
+    && Number.isSafeInteger(usage.lastAccountedAtMs) && usage.lastAccountedAtMs >= 0 && usage.lastAccountedAtMs <= run.runtime.simTimeMs
+    && (usage.readySinceMs === null || Number.isSafeInteger(usage.readySinceMs) && usage.readySinceMs >= 0)
+    && (window === null || isPlainObject(window) && window.containerId === container.containerId
+      && Number.isSafeInteger(window.windowStartMs) && window.windowStartMs >= 0 && window.windowStartMs % 15_000 === 0
+      && window.windowEndMs === window.windowStartMs + 15_000 && window.windowEndMs > run.runtime.simTimeMs && window.windowEndMs <= run.runtime.simTimeMs + 15_000
+      && Number.isFinite(window.cpuTotalM) && window.cpuTotalM >= 0 && window.cpuTotalM <= 60_000
+      && Number.isFinite(window.memoryPeakBytes) && window.memoryPeakBytes >= 0 && Number.isInteger(window.readySeconds)
+      && window.readySeconds >= 0 && window.readySeconds <= 15
+      && (window.readySinceMs === null || Number.isSafeInteger(window.readySinceMs) && window.readySinceMs >= 0))
+    && (usage.routedWorkCpuM === undefined || Number.isFinite(usage.routedWorkCpuM) && usage.routedWorkCpuM >= 0)
 }
 
 function validResourceAssignments(runtime, byUid) {
@@ -315,7 +389,8 @@ function validHealthState(health, byUid, nowMs, lab, clusterId) {
       || (value.previous !== null && (!isPlainObject(value.previous) || typeof value.previous.containerId !== 'string'
         || !Array.isArray(value.previous.logs) || value.previous.logs.length > 100
         || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096)
-        || !['StartupProbeFailed', 'LivenessProbeFailed'].includes(value.previous.reason)))) return false
+        || !['StartupProbeFailed', 'LivenessProbeFailed', 'OOMKilled'].includes(value.previous.reason)
+        || value.previous.reason === 'OOMKilled' && value.previous.exitCode !== 137))) return false
     ids.add(value.containerId)
     return ['startup', 'readiness', 'liveness'].every(type => {
       const probe = pod.spec.containers[0]?.[`${type}Probe`]
@@ -426,7 +501,7 @@ function validApplicationLog(log, byUid, state, run, lab) {
   if (!isPlainObject(log) || Object.keys(log).sort().join(',') !== keys.sort().join(',')
     || !Number.isSafeInteger(log.sequence) || log.sequence < 1 || log.sequence >= run.nextSequence
     || log.requestId !== `aks-request-${log.sequence}` || !['GET', 'POST'].includes(log.method)
-    || !['/api/info', '/api/ask'].includes(log.path) || !Number.isInteger(log.status) || log.status < 100 || log.status > 599
+    || !['/api/info', '/api/ask', '/api/work'].includes(log.path) || !Number.isInteger(log.status) || log.status < 100 || log.status > 599
     || typeof log.podUid !== 'string' || typeof log.podName !== 'string' || typeof log.namespace !== 'string' || typeof log.image !== 'string'
     || typeof log.artifactId !== 'string' || !Array.isArray(log.dependencySummary) || log.dependencySummary.length > 3) return false
   const pod = byUid.get(log.podUid)

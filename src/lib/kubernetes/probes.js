@@ -80,9 +80,10 @@ function syncPodReadiness(pod, container) {
     ? { terminated: { reason: container.restartReason ?? 'ProbeFailed' } }
     : container.restartAtMs !== null
       ? { waiting: { reason: container.restartBlockReason ?? 'CrashLoopBackOff' } }
-      : { running: { startedAtMs: container.startedAtMs } }
+    : { running: { startedAtMs: container.startedAtMs } }
   pod.status.containerStatuses = [{ name: pod.spec.containers[0].name, ready: container.ready, started: container.terminatedAtMs === null && container.restartAtMs === null,
-    restartCount: container.restartCount, state, ...(container.previous ? { lastState: { terminated: { reason: container.previous.reason } } } : {}) }]
+    restartCount: container.restartCount, state, ...(container.previous ? { lastState: { terminated: { reason: container.previous.reason,
+      ...(container.previous.exitCode === undefined ? {} : { exitCode: container.previous.exitCode }) } } } : {}) }]
 }
 
 export function reconcileHealth(input, lab) {

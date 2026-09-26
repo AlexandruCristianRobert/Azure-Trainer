@@ -6,7 +6,8 @@ const clone = value => structuredClone(value)
 
 function requestFor(pod) {
   const effective = normalizeContainerResources(pod.spec?.containers?.[0]?.resources ?? {}).effective
-  return { cpuRequestM: effective.cpuRequestM ?? 0, memoryRequestBytes: effective.memoryRequestBytes ?? 0 }
+  return { cpuRequestM: effective.cpuRequestM ?? 0, memoryRequestBytes: effective.memoryRequestBytes ?? 0,
+    cpuLimitM: effective.cpuLimitM, memoryLimitBytes: effective.memoryLimitBytes }
 }
 
 function usedOn(runtime, nodeName) {

@@ -5,6 +5,7 @@ import { processContainerLifecycle } from './container-lifecycle.js'
 import { finishProbeExperiment, observeProbeExperiment } from './probe-experiments.js'
 import { finishScheduledTerminations, schedulePendingPods } from './scheduling.js'
 import { reconcileKubernetes } from './reconcile.js'
+import { accountResourceSecond, sampleResourceMetrics } from './resource-usage.js'
 
 const clone = value => structuredClone(value)
 
@@ -74,6 +75,25 @@ function nextTerminationDeadline(run, limit) {
   return next
 }
 
+function nextAccountingDeadline(run, limit) {
+  let next = null
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) {
+    const runtime = state.resourcesRuntime
+    if (!runtime) continue
+    const from = Number.isFinite(runtime.accountedUntilMs) ? runtime.accountedUntilMs + 1000 : run.runtime.simTimeMs + 1000
+    if (from > run.runtime.simTimeMs && from <= limit && (next === null || from < next)) next = from
+  }
+  return next
+}
+
+function resourceTimestamp(run, atMs, lab) {
+  run = accountResourceSecond(run, atMs, lab)
+  run = processContainerLifecycle(run, atMs, lab)
+  run = processProbeTimestamp(run, atMs, lab)
+  run = reconcileProbeServices(run)
+  return sampleResourceMetrics(run, atMs, lab)
+}
+
 function reconcileResourceTerminations(run, atMs, lab) {
   if (lab?.capabilities?.kubernetesResources !== true) return run
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = finishScheduledTerminations(run, clusterId, atMs, lab)
@@ -88,22 +108,26 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   const target = run.runtime.simTimeMs + seconds * 1000
   run = reconcileResourceTerminations(projectConfigurationAt(run, run.runtime.simTimeMs), run.runtime.simTimeMs, lab)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, run.runtime.simTimeMs, lab), run.runtime.simTimeMs, lab))
+  run = accountResourceSecond(run, run.runtime.simTimeMs, lab)
+  run = sampleResourceMetrics(run, run.runtime.simTimeMs, lab)
   run = observeProbeExperiment(run, run.runtime.simTimeMs, lab)
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
-    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
+    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target), nextAccountingDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
     if (next === undefined) break
     events += scheduledEventCount(run, next)
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
     run.runtime.simTimeMs = next
     run = reconcileResourceTerminations(projectConfigurationAt(run, next), next, lab)
-    run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, next, lab), next, lab))
+    run = resourceTimestamp(run, next, lab)
     run = observeProbeExperiment(run, next, lab)
   }
   run.runtime.simTimeMs = target
   run = reconcileResourceTerminations(projectConfigurationAt(run, target), target, lab)
   run = reconcileProbeServices(processProbeTimestamp(processContainerLifecycle(run, target, lab), target, lab))
+  run = accountResourceSecond(run, target, lab)
+  run = sampleResourceMetrics(run, target, lab)
   run = observeProbeExperiment(run, target, lab)
   return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }

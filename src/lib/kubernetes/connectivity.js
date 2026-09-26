@@ -63,6 +63,25 @@ function appResponse(run, cluster, pod, probe) {
   if (probe.path === '/api/ask') return app.integration?.graph?.version === 1
     ? simulateIntegration(app, snapshot, probe, INTEGRATION_FIXTURES, probe.integrationProfile ?? 'healthy')
     : simulateAssistant(app, snapshot, probe, KNOWLEDGE_FIXTURES)
+  if (probe.method === 'GET' && probe.path === '/api/work') {
+    const workload = app.workload
+    const source = run.artifacts.sourceSnapshotsByHash?.[artifact.sourceHash]
+    const helper = snapshot.files?.['training_workload.py']
+    let hash = 2166136261
+    for (const char of helper ?? '') hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+    const digest = `sha256:${(hash >>> 0).toString(16)}`
+    const declaredRoute = route.response?.kind === 'workload' && route.response.operation === 'process_batch'
+    if (!source || !workload || workload.version !== 1 || workload.operation !== 'process_batch'
+      || workload.route !== '/api/work' || !declaredRoute || helper !== source.files?.['training_workload.py'] || digest !== workload.helperDigest
+      || !Number.isInteger(workload.units) || workload.units < 1 || workload.units > 100
+      || !Number.isInteger(workload.scratchMiB) || workload.scratchMiB < 1 || workload.scratchMiB > 512) {
+      return { status: 500, body: { error: 'Captured workload is invalid.' }, dependencyTrace: [], diagnostic: { code: 'CAPTURED_WORKLOAD_INVALID', message: 'The selected artifact has no valid captured workload operation.' } }
+    }
+    let checksum = 0
+    for (let index = 0; index < workload.units; index++) checksum = (checksum + index * 17) % 1_000_003
+    return { status: 200, body: { checksum, units: workload.units, scratch_mib: workload.scratchMiB },
+      workload: { operation: workload.operation, units: workload.units, scratchMiB: workload.scratchMiB, checksum, cpuM: workload.units }, dependencyTrace: [], diagnostic: null }
+  }
   const body = Object.fromEntries(Object.entries(route.response ?? {}).map(([key, expression]) => [key,
     expression.kind === 'config' ? (snapshot.environment?.[expression.key] ?? expression.defaultValue) : expression.value]))
   return { status: 200, body, dependencyTrace: [], diagnostic: null }
@@ -89,7 +108,7 @@ export function routeServiceRequest(input, probe, lab) {
   }
   const validHttpProbe = typeof probe.hostname === 'string' && probe.hostname.length > 0 && !probe.hostname.includes('://')
     && Number.isInteger(probe.port) && probe.port >= 1 && probe.port <= 65535
-    && (probe.method === 'GET' && probe.path === '/api/info' && (probe.body === null || probe.body === undefined)
+    && (probe.method === 'GET' && ['/api/info', '/api/work'].includes(probe.path) && (probe.body === null || probe.body === undefined)
       || probe.method === 'POST' && probe.path === '/api/ask' && typeof probe.body?.question === 'string'
         && Object.keys(probe.body).length === 1 && (Object.hasOwn(KNOWLEDGE_FIXTURES.questions, probe.body.question)
           || Object.hasOwn(INTEGRATION_FIXTURES.questions, probe.body.question) || probe.body.question.trim() === ''))
@@ -147,6 +166,10 @@ export function routeServiceRequest(input, probe, lab) {
           outcome.transport = { ok: true, reason: null }
           const response = appResponse(run, state, pod, probe)
           outcome.status = response.status; outcome.body = response.body; outcome.dependencyTrace = response.dependencyTrace ?? []; outcome.integrationTrace = response.integrationTrace ?? null; outcome.diagnostic = response.diagnostic ?? null
+          outcome.workload = response.workload ?? null
+          if (response.workload && state.resourcesRuntime?.usage?.[pod.metadata.uid]) {
+            state.resourcesRuntime.usage[pod.metadata.uid].routedWorkCpuM = (state.resourcesRuntime.usage[pod.metadata.uid].routedWorkCpuM ?? 0) + response.workload.cpuM
+          }
           if (outcome.diagnostic?.code === 'POSTGRES_CONNECTION') outcome.dependencyTrace = [...outcome.dependencyTrace, { operation: 'postgres-query', status: 'failed', reason: 'DNS_NOT_FOUND' }]
           const safeSummary = outcome.dependencyTrace.map(item => ({ operation: item.operation, status: item.status, ...(item.reason ? { reason: item.reason } : {}) }))
           const log = { requestId: id, sequence, podUid: pod.metadata.uid, podName: pod.metadata.name, namespace: pod.metadata.namespace,
@@ -165,7 +188,8 @@ export function routeServiceRequest(input, probe, lab) {
   const requests = [...runtime.requests, { id, sequence, connectivity: true, scenarioId: null, transport: outcome.transport, status: outcome.status,
     route: outcome.route, namespace: outcome.route.namespace ?? clientNamespace, dependencyTrace: outcome.dependencyTrace, origin: probe.origin,
     hostname: probe.hostname, port: probe.port, integrationTrace: outcome.integrationTrace ?? null,
-    request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) } }].slice(-100)
+    request: { method: probe.method, path: probe.path, ...(probe.body === null ? {} : { body: probe.body }) },
+    ...(outcome.workload ? { workload: outcome.workload } : {}) }].slice(-100)
   const retainedRequestIds = new Set(requests.map(request => request.id))
   for (const clusterState of Object.values(runtime.clusters)) if (clusterState.connectivity) {
     clusterState.connectivity.applicationLogs = clusterState.connectivity.applicationLogs.filter(log => retainedRequestIds.has(log.requestId))
