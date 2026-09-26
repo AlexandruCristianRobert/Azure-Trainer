@@ -222,6 +222,19 @@ function validClusterState(state, run, lab, clusterId) {
     && Object.entries(state.projectionDue).every(([uid, value]) => Object.hasOwn(state.podSnapshots, uid) && Number.isFinite(value) && value >= 0)
 }
 
+function validProbeFacts(facts, experiment, nowMs) {
+  if (facts === undefined) return true
+  const observedAt = value => value === null || Number.isFinite(value) && value >= experiment.startedAtMs && value <= nowMs
+  return isPlainObject(facts) && observedAt(facts.firstStartupSuccessAt) && typeof facts.earlyGatedCheck === 'boolean'
+    && isPlainObject(facts.readiness) && Object.entries(facts.readiness).every(([uid, value]) => experiment.podUids.includes(uid)
+      && isPlainObject(value) && observedAt(value.withdrawnAt) && observedAt(value.reenteredAt))
+    && Array.isArray(facts.restartSchedules) && facts.restartSchedules.length <= 8
+    && facts.restartSchedules.every(item => isPlainObject(item) && experiment.podUids.includes(item.podUid)
+      && ['startup', 'liveness'].includes(item.probeType) && item.atMs !== null && observedAt(item.atMs)
+      && Number.isFinite(item.terminatedAtMs) && item.terminatedAtMs >= item.atMs
+      && Number.isFinite(item.restartAtMs) && item.restartAtMs > item.terminatedAtMs)
+}
+
 function validHealthState(health, byUid, nowMs, lab, clusterId) {
   if (!health.events.every(item => isPlainObject(item) && typeof item.type === 'string'
     && Number.isFinite(item.atMs) && item.atMs >= 0 && item.atMs <= nowMs)) return false
@@ -244,7 +257,9 @@ function validHealthState(health, byUid, nowMs, lab, clusterId) {
       || !Array.isArray(experiment.samples) || experiment.samples.length > 100
       || !experiment.samples.every(item => isPlainObject(item) && Number.isFinite(item.atMs)
         && item.atMs >= experiment.startedAtMs && item.atMs <= nowMs)
-      || !isPlainObject(experiment.summary) || experiment.summary.sampleCount !== experiment.samples.length) return false
+      || !isPlainObject(experiment.summary) || experiment.summary.sampleCount !== experiment.samples.length
+      || !Array.isArray(experiment.summary.restartReceipts) || experiment.summary.restartReceipts.length > 40
+      || !validProbeFacts(experiment.summary.facts, experiment, nowMs)) return false
   }
   const ids = new Set()
   const managedRunning = [...byUid.values()].filter(pod => pod.kind === 'Pod' && pod.status?.phase === 'Running' && pod.metadata.ownerReferences?.[0])
