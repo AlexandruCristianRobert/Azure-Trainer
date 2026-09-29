@@ -324,3 +324,56 @@ test('mid-rollout scale-down retires excess unavailable current Pods before cons
   expect(status(run)).toMatchObject({ updated: 1, available: 1, ready: 1 })
   expect(live(run)[0].metadata.uid).not.toBe(current[0].metadata.uid)
 })
+
+test('deleting Pods settle a previously scheduled container termination but never execute its restart', () => {
+  let run = releaseTestRun()
+  const uid = live(run)[0].metadata.uid
+  state(run).health.containers[uid].localFaults.hung = true
+  run = advanceKubernetesTime(run, 16, lab)
+  const containerId = state(run).health.containers[uid].containerId
+  expect(state(run).health.containers[uid]).toMatchObject({ terminatedAtMs: 56000, restartAtMs: 66000 })
+  run = advanceKubernetesTime(run, 24, lab)
+  run = applyReleaseTemplate(run, {})
+  expect(state(run).resourcesRuntime.terminationDue[uid]).toBe(85000)
+  const before = state(run).resourcesRuntime.usage[uid].cpuDeliveredTotalM
+  run = advanceKubernetesTime(run, 1, lab)
+  expect(state(run).resourcesRuntime.usage[uid].cpuDeliveredTotalM).toBe(before + 10)
+  run = advanceKubernetesTime(run, 1, lab)
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  expect(state(run).health.containers[uid]).toMatchObject({ containerId, terminatedAtMs: null, restartCount: 0,
+    previous: { containerId, reason: 'LivenessProbeFailed' } })
+  expect(state(run).resourcesRuntime.assignments[uid]).toBeDefined()
+  expect(state(run).resourcesRuntime.usage[uid].cpuDeliveredTotalM).toBe(before + 10)
+  run = JSON.parse(JSON.stringify(run))
+  run = act(run, lab, { type: 'command', line: 'kubectl get pods -n assistant' }).run
+  run = advanceKubernetesTime(run, 10, lab)
+  expect(state(run).health.containers[uid]).toMatchObject({ containerId, restartCount: 0 })
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  expect(state(run).resourcesRuntime.usage[uid].cpuDeliveredTotalM).toBe(before + 10)
+  run = advanceKubernetesTime(run, 18, lab)
+  expect(state(run).resourcesRuntime.assignments[uid]).toBeUndefined()
+})
+
+test('non-resource rollout saved runs retry an unpublished image when its tag is published', () => {
+  const seeded = seedFoundation()
+  const compatibleLab = { ...seeded.lab, capabilities: { ...seeded.lab.capabilities, kubernetesRollouts: true } }
+  const compatibleTarget = { clusterId: seeded.clusterId, namespace: 'assistant', deploymentName: 'assistant' }
+  let run = seeded.run
+  const value = parse(run.project.savedFiles['k8s/deployment.yaml'])
+  value.spec.template.spec.containers[0].image = 'acraks01.azurecr.io/assistant:v2'
+  run = act(run, compatibleLab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(value) }).run
+  run = act(run, compatibleLab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  const currentUid = Object.values(run.runtime.kubernetes.clusters[seeded.clusterId].resources)
+    .find(pod => pod.kind === 'Pod' && pod.spec.containers[0].image.endsWith(':v2')).metadata.uid
+  expect(Object.values(run.runtime.kubernetes.clusters[seeded.clusterId].resources).find(pod => pod.metadata.uid === currentUid).status.containerStatuses[0].state.waiting.reason).toBe('ImageNotFound')
+  run = act(run, compatibleLab, { type: 'save-file', path: 'app.py', text: run.project.savedFiles['app.py'].replace('"1.0"', '"2.0"') }).run
+  run = act(run, compatibleLab, { type: 'command', line: 'az acr build --registry acraks01 -t assistant:v2 .' }).run
+  run = advanceKubernetesTime(run, 30, compatibleLab)
+  const cluster = run.runtime.kubernetes.clusters[seeded.clusterId]
+  const retried = Object.values(cluster.resources).find(pod => pod.metadata.uid === currentUid)
+  expect(retried.status.phase).toBe('Running')
+  expect(cluster.podSnapshots[currentUid].artifactId).toBe(run.artifacts.publishedTags['acraks01.azurecr.io/assistant:v2'])
+  expect(getRolloutSummary(run, compatibleTarget)).toMatchObject({ updated: 2, available: 2, complete: true, currentRevision: 2 })
+  expect(cluster.resourcesRuntime).toBeUndefined()
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, compatibleLab)).toBe(true)
+})

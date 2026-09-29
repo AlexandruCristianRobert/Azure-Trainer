@@ -69,7 +69,7 @@ export function processContainerLifecycle(run, atMs, lab) {
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const [clusterId, state] of Object.entries(run.runtime.kubernetes.clusters ?? {})) for (const [uid, container] of Object.entries(state.health?.containers ?? {})) {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
-    if (!pod || pod.metadata.deletionTimestamp !== undefined) continue
+    if (!pod) continue
     if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
       container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason,
         ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }
@@ -80,6 +80,12 @@ export function processContainerLifecycle(run, atMs, lab) {
         usage.cpuDemandM = 0; usage.cpuDeliveredM = 0; usage.cpuThrottledM = 0
         usage.readySinceMs = null; usage.window = null
       }
+    }
+    // Finish a termination already scheduled before Pod deletion, while
+    // retaining the restart marker as a stopped-process accounting boundary.
+    if (pod.metadata.deletionTimestamp !== undefined) {
+      if (container.restartAtMs !== null) container.restartBlockReason = 'PodTerminating'
+      continue
     }
     if (container.restartAtMs === null || container.restartAtMs > atMs) continue
     if (!pod || pod.status?.phase !== 'Running') continue

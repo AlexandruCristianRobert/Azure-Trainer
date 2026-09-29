@@ -180,7 +180,7 @@ export function reconcileKubernetesResult(input, lab) {
   if (lab?.capabilities?.kubernetesRollouts === true) {
     for (const cluster of run.sandbox.aksClusters ?? []) run = reconcileRollouts(run, cluster.id, run.runtime.simTimeMs, lab).run
   }
-  if (run.__resourceLab) {
+  if (run.__resourceLab || lab?.capabilities?.kubernetesRollouts === true) {
     for (const cluster of run.sandbox.aksClusters ?? []) {
       run = schedulePendingPods(run, cluster.id, lab)
       const state = run.runtime.kubernetes.clusters[cluster.id]
