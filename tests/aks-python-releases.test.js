@@ -107,6 +107,15 @@ test('invalid input, empty retrieval, and dependency errors retain their origina
   expect(invoke(question.body, 'answer-unavailable-always')).toMatchObject({ status: 503, body: { code: 'DEPENDENCY_UNAVAILABLE' } })
 })
 
+test.each([
+  ['local', source => source.replace('def answer(question):', 'def answer(question):\n    other = format_answer = 0')],
+  ['module', source => source + '\nother = format_answer = 0\n'],
+])('rejects %s chained assignment shadowing the formatter', (_scope, mutate) => {
+  const parsed = compile({ ...RELEASE_SOLUTION_FILES, 'app.py': mutate(RELEASE_SOLUTION_FILES['app.py']) })
+  expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py', line: expect.any(Number), column: expect.any(Number) })]))
+  expect(parsed.appSpec).toBe(null)
+})
+
 test('constant response cannot fabricate three dependency stages or row provenance', () => {
   const files = { ...RELEASE_SOLUTION_FILES, 'app.py': RELEASE_SOLUTION_FILES['app.py'].replace(/def answer\(question\):[\s\S]*?(?=from training_health)/, 'def answer(question):\n    return {"status": 200, "body": {"answer": "Training backups are kept for 30 days.", "sources": ["training-backups"], "environment": "training", "release": SERVICE_VERSION}}\n\n') }
   const result = response(files)

@@ -42,14 +42,15 @@ export function parsePythonIntegration(files, manifest = {}) {
     if (n.name !== 'CallExpression') { unsupported = error(text, n, `Unsupported expression '${n.name}'.`); return null }
     const cs = kids(n); const callee = cs.find(x => x.name === 'MemberExpression') ?? cs.find(x => x.name === 'VariableName'); const args = argumentsOf(cs.find(x => x.name === 'ArgList')); const m = callee?.name === 'MemberExpression' ? member(callee) : null; const name = m ? m.property : raw(callee, text)
     if (!m && name === 'format_answer' && manifest.releaseVersion) {
-      let shadow = assignments.find(values => raw(values[0], text) === 'format_answer')?.[0]
+      const assignedHelper = statement => parts(statement).slice(0, -1).find(target => target.name === 'VariableName' && raw(target, text) === 'format_answer')
+      let shadow = kids(tree.topNode).filter(node => node.name === 'AssignStatement').map(assignedHelper).find(Boolean)
       for (const statement of kids(tree.topNode).filter(node => node.name === 'ImportStatement')) {
         const imported = kids(statement)
         shadow ??= imported.find((node, index) => node.name === 'VariableName' && raw(node, text) === 'format_answer'
           && imported[index - 1]?.name !== 'from' && imported[index + 1]?.name !== 'as')
       }
       answer.cursor().iterate(node => {
-        if (node.name === 'AssignStatement' && raw(parts(node.node)[0], text) === 'format_answer') shadow ??= parts(node.node)[0]
+        if (node.name === 'AssignStatement') shadow ??= assignedHelper(node.node)
         if (node.name === 'ParamList') shadow ??= kids(node.node).find(child => child.name === 'VariableName' && raw(child, text) === 'format_answer')
       })
       if (scope.has('format_answer') || shadow) {
