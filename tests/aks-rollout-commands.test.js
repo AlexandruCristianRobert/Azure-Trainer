@@ -8,6 +8,7 @@ import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
+import { redactRolloutOutput } from '../src/lib/kubernetes/diagnostics.js'
 import { act, releaseTestRun, applyReleaseTemplate, releaseUndoFixture, getReleaseConfigSnapshot, RELEASE_TARGET as target, RELEASE_TEST_LAB as lab, seedFoundation } from './helpers/aks.js'
 
 const state = run => run.runtime.kubernetes.clusters[target.clusterId]
@@ -343,6 +344,42 @@ it('many sensitive template fields retain safe bounded inspection through cleanu
   expect(output(command(run, 'get replicasets -n assistant'))).not.toContain('training-only-password')
 })
 
+it.each([[false, false], [true, false], [false, true]])('mixed old/current credentials stay redacted after cleanup with wildcard=%s and overlapping=%s', (wildcard, overlapping) => {
+  let run = releaseUndoFixture()
+  const image = 'acraksreleasesguided.azurecr.io/assistant:training-only-password-current-secret-after-v1'
+  const value = parse(run.project.savedFiles['k8s/deployment.yaml'])
+  value.spec.template.spec.containers[0].image = image
+  if (wildcard) value.spec.template.metadata.annotations = Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`private-${index}`, 'training-only-password-current-secret-after-v1']))
+  if (overlapping) value.spec.template.spec.containers[0].env.push({ name: 'DISPLAY_FRAGMENT',
+    value: 'current-secret-after-v1\nObserved digests: <none observed>\nRetained Pod template:\nTemplate hash: ' })
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(value) }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  const template = structuredClone(history(run).revisions.find(item => item.revision === 3).template)
+  if (wildcard) expect(history(run).revisions.find(item => item.revision === 3).redactedPaths).toEqual(['*'])
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout undo deployment/assistant-api -n assistant --to-revision=1' }).run
+  run = JSON.parse(JSON.stringify(advanceKubernetesTime(run, 120, lab)))
+  expect(getRolloutSummary(run, target)).toMatchObject({ complete: true, currentRevision: 4 })
+  expect(Object.values(state(run).podSnapshots).some(snapshot => snapshot.environment?.PGPASSWORD === 'training-only-password')).toBe(false)
+  expect(history(run).revisions.find(item => item.revision === 3).template).toEqual(template)
+  expect(history(run).revisions.find(item => item.revision === 3).imageRef).toBe(image)
+  expect(validateBehavioralRun(run, lab)).toBe(run)
+  const before = structuredClone(run)
+  for (const text of ['rollout history deployment/assistant-api -n assistant --revision=3', 'rollout history deployment/assistant-api -n assistant', 'get replicasets -n assistant', 'get replicasets -n assistant -o wide']) {
+    const result = command(run, text)
+    expect(result.lines[0].kind).toBe('out')
+    expect(output(result)).not.toContain('training-only-password')
+    expect(output(result)).not.toContain('current-secret-after-v1')
+    expect(output(result)).toContain('[REDACTED]')
+  }
+  // Also cover current-value text outside any retained-template field. The
+  // wildcard state is valid, persisted, and created by ordinary capture.
+  const direct = redactRolloutOutput(`selected ${image}; observed current-secret-after-v1`, state(run))
+  expect(direct).not.toContain('training-only-password')
+  expect(direct).not.toContain('current-secret-after-v1')
+  expect(direct).toContain('[REDACTED]')
+  expect(run).toEqual(before)
+})
+
 it('the undo helper rejects invalid, current, missing and non-release targets without any state mutation', () => {
   const run = applyReleaseTemplate(releaseTestRun())
   for (const [selectedTarget, revision, selectedLab] of [[target, 0, lab], [target, '1', lab], [target, 2, lab], [target, 99, lab], [{ ...target, deploymentName: 'missing' }, 1, lab], [target, 1, { ...lab, capabilities: { ...lab.capabilities, kubernetesRollouts: false } }]]) {
@@ -422,5 +459,5 @@ it('history redacts a current UTF-8 Secret even when the new image has never sta
   const result = command(run, 'rollout history deployment/assistant-api -n assistant --revision=2')
   expect(result.lines[0].kind).toBe('out')
   expect(output(result)).not.toContain('pässword-current')
-  expect(output(result)).toContain('/health/[REDACTED]')
+  expect(output(result)).toContain('readinessProbe: [REDACTED] port=http')
 })
