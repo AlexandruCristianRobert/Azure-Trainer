@@ -39,6 +39,9 @@ export function registerRevision(input, target, template) {
     revision = { revision: number, rsUid, templateHash: templateHashValue, template: normalized, imageRef: template.spec.containers[0]?.image ?? '' }; history.revisions.push(revision)
   }
   history.currentRevision = number; history.currentRsUid = revision.rsUid; history.observedGeneration = deploy.metadata.generation ?? history.observedGeneration
+  history.lastProgressAtMs = run.runtime.simTimeMs ?? 0
+  history.progressSnapshot = { updated: 0, ready: 0, available: 0, oldActive: 0 }
+  history.conditions = []
   return { run, revision: number, rsUid: revision.rsUid, diagnostics: [] }
 }
 export function pruneRevisionHistory(input, target) {

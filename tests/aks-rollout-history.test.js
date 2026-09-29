@@ -92,7 +92,9 @@ test('first template-changing apply adopts the live old revision before register
   expect(history.revisions[0]).toMatchObject({ revision: 1, rsUid: oldRs.metadata.uid })
   expect(history.revisions[0].template).toEqual(oldRs.spec.template)
   expect(state.resources[`ReplicaSet/assistant/${oldRs.metadata.name}`]).toEqual(oldRs)
-  expect(Object.values(state.resources).filter(item => item.kind === 'Pod')).toEqual(Object.values(oldResources).filter(item => item.kind === 'Pod'))
+  // Timed reconciliation may add a surge Pod; adoption preserves the old Pods.
+  const originalPods = Object.values(oldResources).filter(item => item.kind === 'Pod')
+  expect(Object.values(state.resources).filter(item => item.kind === 'Pod' && originalPods.some(old => old.metadata.uid === item.metadata.uid))).toEqual(originalPods)
   expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
 })
 

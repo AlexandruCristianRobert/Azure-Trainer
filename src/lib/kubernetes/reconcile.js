@@ -7,6 +7,7 @@ import { schedulePendingPods } from './scheduling.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { clearPodState } from './pod-cleanup.js'
 import { registerRevision } from './rollout-history.js'
+import { reconcileRollouts } from './rollouts.js'
 
 const clone = value => structuredClone(value)
 const hash = value => { let n = 5381; for (const char of JSON.stringify(value)) n = ((n << 5) + n) ^ char.charCodeAt(0); return (n >>> 0).toString(16).padStart(8, '0') }
@@ -41,9 +42,9 @@ function waitingConfiguration(state, pod, diagnostics) {
   addEvent(state, reason, `${issue.message}`, pod.metadata.namespace)
 }
 
-function createPod(run, cluster, deployment, replicaSet, ordinal) {
+export function createPod(run, cluster, deployment, replicaSet, ordinal) {
   const state = run.runtime.kubernetes.clusters[cluster.id]
-  const template = deployment.spec.template
+  const template = replicaSet.spec.template
   const container = template.spec.containers[0]
   const artifactId = run.artifacts.publishedTags[container.image]
   const grant = hasKubeletPull(run.sandbox, cluster, container.image)
@@ -51,7 +52,7 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   const reason = !grant ? 'RegistryAccessDenied' : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const uid = `kube-${run.nextSequence++}`
   const podName = `${deployment.metadata.name}-${hash(template)}-${ordinal}-${uid.slice(5)}`
-  const resourceManaged = run.__resourceLab === true
+  const resourceManaged = run.__resourceLab === true || !!state.resourcesRuntime
   const value = {
     apiVersion: 'v1', kind: 'Pod', metadata: { name: podName, namespace: deployment.metadata.namespace, uid, resourceVersion: '1', labels: clone(template.metadata.labels), ownerReferences: [{ uid: replicaSet.metadata.uid, kind: 'ReplicaSet', name: replicaSet.metadata.name }] },
     spec: clone(template.spec), status: reason || resourceManaged ? { phase: 'Pending', containerStatuses: [{ name: container.name, state: { waiting: { reason: reason ?? 'Pending' } } }] } : { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
@@ -64,15 +65,18 @@ function createPod(run, cluster, deployment, replicaSet, ordinal) {
   return value
 }
 
-function retryPendingPod(run, cluster, deployment, pod) {
-  if (pod.status?.phase !== 'Pending') return
+export function retryPendingPod(run, cluster, deployment, pod) {
+  if (pod.status?.phase !== 'Pending' || pod.metadata.deletionTimestamp !== undefined) return
   const container = pod.spec.containers[0]
   const artifactId = run.artifacts.publishedTags[container.image]
-  const configuration = resolvePodConfiguration(run.runtime.kubernetes.clusters[cluster.id].resources, deployment.metadata.namespace, deployment.spec.template.spec)
+  const state = run.runtime.kubernetes.clusters[cluster.id]
+  const owner = Object.values(state.resources).find(item => item.kind === 'ReplicaSet' && pod.metadata.ownerReferences?.some(ref => ref.uid === item.metadata.uid))
+  const template = owner?.spec.template ?? { metadata: { labels: pod.metadata.labels }, spec: pod.spec }
+  const configuration = resolvePodConfiguration(state.resources, pod.metadata.namespace, template.spec)
   const reason = !hasKubeletPull(run.sandbox, cluster, container.image) ? 'RegistryAccessDenied'
     : !artifactId ? 'ImageNotFound' : configuration.diagnostics.length ? (configuration.diagnostics[0].mount ? 'FailedMount' : 'CreateContainerConfigError') : null
   const previous = pod.status.containerStatuses?.[0]?.state?.waiting?.reason
-  if (run.__resourceLab === true && !pod.spec.nodeName) return
+  if ((run.__resourceLab === true || state.resourcesRuntime) && !pod.spec.nodeName) return
   if (reason === previous) return
   if (reason) {
     if (configuration.diagnostics.length && hasKubeletPull(run.sandbox, cluster, container.image) && artifactId) waitingConfiguration(run.runtime.kubernetes.clusters[cluster.id], pod, configuration.diagnostics)
@@ -83,7 +87,7 @@ function retryPendingPod(run, cluster, deployment, pod) {
     }
   } else {
     pod.status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] }
-    capturePod(run, { ...pod, clusterId: cluster.id, template: deployment.spec.template, configuration }, artifactId)
+    capturePod(run, { ...pod, clusterId: cluster.id, template, configuration }, artifactId)
   }
 }
 
@@ -173,10 +177,13 @@ export function reconcileKubernetesResult(input, lab) {
       }
     }
   }
+  if (lab?.capabilities?.kubernetesRollouts === true) {
+    for (const cluster of run.sandbox.aksClusters ?? []) run = reconcileRollouts(run, cluster.id, run.runtime.simTimeMs, lab).run
+  }
   if (run.__resourceLab) {
     for (const cluster of run.sandbox.aksClusters ?? []) {
-      const state = run.runtime.kubernetes.clusters[cluster.id]
       run = schedulePendingPods(run, cluster.id, lab)
+      const state = run.runtime.kubernetes.clusters[cluster.id]
       for (const deployment of Object.values(state.resources).filter(item => item.kind === 'Deployment')) {
         for (const pod of getDeploymentPods(run, cluster.id, deployment.metadata.namespace, deployment.metadata.name)) retryPendingPod(run, cluster, deployment, pod)
       }

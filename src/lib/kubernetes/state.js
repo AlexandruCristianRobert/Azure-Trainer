@@ -468,7 +468,8 @@ function validResourceUsage(uid, usage, state, run) {
   const artifact = run.artifacts.buildsById?.[state.podSnapshots?.[uid]?.artifactId]
   const window = usage?.window
   return !!pod && !!container && !!state.resourcesRuntime.assignments[uid] && isPlainObject(usage)
-    && usage.containerId === container.containerId && usage.workloadDigest === artifact?.appSpec?.workload?.helperDigest
+    && usage.containerId === container.containerId && (usage.workloadDigest === artifact?.appSpec?.workload?.helperDigest
+      || state.rollouts?.version === 1 && !artifact?.appSpec?.workload && usage.workloadDigest === null)
     && ['cpuDemandM', 'cpuDeliveredM', 'cpuThrottledM', 'memoryBytes', 'backlog'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e9)
     && usage.memoryBytes <= 16 * 1024 * 1024 * 1024
     && ['cpuDemandTotalM', 'cpuDeliveredTotalM', 'cpuThrottledTotalM'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e12)

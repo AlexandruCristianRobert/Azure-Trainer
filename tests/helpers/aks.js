@@ -13,6 +13,39 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { getDeploymentPods } from '../../src/lib/kubernetes/reconcile.js'
 import { RESOURCE_MANIFEST, RESOURCE_SOLUTION_FILES } from '../../src/data/templates/aks-python/resources.js'
 import { inspectResources } from '../../src/lib/kubernetes/resource-inspection.js'
+import { RELEASE_FILES, RELEASE_MANIFEST, RELEASE_SOLUTION_FILES } from '../../src/data/templates/aks-python/releases.js'
+import { SUBSCRIPTION_ID } from '../../src/lib/sandbox/model.js'
+import { advanceKubernetesTime } from '../../src/lib/kubernetes/time.js'
+
+export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
+export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
+  capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true },
+  healthFixture: { initializationSeconds: 6 }, initialProjectFiles: { ...RELEASE_FILES } })
+
+export function releaseTestRun({ replicas = 2, minReadySeconds = 5, progressDeadlineSeconds = 60, maxSurge = 1, maxUnavailable = 0, graceSeconds = 30, resources = null, revisionHistoryLimit = 3 } = {}) {
+  let run = createBehavioralRun(RELEASE_TEST_LAB, { attemptId: 'release-test' })
+  const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+  Object.assign(deployment.spec, { replicas, minReadySeconds, progressDeadlineSeconds, revisionHistoryLimit })
+  deployment.spec.strategy.rollingUpdate = { maxSurge, maxUnavailable }
+  deployment.spec.template.spec.terminationGracePeriodSeconds = graceSeconds
+  if (resources) deployment.spec.template.spec.containers[0].resources = resources
+  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  for (const line of ['az group create -n rgaksreleases -l eastus', 'az acr create -g rgaksreleases -n acraksreleasesguided --sku Basic', 'az acr build --registry acraksreleasesguided -t assistant:release-v1 .', 'az aks create -g rgaksreleases -n aksreleases --enable-managed-identity --generate-ssh-keys --attach-acr acraksreleasesguided', 'az aks get-credentials -g rgaksreleases -n aksreleases', ...RELEASE_MANIFEST.kubernetesFiles.map(path => `kubectl apply -f ${path}`)]) run = act(run, RELEASE_TEST_LAB, { type: 'command', line }).run
+  return advanceKubernetesTime(run, 15, RELEASE_TEST_LAB)
+}
+
+export function applyReleaseTemplate(input, { version = '2.0', readinessPath = '/health/ready' } = {}) {
+  let run = input
+  const app = version === '1.0' ? RELEASE_FILES['app.py'] : RELEASE_SOLUTION_FILES['app.py']
+  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'app.py', text: app }).run
+  const tag = version === '1.0' ? 'release-v1' : 'release-v2'
+  run = act(run, RELEASE_TEST_LAB, { type: 'command', line: `az acr build --registry acraksreleasesguided -t assistant:${tag} .` }).run
+  const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+  deployment.spec.template.spec.containers[0].image = `acraksreleasesguided.azurecr.io/assistant:${tag}`
+  deployment.spec.template.spec.containers[0].readinessProbe.httpGet.path = readinessPath
+  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  return act(run, RELEASE_TEST_LAB, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+}
 
 export function makeTrainingSnapshot() {
   return {

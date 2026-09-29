@@ -69,7 +69,7 @@ export function processContainerLifecycle(run, atMs, lab) {
   if (lab?.capabilities?.kubernetesProbes !== true) return run
   for (const [clusterId, state] of Object.entries(run.runtime.kubernetes.clusters ?? {})) for (const [uid, container] of Object.entries(state.health?.containers ?? {})) {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
-    if (!pod) continue
+    if (!pod || pod.metadata.deletionTimestamp !== undefined) continue
     if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
       container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason,
         ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }

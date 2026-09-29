@@ -8,6 +8,7 @@ import { reconcileKubernetes } from './reconcile.js'
 import { accountResourceSecond, sampleResourceMetrics } from './resource-usage.js'
 import { reconcileHpa } from './hpa.js'
 import { observeResourceExperiment } from './resource-experiments.js'
+import { nextRolloutDeadline, reconcileRollouts } from './rollouts.js'
 
 const clone = value => structuredClone(value)
 
@@ -71,7 +72,9 @@ function reconcileProbeServices(run) {
 
 function nextTerminationDeadline(run, limit) {
   let next = null
-  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) for (const deadline of Object.values(state.resourcesRuntime?.terminationDue ?? {})) {
+  for (const state of Object.values(run.runtime.kubernetes.clusters ?? {})) for (const deadline of Object.values(state.resourcesRuntime?.terminationDue ?? (state.rollouts ? Object.fromEntries(Object.values(state.resources)
+    .filter(item => item.kind === 'Pod' && item.metadata.deletionTimestamp !== undefined)
+    .map(pod => [pod.metadata.uid, pod.metadata.deletionTimestamp + (pod.spec.terminationGracePeriodSeconds ?? 30) * 1000])) : {}))) {
     if (Number.isFinite(deadline) && deadline > run.runtime.simTimeMs && deadline <= limit && (next === null || deadline < next)) next = deadline
   }
   return next
@@ -100,10 +103,17 @@ function resourceTimestamp(run, atMs, lab) {
 }
 
 function reconcileResourceTerminations(run, atMs, lab) {
-  if (lab?.capabilities?.kubernetesResources !== true) return run
+  if (lab?.capabilities?.kubernetesResources !== true && lab?.capabilities?.kubernetesRollouts !== true) return run
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = finishScheduledTerminations(run, clusterId, atMs, lab)
   run = reconcileKubernetes(run, lab)
   for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = schedulePendingPods(run, clusterId, lab)
+  if (lab?.capabilities?.kubernetesRollouts === true) {
+    // Settle probes on containers created at this exact timestamp. Deferring
+    // their first zero-delay probe until the next advance changes startup age.
+    run = processProbeTimestamp(processContainerLifecycle(run, atMs, lab), atMs, lab)
+    for (const clusterId of Object.keys(run.runtime.kubernetes.clusters ?? {})) run = reconcileRollouts(run, clusterId, atMs, lab).run
+    run = reconcileProbeServices(run)
+  }
   return run
 }
 
@@ -122,7 +132,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
-    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target), nextAccountingDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
+    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target), nextAccountingDeadline(run, target), nextRolloutDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
     if (next === undefined) break
     events += scheduledEventCount(run, next)
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }

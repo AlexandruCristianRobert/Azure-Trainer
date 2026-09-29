@@ -44,8 +44,10 @@ export function schedulePendingPods(input, clusterId, lab) {
     })
     if (!fitting.length) {
       const reason = unschedulableReason(runtime.nodes, request, runtime)
+      const unchanged = pod.status.schedulingReason === reason
       pod.status.schedulingReason = reason
       pod.status.conditions = [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: reason }]
+      if (unchanged) continue
       state.events.push({ apiVersion: 'v1', kind: 'Event', metadata: { name: `event-${state.events.length + 1}`, namespace: pod.metadata.namespace }, reason: 'FailedScheduling', message: reason, simulated: true })
       if (state.events.length > 300) state.events.splice(0, state.events.length - 300)
       continue
@@ -90,9 +92,11 @@ export function setDeploymentReplicas(input, target, replicas, { cause, controll
 }
 
 export function finishScheduledTerminations(input, clusterId, atMs, lab) {
-  if (lab?.capabilities?.kubernetesResources !== true) return input
+  if (lab?.capabilities?.kubernetesResources !== true && lab?.capabilities?.kubernetesRollouts !== true) return input
   const run = clone(input); const state = run.runtime?.kubernetes?.clusters?.[clusterId]
-  const due = state?.resourcesRuntime?.terminationDue ?? {}
+  const due = state?.resourcesRuntime?.terminationDue ?? Object.fromEntries(Object.values(state?.resources ?? {})
+    .filter(item => item.kind === 'Pod' && item.metadata.deletionTimestamp !== undefined)
+    .map(pod => [pod.metadata.uid, pod.metadata.deletionTimestamp + (pod.spec.terminationGracePeriodSeconds ?? 30) * 1000]))
   for (const [uid, deadline] of Object.entries(due)) if (deadline <= atMs) {
     const pod = Object.values(state.resources).find(item => item.kind === 'Pod' && item.metadata.uid === uid)
     if (pod) {
