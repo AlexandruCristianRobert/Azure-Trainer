@@ -47,6 +47,24 @@ export function applyReleaseTemplate(input, { version = '2.0', readinessPath = '
   return act(run, RELEASE_TEST_LAB, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
 }
 
+export function releaseUndoFixture() {
+  let run = advanceKubernetesTime(applyReleaseTemplate(releaseTestRun()), 90, RELEASE_TEST_LAB)
+  const configMap = parseYaml(run.project.savedFiles['k8s/configmap.yaml'])
+  configMap.data.APP_ENV = 'recovery-current'
+  const secret = parseYaml(run.project.savedFiles['k8s/secret.yaml'])
+  secret.stringData.PGPASSWORD = 'current-secret-after-v1'
+  for (const [path, object] of [['k8s/configmap.yaml', configMap], ['k8s/secret.yaml', secret]]) {
+    run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path, text: stringifyYaml(object) }).run
+    run = act(run, RELEASE_TEST_LAB, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  }
+  return run
+}
+
+export function getReleaseConfigSnapshot(run) {
+  const resources = run.runtime.kubernetes.clusters[RELEASE_TARGET.clusterId].resources
+  return structuredClone({ configMap: resources['ConfigMap/assistant/assistant-config'], secret: resources['Secret/assistant/assistant-credentials'] })
+}
+
 export function makeTrainingSnapshot() {
   return {
     artifactId: 'build-fixture', templateHash: 'template-fixture',

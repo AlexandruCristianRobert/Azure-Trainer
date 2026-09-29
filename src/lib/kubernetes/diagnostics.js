@@ -3,6 +3,30 @@ import { routeServiceRequest, resolveServiceDns } from './connectivity.js'
 const error = (code, message) => ({ code, message, path: null, line: null, column: null })
 const clean = value => JSON.stringify(value)
 
+export function rolloutDeadlineGuidance(name, namespace) {
+  return `ProgressDeadlineExceeded: the new revision has stopped making progress. Live Pods are preserved. Inspect with kubectl describe deployment ${name} -n ${namespace} and kubectl get pods -n ${namespace}; then inspect Pod events and logs.`
+}
+
+// Include historical captured configuration: a Secret may have changed since
+// an old container started, but its captured credential remains sensitive.
+export function redactRolloutOutput(text, state) {
+  const secrets = new Set()
+  for (const snapshot of Object.values(state.podSnapshots ?? {})) for (const ref of snapshot.configRefs ?? []) {
+    if (ref.kind !== 'Secret') continue
+    const value = ref.mode === 'file' ? snapshot.files?.[ref.target] : snapshot.environment?.[ref.target]
+    if (typeof value === 'string' && value) secrets.add(value)
+  }
+  for (const resource of Object.values(state.resources ?? {})) if (resource.kind === 'Secret') for (const encoded of Object.values(resource.data ?? {})) {
+    if (typeof encoded !== 'string' || !encoded) continue
+    secrets.add(encoded)
+    try {
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(encoded), char => char.charCodeAt(0)))
+      if (decoded) secrets.add(decoded)
+    } catch { /* malformed data has no decoded value */ }
+  }
+  return [...secrets].sort((a, b) => b.length - a.length).reduce((value, secret) => value.split(secret).join('[REDACTED]'), text)
+}
+
 export function runDiagnosticCommand(input, rawTokens, lab) {
   const tokens = rawTokens[0] === 'kubectl' ? rawTokens.slice(1) : rawTokens
   const fail = (message, code = 'DIAGNOSTIC_SYNTAX') => ({ run: input, lines: [], diagnostics: [error(code, message)] })

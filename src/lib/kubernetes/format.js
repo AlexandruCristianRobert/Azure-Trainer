@@ -1,4 +1,6 @@
 import { stringify } from 'yaml'
+import { rolloutDeadlineGuidance } from './diagnostics.js'
+import { getRolloutSummary } from './rollouts.js'
 
 const sort = value => Array.isArray(value) ? value.map(sort)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value
@@ -6,8 +8,69 @@ const sort = value => Array.isArray(value) ? value.map(sort)
 export const kubeJson = value => JSON.stringify(sort(value), null, 2)
 export const kubeYaml = value => stringify(sort(value), { lineWidth: 0 })
 
-export function kubeTable(items, kind, wide = false) {
+export function observedRolloutDigests(run, state, rsUid) {
+  return [...new Set(Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.ownerReferences?.some(ref => ref.uid === rsUid))
+    .map(pod => run.artifacts.buildsById[state.podSnapshots[pod.metadata.uid]?.artifactId]?.digest).filter(Boolean))].sort().join(', ') || '<none observed>'
+}
+
+export function rolloutCounts(summary) {
+  return `updated=${summary.updated}/${summary.desired} ready=${summary.ready} available=${summary.available} unavailable=${summary.unavailable} terminating=${summary.terminating}`
+}
+
+export function formatRolloutHistory(run, state, deployment, revision = null) {
+  const history = state.rollouts?.deployments?.[deployment.metadata.uid]
+  if (!history) return revision === null ? 'No retained rollout history is available.' : null
+  const revisions = [...history.revisions].sort((a, b) => a.revision - b.revision)
+  const rsName = item => Object.values(state.resources).find(rs => rs.kind === 'ReplicaSet' && rs.metadata.uid === item.rsUid)?.metadata.name ?? '<not retained>'
+  if (revision === null) return ['REVISION\tCURRENT\tREPLICASET\tIMAGE REFERENCE\tOBSERVED DIGESTS', ...revisions.map(item =>
+    `${item.revision}\t${item.revision === history.currentRevision ? '*' : '-'}\t${rsName(item)}\t${item.imageRef}\t${observedRolloutDigests(run, state, item.rsUid)}`)].join('\n')
+  const item = revisions.find(value => value.revision === revision)
+  if (!item) return null
+  const lines = [`Revision: ${item.revision}${item.revision === history.currentRevision ? ' (current)' : ''}`, `ReplicaSet: ${rsName(item)}`,
+    `Image reference: ${item.imageRef}`, `Observed digests: ${observedRolloutDigests(run, state, item.rsUid)}`, 'Retained Pod template:',
+    `Template hash: ${item.templateHash}`, `Label keys: ${Object.keys(item.template.metadata?.labels ?? {}).sort().join(', ') || '<none>'}`,
+    `Annotation keys: ${Object.keys(item.template.metadata?.annotations ?? {}).sort().join(', ') || '<none>'}`]
+  for (const container of item.template.spec.containers) {
+    lines.push(`Container: ${container.name}`, `Image pull policy: ${container.imagePullPolicy ?? 'IfNotPresent'}`)
+    for (const env of container.env ?? []) {
+      const config = env.valueFrom?.configMapKeyRef, secret = env.valueFrom?.secretKeyRef
+      lines.push(`Environment ${env.name}: ${config ? `ConfigMap ${config.name}/${config.key}` : secret ? `Secret ${secret.name}/${secret.key}` : '<value omitted>'}`)
+    }
+    for (const field of ['startupProbe', 'readinessProbe', 'livenessProbe']) if (container[field]) {
+      const probe = container[field]
+      lines.push(`${field}: ${probe.httpGet?.path ?? '<none>'} port=${probe.httpGet?.port ?? '<none>'} period=${probe.periodSeconds ?? 10}s`)
+    }
+    lines.push(`Resource requests: ${kubeJson(container.resources?.requests ?? {})}`, `Resource limits: ${kubeJson(container.resources?.limits ?? {})}`)
+  }
+  for (const volume of item.template.spec.volumes ?? []) lines.push(`Volume ${volume.name}: ${volume.configMap ? `ConfigMap ${volume.configMap.name}` : volume.secret ? `Secret ${volume.secret.secretName ?? volume.secret.name}` : '<unsupported>'}`)
+  lines.push(`Termination grace: ${item.template.spec.terminationGracePeriodSeconds ?? 30}s`, 'Retained templates store image references; observed digests belong to actual Pods. Undo uses current configuration and registry contents.')
+  return lines.join('\n')
+}
+
+export function formatRolloutStatus(summary, name, namespace) {
+  const deadline = summary.conditions.some(item => item.type === 'Progressing' && item.status === 'False' && item.reason === 'ProgressDeadlineExceeded')
+  return [`deployment "${name}" ${summary.complete ? 'successfully rolled out' : deadline ? 'rollout stalled' : 'rollout progressing'} (simulated).`,
+    `Revision: ${summary.currentRevision}; ${rolloutCounts(summary)}`, ...(deadline ? [rolloutDeadlineGuidance(name, namespace)] : []),
+    'Snapshot only; advance simulated time through Experiment Controls.'].join('\n')
+}
+
+export function kubeTable(items, kind, wide = false, view = null) {
   if (!items.length) return 'No resources found.'
+  if (view?.state.rollouts && kind === 'ReplicaSet') {
+    return [`NAME\tREVISION\tCURRENT\tDESIRED\tREADY\tIMAGE REFERENCE\tOBSERVED DIGESTS${wide ? '\tNAMESPACE' : ''}`, ...items.map(item => {
+      const history = view.state.rollouts.deployments[item.metadata.ownerReferences?.find(ref => ref.kind === 'Deployment')?.uid]
+      const revision = history?.revisions.find(value => value.rsUid === item.metadata.uid)
+      const ready = Object.values(view.state.resources).filter(pod => pod.kind === 'Pod' && pod.metadata.ownerReferences?.some(ref => ref.uid === item.metadata.uid)
+        && pod.metadata.deletionTimestamp === undefined && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')).length
+      return `${item.metadata.name}\t${revision?.revision ?? '<unknown>'}\t${history?.currentRsUid === item.metadata.uid ? '*' : '-'}\t${item.spec.replicas}\t${ready}\t${item.spec.template.spec.containers[0].image}\t${observedRolloutDigests(view.run, view.state, item.metadata.uid)}${wide ? `\t${item.metadata.namespace}` : ''}`
+    })].join('\n')
+  }
+  if (view?.state.rollouts && kind === 'Deployment') {
+    return [`NAME\tREVISION\tUPDATED\tREADY\tAVAILABLE\tUNAVAILABLE\tTERMINATING${wide ? '\tNAMESPACE' : ''}`, ...items.map(item => {
+      const summary = getRolloutSummary(view.run, { clusterId: view.clusterId, deploymentUid: item.metadata.uid })
+      return `${item.metadata.name}\t${summary?.currentRevision ?? '<unknown>'}\t${summary?.updated ?? 0}/${item.spec.replicas}\t${summary?.ready ?? 0}\t${summary?.available ?? 0}\t${summary?.unavailable ?? item.spec.replicas}\t${summary?.terminating ?? 0}${wide ? `\t${item.metadata.namespace}` : ''}`
+    })].join('\n')
+  }
   if (kind === 'Event' && items.some(item => item.reason || item.message)) {
     const header = wide ? 'NAME\tNAMESPACE\tREASON\tMESSAGE' : 'NAME\tREASON\tMESSAGE'
     const rows = items.map(item => wide
@@ -32,7 +95,7 @@ export function kubeTable(items, kind, wide = false) {
   return [header, ...rows].join('\n')
 }
 
-export function describeObject(resource, state) {
+export function describeObject(resource, state, view = null) {
   const lines = [`Name: ${resource.metadata.name}`, `Namespace: ${resource.metadata.namespace ?? '<cluster>'}`, `Kind: ${resource.kind}`]
   if (resource.kind === 'Deployment') {
     const container = resource.spec.template?.spec?.containers?.[0]
@@ -40,6 +103,17 @@ export function describeObject(resource, state) {
     const limits = container?.resources?.limits ?? {}
     lines.push(`Replicas: ${resource.spec.replicas}`, `Resource requests: cpu=${requested.cpu ?? '<none>'}, memory=${requested.memory ?? '<none>'}`,
       `Resource limits: cpu=${limits.cpu ?? '<none>'}, memory=${limits.memory ?? '<none>'}`, 'Scheduling, image pulls, and readiness are simulated.')
+    if (view && state.rollouts?.deployments[resource.metadata.uid]) {
+      const summary = getRolloutSummary(view.run, { clusterId: view.clusterId, deploymentUid: resource.metadata.uid })
+      const history = state.rollouts.deployments[resource.metadata.uid]
+      lines.push(`Revision: ${summary.currentRevision}`, rolloutCounts(summary), `Image reference: ${container.image}`,
+        `Observed digests: ${observedRolloutDigests(view.run, state, history.currentRsUid)}`,
+        `Conditions: ${summary.conditions.map(item => `${item.type}=${item.status} (${item.reason})`).join('; ')}`,
+        `Strategy: RollingUpdate; maxSurge=${resource.spec.strategy?.rollingUpdate?.maxSurge ?? '25%'}, maxUnavailable=${resource.spec.strategy?.rollingUpdate?.maxUnavailable ?? '25%'}`,
+        `Minimum ready: ${resource.spec.minReadySeconds ?? 0}s; progress deadline: ${resource.spec.progressDeadlineSeconds ?? 600}s`,
+        'Snapshot only; advance simulated time through Experiment Controls.')
+      if (summary.conditions.some(item => item.type === 'Progressing' && item.reason === 'ProgressDeadlineExceeded')) lines.push(rolloutDeadlineGuidance(resource.metadata.name, resource.metadata.namespace))
+    }
   }
   if (resource.kind === 'HorizontalPodAutoscaler') lines.push(`Target: ${resource.spec.scaleTargetRef.kind}/${resource.spec.scaleTargetRef.name}`,
     `Replicas: current ${resource.status?.currentReplicas ?? 0}, desired ${resource.status?.desiredReplicas ?? 0}`,
@@ -60,6 +134,8 @@ export function describeObject(resource, state) {
   if (resource.kind === 'Secret') lines.push(`Type: ${resource.type ?? 'Opaque'}`, `Keys: ${Object.keys(resource.data ?? {}).sort().join(', ') || '<none>'}`)
   if (resource.kind === 'Pod') {
     lines.push(`Status: ${resource.status.phase}`, `Image: ${resource.spec.containers[0].image}`)
+    if (view && state.rollouts) lines.push(`Image reference: ${resource.spec.containers[0].image}`,
+      `Observed digest: ${view.run.artifacts.buildsById[state.podSnapshots[resource.metadata.uid]?.artifactId]?.digest ?? '<none observed>'}`)
     const health = state.health?.containers?.[resource.metadata.uid]
     if (health) {
       lines.push(`Container ID: ${health.containerId}`, `Container Ready: ${health.ready ? 'True' : 'False'}`,

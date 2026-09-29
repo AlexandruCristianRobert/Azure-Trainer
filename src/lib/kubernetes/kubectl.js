@@ -2,8 +2,10 @@ import { parseKubernetesYaml } from './yaml.js'
 import { applyKubernetesObjects, kubeObjectKey } from './objects.js'
 import { reconcileKubernetesResult, restartDeploymentResult, getDeploymentPods, getPodTemplateHash } from './reconcile.js'
 import { validateKubernetesObject } from './schema.js'
-import { kubeJson, kubeYaml, kubeTable, describeObject } from './format.js'
-import { runDiagnosticCommand } from './diagnostics.js'
+import { kubeJson, kubeYaml, kubeTable, describeObject, formatRolloutHistory, formatRolloutStatus } from './format.js'
+import { runDiagnosticCommand, redactRolloutOutput } from './diagnostics.js'
+import { undoDeployment } from './rollout-history.js'
+import { getRolloutSummary } from './rollouts.js'
 import { clearPodState, deleteCascade } from './pod-cleanup.js'
 import { setDeploymentReplicas } from './scheduling.js'
 import { inspectResources } from './resource-inspection.js'
@@ -15,16 +17,15 @@ const response = (sandbox, lines, effects, diagnostics = []) => ({ sandbox, line
 
 function flags(tokens, allowed) {
   const result = { positional: [], values: {} }
-  const values = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '-o': 'output', '--output': 'output', '-f': 'file', '--dry-run': 'dryRun', '-l': 'label', '--replicas': 'replicas' }
+  const values = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '-o': 'output', '--output': 'output', '-f': 'file', '--dry-run': 'dryRun', '-l': 'label', '--replicas': 'replicas', '--revision': 'revision', '--to-revision': 'toRevision', '--watch': 'watch' }
   const booleans = { '-A': 'allNamespaces', '--all-namespaces': 'allNamespaces', '--current': 'current', '--show-labels': 'showLabels', '--previous': 'previous' }
   for (let i = 0; i < tokens.length; i++) {
     let token = tokens[i], key = values[token], inline
-    if (!key && token.startsWith('--dry-run=')) { key = 'dryRun'; inline = token.slice(10) }
-    if (!key && token.startsWith('--output=')) { key = 'output'; inline = token.slice(9) }
+    if (!key && token.startsWith('--') && token.includes('=')) { const index = token.indexOf('='); key = values[token.slice(0, index)]; inline = token.slice(index + 1) }
     if (key) {
       if (!allowed.has(key)) return { error: `flag '${token}' is not supported for this command.` }
       const value = inline ?? tokens[++i]
-      if (!value) return { error: `argument ${token} requires a value.` }
+      if (!value || inline === undefined && value.startsWith('-')) return { error: `argument ${token} requires a value.` }
       if (key === 'file') (result.values.file ??= []).push(value)
       else if (result.values[key] !== undefined) return { error: `duplicate ${token} flag.` }
       else result.values[key] = value
@@ -37,6 +38,8 @@ function flags(tokens, allowed) {
   }
   if (result.values.namespace && result.values.allNamespaces) return { error: '--namespace and --all-namespaces conflict.' }
   if (result.values.output && !['json', 'yaml', 'wide'].includes(result.values.output)) return { error: `unsupported output format '${result.values.output}'.` }
+  for (const key of ['revision', 'toRevision']) if (result.values[key] !== undefined && (!/^[1-9]\d*$/.test(result.values[key]) || !Number.isSafeInteger(Number(result.values[key])))) return { error: 'A rollout revision must be a positive integer.' }
+  if (result.values.watch !== undefined && !['true', 'false'].includes(result.values.watch)) return { error: '--watch accepts true or false.' }
   return result
 }
 
@@ -55,9 +58,9 @@ function resources(state, kind, namespace, allNamespaces) {
   return Object.values(state.resources).filter(item => item.kind === kind && (!namespaced.has(kind) || allNamespaces || item.metadata.namespace === namespace))
 }
 function namespaceMissing(state, namespace) { return !state.resources[kubeObjectKey('Namespace', '', namespace)] }
-function render(items, kind, format) {
+function render(items, kind, format, view = null) {
   const value = items.length === 1 ? items[0] : { apiVersion: 'v1', kind: `${kind}List`, items }
-  return format === 'json' ? kubeJson(value) : format === 'yaml' ? kubeYaml(value) : kubeTable(items, kind, format === 'wide')
+  return format === 'json' ? kubeJson(value) : format === 'yaml' ? kubeYaml(value) : kubeTable(items, kind, format === 'wide', view)
 }
 function stateEffect(run) { return [{ type: 'kubernetes-state', kubernetes: run.runtime.kubernetes, nextSequence: run.nextSequence }] }
 function resourceNodes(run, selection) {
@@ -130,10 +133,16 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (command === 'set-context' && parsed.values.current && parsed.values.namespace && !parsed.positional.length) { const name = run.runtime.kubernetes.currentContext; if (!name) return response(sandbox, [err('No current Kubernetes context is configured.')]); const contexts = structuredClone(run.runtime.kubernetes.contexts); contexts[name].namespace = parsed.values.namespace; return response(sandbox, [out(`Context namespace set to ${parsed.values.namespace}.`)], [{ type: 'kubernetes-state', kubernetes: { ...run.runtime.kubernetes, contexts }, nextSequence: run.nextSequence }]) }
     return response(sandbox, [err('Unsupported kubectl config command.')])
   }
-  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? new Set(['namespace', 'context']) : verb === 'logs' ? new Set(['namespace', 'context', 'previous']) : verb === 'scale' ? new Set(['namespace', 'context', 'replicas']) : verb === 'top' ? new Set(['namespace', 'context']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
+  const rolloutFlags = new Set(['namespace', 'context', 'revision', 'toRevision', 'watch'])
+  const parsed = flags(rest, verb === 'apply' ? new Set(['namespace', 'context', 'file', 'dryRun', 'output']) : verb === 'delete' ? new Set(['namespace', 'context', 'file']) : verb === 'rollout' ? rolloutFlags : verb === 'logs' ? new Set(['namespace', 'context', 'previous']) : verb === 'scale' ? new Set(['namespace', 'context', 'replicas']) : verb === 'top' ? new Set(['namespace', 'context']) : new Set(['namespace', 'context', 'allNamespaces', 'output', 'label', 'showLabels']))
   if (parsed.error) return response(sandbox, [err(parsed.error)])
+  if (verb === 'rollout') {
+    const allowed = new Set(['namespace', 'context', ...({ history: ['revision'], undo: ['toRevision'], status: ['watch'] }[parsed.positional[0]] ?? [])])
+    for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) return response(sandbox, [err(`flag '${key === 'toRevision' ? '--to-revision' : `--${key}`}' is not supported for this command.`)])
+  }
   const selection = target(run, parsed.values)
   if (selection.error) return response(sandbox, [err(`Error: ${selection.error}`)])
+  const safeOutput = text => lab.capabilities.kubernetesRollouts === true ? redactRolloutOutput(text, selection.state) : text
   if (verb === 'apply') return apply(run, selection, parsed.values, lab)
   if (verb === 'get') {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
@@ -147,8 +156,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     const found = (derivedNodes ?? resources(selection.state, kind, selection.namespace, parsed.values.allNamespaces)).filter(item => (!name || item.metadata.name === name)
       && (!labelPair || item.metadata.labels?.[labelPair[0]] === labelPair[1]))
     if (name && !found.length) return response(sandbox, [err(`${kind} '${name}' was not found.`)])
-    if (parsed.values.showLabels) return response(sandbox, [out(['NAME\tREADY\tLABELS', ...found.map(item => `${item.metadata.name}\t${item.status?.conditions?.some(x => x.type === 'Ready' && x.status === 'True') ? '1/1' : '0/1'}\t${Object.entries(item.metadata.labels ?? {}).map(([key, value]) => `${key}=${value}`).join(',')}`)].join('\n'))])
-    return response(sandbox, [out(render(found, kind, parsed.values.output))])
+    if (parsed.values.showLabels) return response(sandbox, [out(safeOutput(['NAME\tREADY\tLABELS', ...found.map(item => `${item.metadata.name}\t${item.status?.conditions?.some(x => x.type === 'Ready' && x.status === 'True') ? '1/1' : '0/1'}\t${Object.entries(item.metadata.labels ?? {}).map(([key, value]) => `${key}=${value}`).join(',')}`)].join('\n')))])
+    const rendered = render(found, kind, parsed.values.output, lab.capabilities.kubernetesRollouts === true ? { run, state: selection.state, clusterId: selection.clusterId } : null)
+    return response(sandbox, [out(['json', 'yaml'].includes(parsed.values.output) ? rendered : safeOutput(rendered))])
   }
   if (verb === 'describe') {
     const kind = kinds[parsed.positional[0]], name = parsed.positional[1]
@@ -162,7 +172,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     const found = resources(selection.state, kind, selection.namespace).find(item => item.metadata.name === name)
     if (!found) return response(sandbox, [err(`${kind} '${name}' was not found.`)])
-    const described = describeObject(found, selection.state)
+    const described = safeOutput(describeObject(found, selection.state, lab.capabilities.kubernetesRollouts === true ? { run, clusterId: selection.clusterId } : null))
     if (kind !== 'HorizontalPodAutoscaler') return response(sandbox, [out(described)])
     const controller = selection.state.resourcesRuntime?.hpa?.[found.metadata.uid]
     const conditions = (found.status?.conditions ?? []).map(item => `${item.type}=${item.status} (${item.reason})`).join('; ') || '<none>'
@@ -180,11 +190,11 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (!snapshot) return response(sandbox, [err(`Pod '${name}' has no running container logs.`)])
     const health = lab.capabilities.kubernetesProbes === true ? selection.state.health?.containers?.[pod.metadata.uid] : null
     if (parsed.values.previous) return health?.previous
-      ? response(sandbox, [out(health.previous.logs.join('\n') || `Previous container terminated: ${health.previous.reason ?? 'Unknown'}${health.previous.exitCode == null ? '' : ` (exit code ${health.previous.exitCode})`}.` )])
+      ? response(sandbox, [out(safeOutput(health.previous.logs.join('\n') || `Previous container terminated: ${health.previous.reason ?? 'Unknown'}${health.previous.exitCode == null ? '' : ` (exit code ${health.previous.exitCode})`}.` ))])
       : response(sandbox, [err(`Pod '${name}' has no previous terminated container logs.`)])
     const application = (selection.state.connectivity?.applicationLogs ?? []).filter(item => item.podUid === pod.metadata.uid)
       .map(item => `request=${item.requestId} ${item.method} ${item.path} status=${item.status} dependencies=${item.dependencySummary.map(hop => `${hop.operation}:${hop.status}${hop.reason ? `(${hop.reason})` : ''}`).join(',')}`)
-    return response(sandbox, [out([`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...application].join('\n'))])
+    return response(sandbox, [out(safeOutput([`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...application].join('\n')))])
   }
   if (verb === 'top') {
     const kind = parsed.positional[0]
@@ -247,8 +257,29 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     const name = parsed.positional[1].slice(11), deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
     if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
     if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
+    if (parsed.values.watch === 'true') return response(sandbox, [err('Trainer limit: watch is not supported. Use a snapshot with --watch=false and advance simulated time through Experiment Controls.')])
+    if (lab.capabilities.kubernetesRollouts === true) {
+      const summary = getRolloutSummary(run, { clusterId: selection.clusterId, deploymentUid: deployment.metadata.uid })
+      if (!summary) return response(sandbox, [err('No rollout snapshot is available for this Deployment.')])
+      const stalled = summary.conditions.some(item => item.type === 'Progressing' && item.status === 'False' && item.reason === 'ProgressDeadlineExceeded')
+      return response(sandbox, [(stalled ? err : out)(safeOutput(formatRolloutStatus(summary, name, selection.namespace)))])
+    }
     const pods = getDeploymentPods(run, selection.clusterId, selection.namespace, name)
     return response(sandbox, [out(pods.length === deployment.spec.replicas && pods.every(pod => pod.status.phase === 'Running') ? `deployment "${name}" successfully rolled out (simulated).` : `deployment "${name}" has pending Pods (simulated).`)])
+  }
+  if (verb === 'rollout' && ['history', 'undo'].includes(parsed.positional[0]) && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {
+    if (lab.capabilities.kubernetesRollouts !== true) return response(sandbox, [err('Rollout history and undo are available only in release Labs with rollout support.')])
+    const name = parsed.positional[1].slice(11)
+    if (namespaceMissing(selection.state, selection.namespace)) return response(sandbox, [err(`Namespace '${selection.namespace}' was not found.`)])
+    const deployment = selection.state.resources[kubeObjectKey('Deployment', selection.namespace, name)]
+    if (!deployment) return response(sandbox, [err(`Deployment '${name}' was not found.`)])
+    if (parsed.positional[0] === 'history') {
+      const text = formatRolloutHistory(run, selection.state, deployment, parsed.values.revision === undefined ? null : Number(parsed.values.revision))
+      return text === null ? response(sandbox, [err(`Revision ${parsed.values.revision} is not retained; it may have been pruned.`)]) : response(sandbox, [out(safeOutput(text))])
+    }
+    const result = undoDeployment(run, { clusterId: selection.clusterId, deploymentUid: deployment.metadata.uid }, { revision: parsed.values.toRevision === undefined ? null : Number(parsed.values.toRevision) }, lab)
+    if (result.diagnostics.length) return response(sandbox, [err(safeOutput(result.diagnostics[0].message))], undefined, result.diagnostics)
+    return response(sandbox, result.lines.map(line => ({ ...line, text: safeOutput(line.text) })), stateEffect(result.run))
   }
   if (verb === 'rollout' && parsed.positional[0] === 'restart' && /^deployment\//.test(parsed.positional[1] ?? '') && parsed.positional.length === 2) {
     const name = parsed.positional[1].slice(11)
