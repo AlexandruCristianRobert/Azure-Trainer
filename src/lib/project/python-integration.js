@@ -42,6 +42,19 @@ export function parsePythonIntegration(files, manifest = {}) {
     if (n.name !== 'CallExpression') { unsupported = error(text, n, `Unsupported expression '${n.name}'.`); return null }
     const cs = kids(n); const callee = cs.find(x => x.name === 'MemberExpression') ?? cs.find(x => x.name === 'VariableName'); const args = argumentsOf(cs.find(x => x.name === 'ArgList')); const m = callee?.name === 'MemberExpression' ? member(callee) : null; const name = m ? m.property : raw(callee, text)
     if (!m && name === 'format_answer' && manifest.releaseVersion) {
+      let shadow = assignments.find(values => raw(values[0], text) === 'format_answer')?.[0]
+      for (const statement of kids(tree.topNode).filter(node => node.name === 'ImportStatement')) {
+        const imported = kids(statement)
+        shadow ??= imported.find((node, index) => node.name === 'VariableName' && raw(node, text) === 'format_answer'
+          && imported[index - 1]?.name !== 'from' && imported[index + 1]?.name !== 'as')
+      }
+      answer.cursor().iterate(node => {
+        if (node.name === 'AssignStatement' && raw(parts(node.node)[0], text) === 'format_answer') shadow ??= parts(node.node)[0]
+        if (node.name === 'ParamList') shadow ??= kids(node.node).find(child => child.name === 'VariableName' && raw(child, text) === 'format_answer')
+      })
+      if (scope.has('format_answer') || shadow) {
+        unsupported = error(text, shadow ?? callee, 'Rebinding format_answer is outside the supported release helper subset.'); return null
+      }
       const helpers = kids(tree.topNode).filter(node => node.name === 'FunctionDefinition' && raw(kids(node).find(child => child.name === 'VariableName'), text) === 'format_answer')
       const helper = helpers[0]; const parameters = kids(helper).find(node => node.name === 'ParamList')
       const names = parts(parameters).map(node => raw(node, text))

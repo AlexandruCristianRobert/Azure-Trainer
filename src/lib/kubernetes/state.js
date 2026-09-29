@@ -1,7 +1,7 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
 import { normalizeRolloutSpec } from './rollout-schema.js'
-import { rolloutTemplate, rolloutTemplateHash } from './rollout-history.js'
+import { rolloutTemplate, rolloutTemplateHash, registerRevision } from './rollout-history.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -50,6 +50,26 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
     && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id))
+}
+
+export function migrateMissingRolloutState(input, lab) {
+  if (lab?.capabilities?.kubernetesRollouts !== true || !isPlainObject(input.runtime?.kubernetes?.clusters)) return input
+  let run = input
+  for (const [clusterId, state] of Object.entries(input.runtime.kubernetes.clusters)) {
+    if (!isPlainObject(state) || state.rollouts !== undefined) continue
+    // Only adopt a valid pre-rollout cluster. Never repair corrupt or explicit
+    // malformed rollout state during saved-run acceptance.
+    const empty = { version: 1, deployments: {}, experiment: null, receipts: [] }
+    if (!validClusterState({ ...state, rollouts: empty }, input, lab, clusterId)) return input
+    if (run === input) run = structuredClone(input)
+    run.runtime.kubernetes.clusters[clusterId].rollouts = empty
+    for (const deployment of Object.values(state.resources).filter(item => item.kind === 'Deployment')) {
+      const adopted = registerRevision(run, { clusterId, deploymentUid: deployment.metadata.uid }, deployment.spec.template)
+      if (adopted.diagnostics.length) return input
+      run = adopted.run
+    }
+  }
+  return run
 }
 
 function validIntegrationIncident(runtime, run) {

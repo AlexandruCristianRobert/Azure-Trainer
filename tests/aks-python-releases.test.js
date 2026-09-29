@@ -85,6 +85,20 @@ test('unknown non-scalar module expressions cannot become undefined graph litera
   expect(compile(files).diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', message: "Unknown binding 'UNKNOWN'." })]))
 })
 
+test.each([
+  source => source.replace('def answer(question):', 'def answer(question):\n    format_answer = 0'),
+  source => source.replace('def answer(question):', 'format_answer = 0\n\ndef answer(question):'),
+  source => source + '\nformat_answer = 0\n',
+  source => source.replace('        return {"status": 200, "body": format_answer', '        format_answer = 0\n        return {"status": 200, "body": format_answer'),
+  source => source.replace('    except DependencyError as error:', '        format_answer = 0\n    except DependencyError as error:'),
+  source => source + '\nfrom training_clients import format_answer\n',
+  source => source + '\nimport training_clients as format_answer\n',
+])('rejects a shadowed formatter binding instead of invoking the named helper', mutate => {
+  const parsed = compile({ ...RELEASE_SOLUTION_FILES, 'app.py': mutate(RELEASE_SOLUTION_FILES['app.py']) })
+  expect(parsed.appSpec).toBe(null)
+  expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py', line: expect.any(Number), column: expect.any(Number) })]))
+})
+
 test('invalid input, empty retrieval, and dependency errors retain their original branches', () => {
   const app = compile(RELEASE_SOLUTION_FILES).appSpec
   const invoke = (body, profile = 'healthy') => simulateIntegration(app, snapshot(), { ...question, body }, INTEGRATION_FIXTURES, profile)

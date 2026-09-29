@@ -6,6 +6,7 @@ import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
 import { validateKubernetesObject } from '../src/lib/kubernetes/schema.js'
+import { stringify } from 'yaml'
 
 describe('rollout schema', () => {
   test('normalizes the supported rolling update defaults and percentage budget', () => {
@@ -71,6 +72,28 @@ test('bootstraps an eligible saved deployment without replacing its ReplicaSet o
   expect(validateKubernetesRuntime(result.run.runtime.kubernetes, result.run, lab)).toBe(true)
   expect(rollout.currentRsUid).toBe(rsUid)
   expect(getDeploymentPods(result.run, clusterId, 'assistant', 'assistant').map(item => item.metadata.uid).sort()).toEqual(podUids)
+})
+
+test('first template-changing apply adopts the live old revision before registering the new template', () => {
+  const { run: baseline, lab, clusterId } = rolloutSeed()
+  const oldResources = baseline.runtime.kubernetes.clusters[clusterId].resources
+  const oldDeployment = oldResources['Deployment/assistant/assistant']; const oldRs = Object.values(oldResources).find(item => item.kind === 'ReplicaSet')
+  const changed = desired(baseline, clusterId, value => { value.spec.template.metadata.annotations = { learner: 'first-change' }; return value })
+  const applied = apply(baseline, lab, clusterId, changed)
+  expect(applied.diagnostics).toEqual([])
+  expect(applied.run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[oldDeployment.metadata.uid].currentRevision).toBe(2)
+  // Public save/apply without an intervening unchanged Deployment apply.
+  let run = act(baseline, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(changed) }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  const state = run.runtime.kubernetes.clusters[clusterId]
+  const history = state.rollouts.deployments[oldDeployment.metadata.uid]
+  expect(history.currentRevision).toBe(2)
+  expect(history.revisions).toHaveLength(2)
+  expect(history.revisions[0]).toMatchObject({ revision: 1, rsUid: oldRs.metadata.uid })
+  expect(history.revisions[0].template).toEqual(oldRs.spec.template)
+  expect(state.resources[`ReplicaSet/assistant/${oldRs.metadata.name}`]).toEqual(oldRs)
+  expect(Object.values(state.resources).filter(item => item.kind === 'Pod')).toEqual(Object.values(oldResources).filter(item => item.kind === 'Pod'))
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
 })
 
 test('replica and strategy edits retain the current revision while template annotations create one', () => {

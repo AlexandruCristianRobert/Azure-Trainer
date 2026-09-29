@@ -10,6 +10,29 @@ it('initializes versioned Kubernetes state only for Kubernetes Labs', () => {
   expect(validateBehavioralRun(run, lab)).toBe(run)
 })
 
+it('migrates an eligible saved rollout run before strict validation without replacing owned resources', () => {
+  const { run, lab: baselineLab, clusterId } = seedFoundation()
+  const lab = { ...baselineLab, capabilities: { ...baselineLab.capabilities, kubernetesRollouts: true } }
+  for (const accept of [saved => validateBehavioralRun(saved, lab), saved => migrateBehavioralRun(saved, lab)]) {
+    const saved = JSON.parse(JSON.stringify(run)); const prior = structuredClone(saved.runtime.kubernetes.clusters[clusterId].resources)
+    const accepted = accept(saved)
+    expect(accepted.nextSequence).toBe(run.nextSequence)
+    expect(accepted.runtime.kubernetes.clusters[clusterId].resources).toEqual(prior)
+    const deployment = prior['Deployment/assistant/assistant']
+    const rs = Object.values(prior).find(item => item.kind === 'ReplicaSet')
+    expect(accepted.runtime.kubernetes.clusters[clusterId].rollouts.deployments[deployment.metadata.uid]).toMatchObject({ currentRevision: 1, currentRsUid: rs.metadata.uid, nextRevision: 2 })
+    expect(validateBehavioralRun(accepted, lab)).toBe(accepted)
+  }
+  const corrupt = JSON.parse(JSON.stringify(run)); delete corrupt.runtime.kubernetes.clusters[clusterId].resources['Namespace//kube-system']
+  expect(() => migrateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
+  expect(corrupt.runtime.kubernetes.clusters[clusterId].rollouts).toBeUndefined()
+  const malformed = JSON.parse(JSON.stringify(run)); malformed.runtime.kubernetes.clusters[clusterId].rollouts = null
+  expect(() => migrateBehavioralRun(malformed, lab)).toThrow(/Kubernetes/)
+  const configured = JSON.parse(JSON.stringify(run))
+  configured.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].spec.strategy = { type: 'RollingUpdate', rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  expect(migrateBehavioralRun(configured, lab).runtime.kubernetes.clusters[clusterId].rollouts.version).toBe(1)
+})
+
 it('keeps legacy non-AKS runs without optional AKS fields valid', () => {
   const { lab, run } = createAksTestRun({ capabilities: { acrBuild: true } })
   const legacy = structuredClone(run)

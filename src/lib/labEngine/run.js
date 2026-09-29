@@ -1,6 +1,6 @@
 import { createSandbox, isSandboxShape, normalizeSandbox, SUBSCRIPTION_ID } from '../sandbox/model.js'
 import { emptyBicepProvenance, validBicepProvenance } from '../bicep/provenance.js'
-import { emptyKubernetesRuntime, validateKubernetesRuntime } from '../kubernetes/state.js'
+import { emptyKubernetesRuntime, validateKubernetesRuntime, migrateMissingRolloutState } from '../kubernetes/state.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { fail } from './errors.js'
 import { capstoneStages, validateStageLab, validateStageState } from './stages.js'
@@ -210,9 +210,13 @@ export function validateBehavioralRun(run, lab = null) {
   }
   if (lab !== null) {
     validateBehavioralLab(lab)
-    if (lab.capabilities?.kubernetes === true && !validateKubernetesRuntime(run.runtime.kubernetes, run, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
     if (run.labId !== lab.id || run.contentVersion !== lab.contentVersion) {
       fail('INCOMPATIBLE_CONTENT', 'The run does not match this Lab content.', { labId: run.labId, contentVersion: run.contentVersion })
+    }
+    if (lab.capabilities?.kubernetes === true) {
+      const candidate = migrateMissingRolloutState(run, lab)
+      if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
+      if (candidate !== run) { run.runtime = candidate.runtime; run.nextSequence = candidate.nextSequence }
     }
     if (Array.isArray(lab.bicepTargets)) {
       const state = run.runtime.bicep

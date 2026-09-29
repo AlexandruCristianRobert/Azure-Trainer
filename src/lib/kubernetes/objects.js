@@ -60,6 +60,12 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
     if (old?.kind === 'Service' && old.spec.type !== object.spec.type) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SERVICE_TYPE', message: 'Changing a Service type in place is unsupported by this trainer.' }] }
+    if (old?.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true
+      && !next.runtime.kubernetes.clusters[clusterId].rollouts?.deployments?.[old.metadata.uid]) {
+      const adopted = registerRevision(next, { clusterId, deploymentUid: old.metadata.uid }, old.spec.template)
+      if (adopted.diagnostics.length) return { run: beforeObject, lines, diagnostics: adopted.diagnostics }
+      next = adopted.run
+    }
     const uid = old?.metadata.uid ?? `kube-${next.nextSequence++}`
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
     const generation = object.kind === 'Deployment' ? (old ? (JSON.stringify(old.spec) === JSON.stringify(object.spec) ? old.metadata.generation : (old.metadata.generation ?? 1) + 1) : 1) : undefined
