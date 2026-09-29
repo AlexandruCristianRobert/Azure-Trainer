@@ -2,6 +2,7 @@ import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
 import { normalizeRolloutSpec } from './rollout-schema.js'
 import { rolloutTemplate, rolloutTemplateHash, registerRevision } from './rollout-history.js'
+import { validRolloutRedactionPaths } from './rollout-redaction.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -223,6 +224,7 @@ function validClusterState(state, run, lab, clusterId) {
       const rs = byUid.get(revision?.rsUid)
       if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revision.revision >= rollout.nextRevision || revisions.has(revision.revision) || rsUids.has(revision.rsUid)
         || typeof revision.templateHash !== 'string' || !isPlainObject(revision.template) || typeof revision.imageRef !== 'string'
+        || !validRolloutRedactionPaths(revision.redactedPaths, revision.template)
         || revision.templateHash !== rolloutTemplateHash(revision.template)
         || JSON.stringify(rolloutTemplate(rs?.spec?.template ?? {})) !== JSON.stringify(revision.template)
         || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid) || rs.spec?.template?.spec?.containers?.[0]?.image !== revision.imageRef) return false

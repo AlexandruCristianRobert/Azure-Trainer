@@ -6,6 +6,8 @@ import { getRolloutSummary } from '../src/lib/kubernetes/rollouts.js'
 import { advanceKubernetesTime } from '../src/lib/kubernetes/time.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
+import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { act, releaseTestRun, applyReleaseTemplate, releaseUndoFixture, getReleaseConfigSnapshot, RELEASE_TARGET as target, RELEASE_TEST_LAB as lab, seedFoundation } from './helpers/aks.js'
 
 const state = run => run.runtime.kubernetes.clusters[target.clusterId]
@@ -253,16 +255,17 @@ it('mutable-tag undo under Always pulls the currently published artifact while h
   expect(run.artifacts.publishedTags).toEqual(tags)
 })
 
-it('history, get, describe and logs redact both current and captured historical Secret provenance', () => {
+it('history, get, describe and logs retain Secret redaction through undo, Pod cleanup and reload', () => {
   let run = releaseUndoFixture()
   const value = parse(run.project.savedFiles['k8s/deployment.yaml'])
   value.spec.template.spec.containers[0].image = 'acraksreleasesguided.azurecr.io/assistant:training-only-password'
   value.spec.template.metadata.labels.secret_hint = 'training-only-password'
+  value.spec.template.metadata.labels['training-only-password'] = 'public-label-value'
+  value.spec.template.spec.containers[0].livenessProbe.httpGet.path = '/health/current-secret-after-v1'
   run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(value) }).run
   run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
   const pod = getDeploymentPods(run, target.clusterId, 'assistant', 'assistant-api').find(item => item.spec.containers[0].image.endsWith(':training-only-password'))
   const old = getDeploymentPods(run, target.clusterId, 'assistant', 'assistant-api').find(item => state(run).podSnapshots[item.metadata.uid])
-  state(run).connectivity.applicationLogs.push({ podUid: old.metadata.uid, requestId: 'current-secret-after-v1', method: 'GET', path: '/api/info', status: 200, dependencySummary: [] })
   const before = structuredClone(run)
   for (const text of ['rollout history deployment/assistant-api -n assistant', 'rollout history deployment/assistant-api -n assistant --revision=3',
     'get replicasets -n assistant', 'get pods -n assistant --show-labels', 'describe deployment assistant-api -n assistant', `describe pod ${pod.metadata.name} -n assistant`, `logs ${old.metadata.name} -n assistant`]) {
@@ -273,6 +276,71 @@ it('history, get, describe and logs redact both current and captured historical 
     expect(output(result)).not.toContain(btoa('current-secret-after-v1'))
   }
   expect(run).toEqual(before)
+  const retainedTemplate = structuredClone(history(run).revisions.find(item => item.revision === 3).template)
+  const provenance = JSON.stringify(history(run).revisions.find(item => item.revision === 3).redactedPaths)
+  expect(provenance).not.toContain('training-only-password')
+  expect(provenance).not.toContain('current-secret-after-v1')
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout undo deployment/assistant-api -n assistant --to-revision=1' }).run
+  run = advanceKubernetesTime(run, 120, lab)
+  expect(getRolloutSummary(run, target)).toMatchObject({ complete: true, currentRevision: 4 })
+  expect(Object.values(state(run).podSnapshots).some(snapshot => snapshot.environment?.PGPASSWORD === 'training-only-password')).toBe(false)
+  expect(history(run).revisions.find(item => item.revision === 3).template).toEqual(retainedTemplate)
+  expect(history(run).revisions.find(item => item.revision === 3).imageRef).toContain('training-only-password')
+  run = JSON.parse(JSON.stringify(run))
+  expect(validateBehavioralRun(run, lab)).toBe(run)
+  const reloaded = structuredClone(run)
+  for (const text of ['rollout history deployment/assistant-api -n assistant --revision=3', 'rollout history deployment/assistant-api -n assistant', 'get replicasets -n assistant', 'get replicasets -n assistant -o wide']) {
+    const result = command(run, text)
+    expect(result.lines[0].kind).toBe('out')
+    expect(output(result)).not.toContain('training-only-password')
+    expect(output(result)).toContain('[REDACTED]')
+    if (text.includes('--revision=3')) expect(output(result)).toContain('Retained templates store image references')
+  }
+  expect(run).toEqual(reloaded)
+  // Redaction metadata follows the retained entry and disappears when that
+  // entry is pruned. The live/restorable template remains independently intact.
+  const current = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'assistant-api', namespace: 'assistant' }, spec: structuredClone(deployment(run).spec) }
+  current.spec.revisionHistoryLimit = 0
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(current) }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  expect(history(run).revisions).toHaveLength(1)
+  expect(history(run).revisions[0].revision).toBe(4)
+  expect(history(run).revisions.some(item => item.redactedPaths?.length)).toBe(false)
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+})
+
+it('validates bounded persisted redaction paths and rejects malformed or foreign template coordinates', () => {
+  const run = releaseTestRun()
+  for (const paths of ['training-only-password', [null], ['/1#key', '/1#key'], ['/missing'], ['/2#key'], ['/1#value'], ['*', '/1#key'], Array(129).fill('/1#key'), [`/${'0'.repeat(513)}#key`]]) {
+    const corrupted = structuredClone(run)
+    history(corrupted).revisions[0].redactedPaths = paths
+    expect(validateKubernetesRuntime(corrupted.runtime.kubernetes, corrupted, lab)).toBe(false)
+  }
+  for (const paths of [undefined, [], ['/1#key'], ['*']]) {
+    const compatible = structuredClone(run)
+    if (paths !== undefined) history(compatible).revisions[0].redactedPaths = paths
+    expect(validateKubernetesRuntime(compatible.runtime.kubernetes, compatible, lab)).toBe(true)
+  }
+})
+
+it('many sensitive template fields retain safe bounded inspection through cleanup without copying credentials', () => {
+  let run = releaseUndoFixture()
+  const value = parse(run.project.savedFiles['k8s/deployment.yaml'])
+  value.spec.template.spec.containers[0].image = 'acraksreleasesguided.azurecr.io/assistant:training-only-password'
+  value.spec.template.metadata.annotations = Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`private-${index}`, 'training-only-password']))
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringify(value) }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  const originalTemplate = structuredClone(history(run).revisions.find(item => item.revision === 3).template)
+  const paths = history(run).revisions.find(item => item.revision === 3).redactedPaths
+  expect(Array.isArray(paths)).toBe(true)
+  expect(paths.length).toBeLessThanOrEqual(128)
+  expect(JSON.stringify(paths)).not.toContain('training-only-password')
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout undo deployment/assistant-api -n assistant --to-revision=1' }).run
+  run = JSON.parse(JSON.stringify(advanceKubernetesTime(run, 120, lab)))
+  expect(history(run).revisions.find(item => item.revision === 3).template).toEqual(originalTemplate)
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  expect(output(command(run, 'rollout history deployment/assistant-api -n assistant --revision=3'))).not.toContain('training-only-password')
+  expect(output(command(run, 'get replicasets -n assistant'))).not.toContain('training-only-password')
 })
 
 it('the undo helper rejects invalid, current, missing and non-release targets without any state mutation', () => {

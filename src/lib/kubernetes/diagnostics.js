@@ -1,4 +1,5 @@
 import { routeServiceRequest, resolveServiceDns } from './connectivity.js'
+import { currentRolloutSecrets, retainedRolloutRedactions } from './rollout-redaction.js'
 
 const error = (code, message) => ({ code, message, path: null, line: null, column: null })
 const clean = value => JSON.stringify(value)
@@ -10,21 +11,10 @@ export function rolloutDeadlineGuidance(name, namespace) {
 // Include historical captured configuration: a Secret may have changed since
 // an old container started, but its captured credential remains sensitive.
 export function redactRolloutOutput(text, state) {
-  const secrets = new Set()
-  for (const snapshot of Object.values(state.podSnapshots ?? {})) for (const ref of snapshot.configRefs ?? []) {
-    if (ref.kind !== 'Secret') continue
-    const value = ref.mode === 'file' ? snapshot.files?.[ref.target] : snapshot.environment?.[ref.target]
-    if (typeof value === 'string' && value) secrets.add(value)
-  }
-  for (const resource of Object.values(state.resources ?? {})) if (resource.kind === 'Secret') for (const encoded of Object.values(resource.data ?? {})) {
-    if (typeof encoded !== 'string' || !encoded) continue
-    secrets.add(encoded)
-    try {
-      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(encoded), char => char.charCodeAt(0)))
-      if (decoded) secrets.add(decoded)
-    } catch { /* malformed data has no decoded value */ }
-  }
-  return [...secrets].sort((a, b) => b.length - a.length).reduce((value, secret) => value.split(secret).join('[REDACTED]'), text)
+  const partial = currentRolloutSecrets(state).reduce((value, secret) => value.split(secret).join('[REDACTED]'), text)
+  // While a raw credential is known, preserve the ordinary partial display
+  // redaction. Once its Pod is gone, conceal the entire marked template string.
+  return retainedRolloutRedactions(state).reduce((value, field) => value.split(field).join('[REDACTED]'), partial)
 }
 
 export function runDiagnosticCommand(input, rawTokens, lab) {

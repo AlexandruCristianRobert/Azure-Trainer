@@ -1,4 +1,5 @@
 import { reconcileKubernetesResult } from './reconcile.js'
+import { currentRolloutSecrets, captureRolloutRedaction } from './rollout-redaction.js'
 
 const clone = value => structuredClone(value)
 const canonical = value => Array.isArray(value) ? value.map(canonical) : !value || typeof value !== 'object' ? value : Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
@@ -29,6 +30,8 @@ export function registerRevision(input, target, template) {
   const run = clone(input); const state = run.runtime.kubernetes.clusters[target.clusterId]; const deploy = state && deployment(run, target)
   if (!deploy) return { run: input, revision: null, rsUid: null, diagnostics: [{ code: 'KUBE_DEPLOYMENT_NOT_FOUND', message: 'The rollout Deployment is unavailable.' }] }
   const history = historyFor(run, target); const normalized = rolloutTemplate(template); const templateHashValue = hash(normalized); const current = history.revisions.find(item => item.rsUid === history.currentRsUid)
+  const secrets = currentRolloutSecrets(state)
+  for (const retained of history.revisions) captureRolloutRedaction(retained, secrets)
   if (current?.templateHash === templateHashValue) return { run, revision: history.currentRevision, rsUid: history.currentRsUid, diagnostics: [] }
   let revision = history.revisions.find(item => item.templateHash === templateHashValue)
   if (!revision && replicaSets(state, deploy.metadata.uid).length >= 20) return { run: input, revision: null, rsUid: null, diagnostics: [{ code: 'ROLLOUT_REPLICASET_LIMIT', message: 'A Deployment may retain at most 20 ReplicaSets.' }] }
@@ -39,6 +42,7 @@ export function registerRevision(input, target, template) {
     const rs = { apiVersion: 'apps/v1', kind: 'ReplicaSet', metadata: { name, namespace: deploy.metadata.namespace, uid: rsUid, resourceVersion: '1', ownerReferences: [{ uid: deploy.metadata.uid, kind: 'Deployment', name: deploy.metadata.name }] }, spec: { replicas: 0, selector: clone(deploy.spec.selector), template: clone(template) }, status: {} }
     state.resources[key('ReplicaSet', rs.metadata.namespace, name)] = rs
     revision = { revision: number, rsUid, templateHash: templateHashValue, template: normalized, imageRef: template.spec.containers[0]?.image ?? '' }; history.revisions.push(revision)
+    captureRolloutRedaction(revision, secrets)
   }
   history.currentRevision = number; history.currentRsUid = revision.rsUid; history.observedGeneration = deploy.metadata.generation ?? history.observedGeneration
   history.lastProgressAtMs = run.runtime.simTimeMs ?? 0
