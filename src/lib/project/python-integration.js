@@ -17,7 +17,12 @@ export function parsePythonIntegration(files, manifest = {}) {
   const tree = parser.parse(text); let bad = null; tree.iterate({ enter(n) { if (n.name === '⚠') bad = n } }); if (bad) return { appSpec: null, diagnostics: [{ code: 'PYTHON_SYNTAX', message: 'Python source contains a syntax error.', ...at(text, bad) }] }
   const diagnostics = []; for (const path of ['server.py', 'training_clients.py', 'schema.sql']) if ((path !== 'schema.sql' || Object.hasOwn(files, path)) && files[path] !== manifest.fixedFiles?.[path]) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Fixed integration scaffold modified.', path, line: 1, column: 1 })
   const sql = parseRetrievalSql(files?.['retrieval.sql']); diagnostics.push(...sql.diagnostics); const answer = fn(tree, text, 'answer'); if (!answer) diagnostics.push({ code: 'PYTHON_UNSUPPORTED', message: 'Define answer(question).', path: 'app.py', line: 1, column: 1 }); if (diagnostics.length) return { appSpec: null, diagnostics }
-  const topConstants = Object.fromEntries(kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName').map(p => [raw(p[0], text), scalar(p.at(-1), text)]))
+  const assignments = kids(tree.topNode).filter(n => n.name === 'AssignStatement').map(n => parts(n)).filter(p => p[0]?.name === 'VariableName')
+  const topConstants = Object.fromEntries(assignments.filter(p => scalar(p.at(-1), text) !== undefined).map(p => [raw(p[0], text), scalar(p.at(-1), text)]))
+  if (manifest.releaseVersion) {
+    const versions = assignments.filter(p => raw(p[0], text) === 'SERVICE_VERSION')
+    if (versions.length !== 1 || typeof scalar(versions[0]?.at(-1), text) !== 'string') return { appSpec: null, diagnostics: [error(text, versions[0]?.[0] ?? tree.topNode, 'SERVICE_VERSION must be a unique string literal.')] }
+  }
   const graph = { version: 1, nodes: [], roots: {}, bindings: {} }; const scope = new Map(); let unsupported = null
   const settingsFn = fn(tree, text, 'settings'); const settingsDictionary = settingsFn && kids(body(settingsFn)).find(n => n.name === 'ReturnStatement') && kids(kids(body(settingsFn)).find(n => n.name === 'ReturnStatement')).find(n => n.name === 'DictionaryExpression')
   const add = (op, n, fields = {}) => { const id = `n${graph.nodes.length + 1}`; graph.nodes.push({ id, op, source: at(text, n), ...fields }); return id }
@@ -28,7 +33,7 @@ export function parsePythonIntegration(files, manifest = {}) {
   const member = n => { const p = kids(n); const base = p.find(x => x.name === 'VariableName'); const property = p.find(x => x.name === 'PropertyName'); if (base && property) return { base: raw(base, text), property: raw(property, text) }; const key = p.find(x => x.name === 'String'); if (base && key) return { base: raw(base, text), key: scalar(key, text) }; return null }
   const lower = n => {
     if (!n || unsupported) return null; const fixed = scalar(n, text); if (fixed !== undefined) return add('literal', n, { value: fixed })
-    if (n.name === 'VariableName') return Object.hasOwn(topConstants, raw(n, text)) ? add('literal', n, { value: topConstants[raw(n, text)] }) : lookup(n, raw(n, text))
+    if (n.name === 'VariableName') { const name = raw(n, text); return scope.has(name) ? lookup(n, name) : Object.hasOwn(topConstants, name) ? add('literal', n, { value: topConstants[name] }) : lookup(n, name) }
     if (n.name === 'DictionaryExpression') return dict(n)
     if (n.name === 'TupleExpression') return add('tuple', n, { values: parts(n).map(lower) })
     if (n.name === 'ArrayExpression') return add('literal', n, { value: parts(n).map(x => scalar(x, text)) })
@@ -36,6 +41,27 @@ export function parsePythonIntegration(files, manifest = {}) {
     if (n.name === 'MemberExpression') { const m = member(n); if (m?.key) return add('config', n, { object: lookup(n, m.base), key: m.key }); if (m) return add('invoke', n, { target: lookup(n, m.base), method: m.property, args: { positional: [], keywords: {} }, resultType: 'method' }); unsupported = error(text, n, 'Unsupported member expression.'); return null }
     if (n.name !== 'CallExpression') { unsupported = error(text, n, `Unsupported expression '${n.name}'.`); return null }
     const cs = kids(n); const callee = cs.find(x => x.name === 'MemberExpression') ?? cs.find(x => x.name === 'VariableName'); const args = argumentsOf(cs.find(x => x.name === 'ArgList')); const m = callee?.name === 'MemberExpression' ? member(callee) : null; const name = m ? m.property : raw(callee, text)
+    if (!m && name === 'format_answer' && manifest.releaseVersion) {
+      const helpers = kids(tree.topNode).filter(node => node.name === 'FunctionDefinition' && raw(kids(node).find(child => child.name === 'VariableName'), text) === 'format_answer')
+      const helper = helpers[0]; const parameters = kids(helper).find(node => node.name === 'ParamList')
+      const names = parts(parameters).map(node => raw(node, text))
+      const statements = parts(body(helper)); const returned = statements[0] && parts(statements[0])[0]
+      if (helpers.length !== 1 || names.join(',') !== 'answer_text,rows,environment' || statements.length !== 1 || statements[0].name !== 'ReturnStatement' || returned?.name !== 'DictionaryExpression'
+        || args.positional.length !== 3 || args.keywords.length) {
+        unsupported = error(text, helper ?? n, 'format_answer must accept (answer_text, rows, environment), return one dictionary, and receive three positional arguments.'); return null
+      }
+      const references = args.positional.map(lower)
+      if (unsupported) return null
+      const outer = new Map(scope)
+      scope.clear(); names.forEach((name, index) => scope.set(name, references[index]))
+      // The helper is a bounded dictionary projection, never a function executor.
+      let invalid = null
+      returned.cursor().iterate(node => { if (node.name === 'CallExpression') invalid ??= node.node })
+      if (invalid) unsupported = error(text, invalid, 'Calls inside format_answer are outside the supported dictionary projection.')
+      const result = lower(returned)
+      scope.clear(); for (const [name, reference] of outer) scope.set(name, reference)
+      return result
+    }
     if (m?.property === 'strip') return add('strip', n, { input: lookup(callee, m.base) })
     if (name === 'settings') {
       if (!settingsDictionary) { unsupported = error(text, n, 'settings() must return supported environment bindings.'); return null }
@@ -59,5 +85,40 @@ export function parsePythonIntegration(files, manifest = {}) {
     return sequence }
   graph.roots.answer = lowerBlock(body(answer)); if (unsupported) return { appSpec: null, diagnostics: [unsupported] }
   const constants = topConstants
-  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info' }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: sql.querySpec, graph }, ...(manifest.releaseVersion ? { release: { version: manifest.releaseVersion, responseBindings: { release: constants.SERVICE_VERSION } } } : {}) }, diagnostics: [] }
+  const responseBindings = {}
+  if (manifest.releaseVersion) {
+    const nodes = new Map(graph.nodes.map(node => [node.id, node]))
+    const unbind = reference => { let node = nodes.get(reference); while (node?.op === 'binding') node = nodes.get(node.value); return node }
+    const generatesAnswer = graph.nodes.some(node => node.op === 'invoke' && node.resultType === 'generate')
+    for (const returned of graph.nodes.filter(node => node.op === 'return')) {
+      const envelope = unbind(returned.value); const response = unbind(envelope?.entries?.body)
+      if (response?.op !== 'dictionary' || !Object.hasOwn(response.entries, 'answer')) continue
+      const answerValue = unbind(response.entries.answer); const sources = unbind(response.entries.sources)
+      const emptyRetrieval = answerValue?.op === 'literal' && answerValue.value === 'No matching documents.' && sources?.op === 'literal' && Array.isArray(sources.value) && sources.value.length === 0
+      const generated = answerValue?.op === 'config' && answerValue.key === 'answer' && unbind(answerValue.object)?.resultType === 'generate'
+      const rowIds = sources?.op === 'source-ids' && sources.field === 'id' && unbind(sources.rows)?.resultType === 'execute'
+      if (generatesAnswer && !emptyRetrieval && (!generated || !rowIds)) return { appSpec: null, diagnostics: [{ code: 'PYTHON_UNSUPPORTED', message: 'Successful release answers must retain the generated answer and retrieved row IDs.', ...response.source }] }
+      const release = unbind(response.entries.release)
+      if (release && (release.op !== 'literal' || typeof release.value !== 'string')) return { appSpec: null, diagnostics: [{ code: 'PYTHON_UNSUPPORTED', message: 'The release response must resolve to a captured string version binding.', ...release.source }] }
+      if (release) responseBindings.release = release.value
+    }
+  }
+  let infoResponse
+  if (manifest.releaseVersion) {
+    const info = fn(tree, text, 'info'); const statements = parts(body(info)); const returned = statements[0] && parts(statements[0])[0]
+    if (statements.length !== 1 || statements[0]?.name !== 'ReturnStatement' || returned?.name !== 'DictionaryExpression') return { appSpec: null, diagnostics: [error(text, info ?? tree.topNode, 'info() must return the supported service, version, and environment dictionary.')] }
+    infoResponse = {}; const entries = parts(returned)
+    for (let index = 0; index < entries.length; index += 2) {
+      const key = scalar(entries[index], text); const expression = entries[index + 1]; const name = expression?.name === 'VariableName' && raw(expression, text)
+      if (['service', 'version'].includes(key) && name && typeof constants[name] === 'string') infoResponse[key] = { kind: 'literal', value: constants[name] }
+      else if (key === 'environment' && expression?.name === 'CallExpression' && raw(kids(expression).find(node => node.name === 'MemberExpression'), text).replace(/\s/g, '') === 'os.environ.get') {
+        const args = argumentsOf(kids(expression).find(node => node.name === 'ArgList'))
+        const values = args.positional.map(node => scalar(node, text))
+        if (args.keywords.length || values.length !== 2 || !values.every(value => typeof value === 'string')) return { appSpec: null, diagnostics: [error(text, expression, 'info() environment must use os.environ.get(key, default) with string arguments.')] }
+        infoResponse[key] = { kind: 'config', key: values[0], defaultValue: values[1] }
+      } else return { appSpec: null, diagnostics: [error(text, expression ?? returned, 'Unsupported info() response binding.')] }
+    }
+    if (Object.keys(infoResponse).sort().join(',') !== 'environment,service,version') return { appSpec: null, diagnostics: [error(text, returned, 'info() requires service, version, and environment.')] }
+  }
+  return { appSpec: { language: 'python', service: constants.SERVICE_NAME, version: constants.SERVICE_VERSION, listeningPort: constants.PORT, routes: [{ method: 'GET', path: '/api/info', ...(infoResponse ? { response: infoResponse } : {}) }, { method: 'POST', path: '/api/ask', response: { kind: 'integration' } }], integration: { adapter: 'integration-fixture-v1', adapterDigest: digest(files['training_clients.py']), querySpec: sql.querySpec, graph }, ...(manifest.releaseVersion ? { release: { version: manifest.releaseVersion, responseBindings } } : {}) }, diagnostics: [] }
 }

@@ -118,6 +118,7 @@ export function reconcileKubernetesResult(input, lab) {
     const state = run.runtime.kubernetes.clusters[cluster.id]
     if (!state) continue
     if (run.__resourceLab && !state.resourcesRuntime) state.resourcesRuntime = { version: 1, nodes: clone(RESOURCE_FIXTURES.nodes), assignments: {}, usage: {}, metrics: {}, hpa: {}, experiment: null, receipts: [], incident: null, terminationDue: {}, accountedUntilMs: null }
+    if (lab?.capabilities?.kubernetesRollouts === true) state.rollouts ??= { version: 1, deployments: {}, experiment: null, receipts: [] }
     const deployments = Object.values(state.resources).filter(item => item.kind === 'Deployment')
     for (const deployment of deployments) {
       if (lab?.capabilities?.kubernetesRollouts === true) {

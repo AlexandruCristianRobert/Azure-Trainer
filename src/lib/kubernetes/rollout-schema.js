@@ -9,17 +9,17 @@ export function normalizeRolloutSpec(input = {}) {
   const allowed = new Set(['type', 'rollingUpdate', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit'])
   const unknown = Object.keys(input).find(key => !allowed.has(key))
   if (unknown) return { value: null, diagnostics: [{ code: 'UNSUPPORTED_FIELD', message: `The field '${unknown}' is outside the supported rollout subset.` }] }
-  const type = input.type ?? defaults.type
+  const type = input.type === undefined ? defaults.type : input.type
   if (type !== 'RollingUpdate') return { value: null, diagnostics: [{ code: 'INVALID_ROLLOUT_STRATEGY', message: 'Only RollingUpdate deployments are supported.' }] }
-  const rollingInput = input.rollingUpdate ?? {}; const rollingAllowed = new Set(['maxSurge', 'maxUnavailable'])
+  const rollingInput = input.rollingUpdate === undefined ? {} : input.rollingUpdate; const rollingAllowed = new Set(['maxSurge', 'maxUnavailable'])
   const rollingUnknown = !rollingInput || typeof rollingInput !== 'object' || Array.isArray(rollingInput) ? 'rollingUpdate' : Object.keys(rollingInput).find(key => !rollingAllowed.has(key))
   if (rollingUnknown) return { value: null, diagnostics: [{ code: 'UNSUPPORTED_FIELD', message: `The field '${rollingUnknown}' is outside the supported rollout subset.` }] }
-  const rollingUpdate = { maxSurge: rollingInput.maxSurge ?? defaults.rollingUpdate.maxSurge, maxUnavailable: rollingInput.maxUnavailable ?? defaults.rollingUpdate.maxUnavailable }
+  const rollingUpdate = { maxSurge: rollingInput.maxSurge === undefined ? defaults.rollingUpdate.maxSurge : rollingInput.maxSurge, maxUnavailable: rollingInput.maxUnavailable === undefined ? defaults.rollingUpdate.maxUnavailable : rollingInput.maxUnavailable }
   if (!budget(rollingUpdate.maxSurge) || !budget(rollingUpdate.maxUnavailable)) return { value: null, diagnostics: [{ code: 'INVALID_ROLLOUT_BUDGET', message: 'Rolling update budgets must be 0-6 or 0%-100%.' }] }
   if (['0', '0%'].includes(String(rollingUpdate.maxSurge)) && ['0', '0%'].includes(String(rollingUpdate.maxUnavailable))) return { value: null, diagnostics: [{ code: 'INVALID_ROLLOUT_BUDGET', message: 'maxSurge and maxUnavailable cannot both be zero.' }] }
-  const minReadySeconds = input.minReadySeconds ?? defaults.minReadySeconds
-  const progressDeadlineSeconds = input.progressDeadlineSeconds ?? defaults.progressDeadlineSeconds
-  const revisionHistoryLimit = input.revisionHistoryLimit ?? defaults.revisionHistoryLimit
+  const minReadySeconds = input.minReadySeconds === undefined ? defaults.minReadySeconds : input.minReadySeconds
+  const progressDeadlineSeconds = input.progressDeadlineSeconds === undefined ? defaults.progressDeadlineSeconds : input.progressDeadlineSeconds
+  const revisionHistoryLimit = input.revisionHistoryLimit === undefined ? defaults.revisionHistoryLimit : input.revisionHistoryLimit
   if (!Number.isInteger(minReadySeconds) || minReadySeconds < 0 || minReadySeconds > 60 || !Number.isInteger(progressDeadlineSeconds) || progressDeadlineSeconds < 1 || progressDeadlineSeconds > 600 || progressDeadlineSeconds <= minReadySeconds || !Number.isInteger(revisionHistoryLimit) || revisionHistoryLimit < 0 || revisionHistoryLimit > 10) return { value: null, diagnostics: [{ code: 'INVALID_ROLLOUT_STRATEGY', message: 'Rollout timing and history values are outside the supported bounds.' }] }
   return { value: { type, rollingUpdate, minReadySeconds, progressDeadlineSeconds, revisionHistoryLimit }, diagnostics: [] }
 }

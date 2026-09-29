@@ -2,14 +2,20 @@ const clone = value => structuredClone(value)
 const canonical = value => Array.isArray(value) ? value.map(canonical) : !value || typeof value !== 'object' ? value : Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
 const hash = value => { const text = JSON.stringify(value); let h = 2166136261; for (const char of text) h = Math.imul(h ^ char.charCodeAt(0), 16777619); return (h >>> 0).toString(16) }
 const key = (kind, namespace, name) => `${kind}/${namespace ?? ''}/${name}`
-export function rolloutTemplate(template) { const value = clone(template); delete value?.metadata?.labels?.['pod-template-hash']; delete value?.metadata?.annotations?.['deployment.kubernetes.io/revision']; return canonical(value) }
-const templateHash = template => hash(rolloutTemplate(template))
+export function rolloutTemplate(template) {
+  const value = clone(template)
+  delete value?.metadata?.labels?.['pod-template-hash']
+  delete value?.metadata?.annotations?.['deployment.kubernetes.io/revision']
+  if (value?.metadata?.annotations && Object.keys(value.metadata.annotations).length === 0) delete value.metadata.annotations
+  return canonical(value)
+}
+export const rolloutTemplateHash = template => hash(rolloutTemplate(template))
 const deployment = (run, target) => Object.values(run.runtime.kubernetes.clusters[target.clusterId].resources).find(item => item.kind === 'Deployment' && item.metadata.uid === target.deploymentUid)
 const replicaSets = (state, uid) => Object.values(state.resources).filter(item => item.kind === 'ReplicaSet' && item.metadata.ownerReferences?.some(ref => ref.uid === uid))
 function historyFor(run, target) {
   const state = run.runtime.kubernetes.clusters[target.clusterId]; const deploy = deployment(run, target); state.rollouts ??= { version: 1, deployments: {}, experiment: null, receipts: [] }
   if (state.rollouts.deployments[target.deploymentUid]) return state.rollouts.deployments[target.deploymentUid]
-  const currentHash = templateHash(deploy.spec.template); let current = replicaSets(state, deploy.metadata.uid).find(rs => templateHash(rs.spec.template) === currentHash)
+  const currentHash = rolloutTemplateHash(deploy.spec.template); let current = replicaSets(state, deploy.metadata.uid).find(rs => rolloutTemplateHash(rs.spec.template) === currentHash)
   if (!current) {
     const name = `${deploy.metadata.name}-${currentHash}`
     current = { apiVersion: 'apps/v1', kind: 'ReplicaSet', metadata: { name, namespace: deploy.metadata.namespace, uid: `kube-${run.nextSequence++}`, resourceVersion: '1', ownerReferences: [{ uid: deploy.metadata.uid, kind: 'Deployment', name: deploy.metadata.name }] }, spec: { replicas: deploy.spec.replicas, selector: clone(deploy.spec.selector), template: clone(deploy.spec.template) }, status: {} }
@@ -41,6 +47,6 @@ export function pruneRevisionHistory(input, target) {
   if (!history.conditions.some(item => item?.type === 'Progressing' && item?.status === 'True' && item?.reason === 'NewReplicaSetAvailable')) return run
   const limit = deploy.spec.revisionHistoryLimit ?? 10; const pods = Object.values(state.resources).filter(item => item.kind === 'Pod')
   const removable = history.revisions.filter(item => item.rsUid !== history.currentRsUid).filter(item => { const rs = replicaSets(state, deploy.metadata.uid).find(value => value.metadata.uid === item.rsUid); return rs?.spec.replicas === 0 && !pods.some(pod => pod.metadata.ownerReferences?.some(ref => ref.uid === item.rsUid)) }).sort((a, b) => a.revision - b.revision)
-  while (history.revisions.length > limit + 1 && removable.length) { const stale = removable.shift(); const rs = replicaSets(state, deploy.metadata.uid).find(value => value.metadata.uid === stale.rsUid); history.revisions = history.revisions.filter(item => item.rsUid !== stale.rsUid); if (rs) delete state.resources[key('ReplicaSet', rs.metadata.namespace, rs.metadata.name)] }
+  while (removable.length > limit) { const stale = removable.shift(); const rs = replicaSets(state, deploy.metadata.uid).find(value => value.metadata.uid === stale.rsUid); history.revisions = history.revisions.filter(item => item.rsUid !== stale.rsUid); if (rs) delete state.resources[key('ReplicaSet', rs.metadata.namespace, rs.metadata.name)] }
   return run
 }

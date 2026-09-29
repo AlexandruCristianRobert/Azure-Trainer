@@ -1,6 +1,7 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
 import { normalizeRolloutSpec } from './rollout-schema.js'
+import { rolloutTemplate, rolloutTemplateHash } from './rollout-history.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -188,20 +189,27 @@ function validClusterState(state, run, lab, clusterId) {
   if (rolloutsEnabled) for (const [uid, rollout] of Object.entries(state.rollouts.deployments)) {
     const deploy = byUid.get(uid)
     if (deploy?.kind !== 'Deployment' || !isPlainObject(rollout) || !Number.isInteger(rollout.nextRevision) || rollout.nextRevision < 2
-      || !Number.isInteger(rollout.currentRevision) || rollout.currentRevision < 1 || rollout.currentRevision >= rollout.nextRevision
-      || typeof rollout.currentRsUid !== 'string' || !Number.isInteger(rollout.observedGeneration) || !Array.isArray(rollout.revisions) || rollout.revisions.length < 1 || rollout.revisions.length > 20
+      || !Number.isInteger(rollout.currentRevision) || rollout.currentRevision < 1 || rollout.nextRevision !== rollout.currentRevision + 1
+      || typeof rollout.currentRsUid !== 'string' || !Number.isInteger(rollout.observedGeneration) || rollout.observedGeneration < 1 || rollout.observedGeneration > deploy.metadata.generation || !Array.isArray(rollout.revisions) || rollout.revisions.length < 1 || rollout.revisions.length > 20
       || !isPlainObject(rollout.availableSinceByPod) || !isPlainObject(rollout.progressSnapshot) || !Array.isArray(rollout.conditions) || rollout.conditions.length > 20
-      || !Number.isSafeInteger(rollout.lastProgressAtMs) || Object.values(rollout.progressSnapshot).some(value => !Number.isInteger(value) || value < 0)
-      || Object.entries(rollout.availableSinceByPod).some(([podUid, atMs]) => byUid.get(podUid)?.kind !== 'Pod' || !Number.isSafeInteger(atMs))) return false
+      || !Number.isSafeInteger(rollout.lastProgressAtMs) || rollout.lastProgressAtMs < 0 || rollout.lastProgressAtMs > run.runtime.simTimeMs
+      || ['updated', 'ready', 'available', 'oldActive'].some(key => !Number.isInteger(rollout.progressSnapshot[key]) || rollout.progressSnapshot[key] < 0)
+      || Object.entries(rollout.availableSinceByPod).some(([podUid, atMs]) => {
+        const pod = byUid.get(podUid); const rs = byUid.get(pod?.metadata?.ownerReferences?.[0]?.uid)
+        return pod?.kind !== 'Pod' || !rs?.metadata.ownerReferences?.some(ref => ref.uid === uid) || !Number.isSafeInteger(atMs) || atMs < 0 || atMs > run.runtime.simTimeMs
+      })) return false
     const revisions = new Set(); const rsUids = new Set()
     for (const revision of rollout.revisions) {
       const rs = byUid.get(revision?.rsUid)
       if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revision.revision >= rollout.nextRevision || revisions.has(revision.revision) || rsUids.has(revision.rsUid)
         || typeof revision.templateHash !== 'string' || !isPlainObject(revision.template) || typeof revision.imageRef !== 'string'
+        || revision.templateHash !== rolloutTemplateHash(revision.template)
+        || JSON.stringify(rolloutTemplate(rs?.spec?.template ?? {})) !== JSON.stringify(revision.template)
         || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid) || rs.spec?.template?.spec?.containers?.[0]?.image !== revision.imageRef) return false
       revisions.add(revision.revision); rsUids.add(revision.rsUid)
     }
-    if (!rollout.revisions.some(item => item.rsUid === rollout.currentRsUid && item.revision === rollout.currentRevision)) return false
+    if (rollout.currentRevision !== Math.max(...revisions) || !rollout.revisions.some(item => item.rsUid === rollout.currentRsUid && item.revision === rollout.currentRevision
+      && JSON.stringify(item.template) === JSON.stringify(rolloutTemplate(deploy.spec.template)))) return false
   }
   if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
   if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false
@@ -216,8 +224,9 @@ function validClusterState(state, run, lab, clusterId) {
       if (!parent || parent.kind !== expectedKind || owner.kind !== expectedKind || owner.name !== parent.metadata.name
         || parent.metadata.namespace !== resource.metadata.namespace) return false
       if (resource.kind === 'ReplicaSet') {
+        const recorded = rolloutsEnabled && state.rollouts.deployments[parent.metadata.uid]?.revisions?.find(item => item.rsUid === resource.metadata.uid)
         if (!isPlainObject(resource.spec) || !isPlainObject(parent.spec) || JSON.stringify(resource.spec.selector) !== JSON.stringify(parent.spec.selector)
-          || JSON.stringify(resource.spec.template) !== JSON.stringify(parent.spec.template)) return false
+          || (recorded ? JSON.stringify(rolloutTemplate(resource.spec.template)) !== JSON.stringify(recorded.template) : JSON.stringify(resource.spec.template) !== JSON.stringify(parent.spec.template))) return false
       } else if (!isPlainObject(parent.spec?.template) || JSON.stringify((({ nodeName, ...spec }) => spec)(resource.spec)) !== JSON.stringify(parent.spec.template.spec)
         || JSON.stringify(resource.metadata.labels) !== JSON.stringify(parent.spec.template.metadata.labels)) return false
     }

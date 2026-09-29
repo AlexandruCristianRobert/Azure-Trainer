@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { normalizeRolloutSpec, resolveRolloutBudget } from '../src/lib/kubernetes/rollout-schema.js'
 import { registerRevision, pruneRevisionHistory } from '../src/lib/kubernetes/rollout-history.js'
-import { seedFoundation } from './helpers/aks.js'
+import { seedFoundation, createAksTestRun, act } from './helpers/aks.js'
 import { applyKubernetesObjects } from '../src/lib/kubernetes/objects.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { validateKubernetesRuntime } from '../src/lib/kubernetes/state.js'
@@ -11,6 +11,7 @@ describe('rollout schema', () => {
   test('normalizes the supported rolling update defaults and percentage budget', () => {
     expect(normalizeRolloutSpec({}).value).toEqual({ type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' }, minReadySeconds: 0, progressDeadlineSeconds: 600, revisionHistoryLimit: 10 })
     expect(resolveRolloutBudget({ maxSurge: '25%', maxUnavailable: '25%' }, 3)).toEqual({ surge: 1, unavailable: 0 })
+    expect(resolveRolloutBudget({ maxSurge: 0, maxUnavailable: '25%' }, 2)).toEqual({ surge: 0, unavailable: 1 })
   })
 
   test.each([[0, 0], ['0%', 0], [0, '0%'], ['0%', '0%']])('rejects configured zero availability budget %o/%o', (maxSurge, maxUnavailable) => {
@@ -18,6 +19,9 @@ describe('rollout schema', () => {
   })
   test('rejects deadline equal to min ready', () => {
     expect(normalizeRolloutSpec({ progressDeadlineSeconds: 5, minReadySeconds: 5 }).diagnostics[0].code).toBe('INVALID_ROLLOUT_STRATEGY')
+  })
+  test.each([{ rollingUpdate: null }, { rollingUpdate: { maxSurge: null } }, { type: null }, { minReadySeconds: null }, { progressDeadlineSeconds: null }, { revisionHistoryLimit: null }, { rollingUpdate: { maxSurge: '25.0%' } }, { rollingUpdate: { maxUnavailable: 7 } }])('rejects malformed rollout configuration %o', spec => {
+    expect(normalizeRolloutSpec(spec).diagnostics.length).toBeGreaterThan(0)
   })
 })
 
@@ -37,14 +41,23 @@ test('reuses a retained template while promoting a monotonic revision', () => {
 })
 
 function rolloutSeed() {
-  const seeded = seedFoundation(); seeded.lab = { ...seeded.lab, capabilities: { ...seeded.lab.capabilities, kubernetesRollouts: true } }
+  const seeded = seedFoundation();
+  expect(validateKubernetesRuntime(seeded.run.runtime.kubernetes, seeded.run, seeded.lab)).toBe(true)
+  seeded.lab = { ...seeded.lab, capabilities: { ...seeded.lab.capabilities, kubernetesRollouts: true } }
   return seeded
 }
 function desired(run, clusterId, mutate = value => value) {
   const live = structuredClone(run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'])
-  return mutate({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: live.metadata.name, namespace: live.metadata.namespace, labels: live.metadata.labels }, spec: live.spec })
+  return mutate({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: live.metadata.name, namespace: live.metadata.namespace, ...(live.metadata.labels ? { labels: live.metadata.labels } : {}) }, spec: live.spec })
 }
 function apply(run, lab, clusterId, object) { return applyKubernetesObjects(run, [object], { clusterId }, lab) }
+
+test('initializes an empty rollout-capable cluster through public connection actions', () => {
+  let { run, lab } = createAksTestRun({ capabilities: { acrBuild: true, kubernetes: true, kubernetesRollouts: true } })
+  for (const line of ['az group create -n rgrollouts -l eastus', 'az acr create -g rgrollouts -n acrrollouts --sku Basic', 'az aks create -g rgrollouts -n aksrollouts --enable-managed-identity --generate-ssh-keys --attach-acr acrrollouts', 'az aks get-credentials -g rgrollouts -n aksrollouts']) run = act(run, lab, { type: 'command', line }).run
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  expect(Object.values(run.runtime.kubernetes.clusters)[0].rollouts).toEqual({ version: 1, deployments: {}, experiment: null, receipts: [] })
+})
 
 test('bootstraps an eligible saved deployment without replacing its ReplicaSet or Pods', () => {
   const { run, lab, clusterId } = rolloutSeed(); const state = run.runtime.kubernetes.clusters[clusterId]
@@ -53,6 +66,9 @@ test('bootstraps an eligible saved deployment without replacing its ReplicaSet o
   const result = apply(run, lab, clusterId, desired(run, clusterId))
   const rollout = result.run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[state.resources['Deployment/assistant/assistant'].metadata.uid]
   expect(result.diagnostics).toEqual([])
+  const live = result.run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant']
+  expect(validateKubernetesObject({ apiVersion: live.apiVersion, kind: live.kind, metadata: { name: live.metadata.name, namespace: live.metadata.namespace, labels: live.metadata.labels }, spec: live.spec }, { namespace: 'assistant', capabilities: { kubernetesConfiguration: true, kubernetesRollouts: true } }).diagnostics).toEqual([])
+  expect(validateKubernetesRuntime(result.run.runtime.kubernetes, result.run, lab)).toBe(true)
   expect(rollout.currentRsUid).toBe(rsUid)
   expect(getDeploymentPods(result.run, clusterId, 'assistant', 'assistant').map(item => item.metadata.uid).sort()).toEqual(podUids)
 })
@@ -69,6 +85,21 @@ test('replica and strategy edits retain the current revision while template anno
   expect(revision().currentRevision).toBe(original + 1)
 })
 
+test('controller template labels and revision annotations do not create revisions but restart does', () => {
+  let { run, lab, clusterId } = rolloutSeed(); run = apply(run, lab, clusterId, desired(run, clusterId)).run
+  const uid = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].metadata.uid
+  run = apply(run, lab, clusterId, desired(run, clusterId, value => {
+    value.spec.template.metadata.labels['pod-template-hash'] = 'generated'
+    value.spec.template.metadata.annotations = { 'deployment.kubernetes.io/revision': '12' }
+    return value
+  })).run
+  expect(run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid].currentRevision).toBe(1)
+  run = apply(run, lab, clusterId, desired(run, clusterId, value => {
+    value.spec.template.metadata.annotations['kubectl.kubernetes.io/restarted-at'] = 'sim-0-99'; return value
+  })).run
+  expect(run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid].currentRevision).toBe(2)
+})
+
 test('prunes only completed zero-replica history without owned Pods', () => {
   let { run, lab, clusterId } = rolloutSeed(); run = apply(run, lab, clusterId, desired(run, clusterId)).run
   const state = run.runtime.kubernetes.clusters[clusterId]; const uid = state.resources['Deployment/assistant/assistant'].metadata.uid
@@ -82,6 +113,24 @@ test('prunes only completed zero-replica history without owned Pods', () => {
   for (const pod of getDeploymentPods(run, clusterId, 'assistant', 'assistant')) pod.metadata.deletionTimestamp = 1000
   run = pruneRevisionHistory(run, { clusterId, deploymentUid: uid })
   expect(run.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid].revisions).toHaveLength(2)
+})
+
+test('history limit counts eligible zero-replica sets separately from active retained revisions', () => {
+  let { run, lab, clusterId } = rolloutSeed(); run = apply(run, lab, clusterId, desired(run, clusterId)).run
+  const uid = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].metadata.uid
+  const template = run.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant'].spec.template
+  for (let index = 0; index < 3; index++) run = registerRevision(run, { clusterId, deploymentUid: uid }, { ...template, metadata: { labels: { app: 'assistant' }, annotations: { revision: String(index) } } }).run
+  const state = run.runtime.kubernetes.clusters[clusterId]
+  state.resources['Deployment/assistant/assistant'].spec.revisionHistoryLimit = 1
+  state.rollouts.deployments[uid].conditions = [{ type: 'Progressing', status: 'True', reason: 'NewReplicaSetAvailable' }]
+  const pruned = pruneRevisionHistory(run, { clusterId, deploymentUid: uid }).runtime.kubernetes.clusters[clusterId]
+  expect(pruned.rollouts.deployments[uid].revisions.map(item => item.revision)).toEqual([1, 3, 4])
+})
+
+test('release scope rejects HPA with an explicit fixed-replica trainer message', () => {
+  const hpa = { apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler', metadata: { name: 'assistant', namespace: 'assistant' }, spec: {} }
+  const result = validateKubernetesObject(hpa, { capabilities: { kubernetesResources: true, kubernetesRollouts: true } })
+  expect(result.diagnostics[0].message).toMatch(/release.*fixed.*replica/i)
 })
 
 test('rejects a twenty-first distinct ReplicaSet atomically but accepts retained recovery at the cap', () => {
@@ -125,4 +174,42 @@ test('rejects malformed rollout fields and corrupted persisted rollout reference
   expect(state.rollouts.deployments[uid].currentRsUid).toMatch(/^kube-/)
   state.rollouts.deployments[uid].currentRsUid = 'missing-rs'
   expect(validateKubernetesRuntime(corrupted, run, lab)).toBe(false)
+})
+
+test('validates a JSON reloaded multi-revision deployment against each retained template', () => {
+  let { run, lab, clusterId } = rolloutSeed()
+  run = apply(run, lab, clusterId, desired(run, clusterId)).run
+  run = apply(run, lab, clusterId, desired(run, clusterId, value => {
+    value.spec.template.metadata.annotations = { release: 'second' }; return value
+  })).run
+  run = JSON.parse(JSON.stringify(run))
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  const state = run.runtime.kubernetes.clusters[clusterId]
+  const uid = state.resources['Deployment/assistant/assistant'].metadata.uid
+  expect(state.rollouts.deployments[uid].revisions).toHaveLength(2)
+  const corruptions = [
+    history => { history.currentRsUid = 'missing' },
+    history => { history.nextRevision = history.currentRevision },
+    history => { history.nextRevision = history.currentRevision + 2 },
+    history => { history.currentRevision = 1 },
+    history => { history.revisions[0].templateHash = 'deadbeef' },
+    history => { history.revisions[0].template.spec.containers[0].image = 'bad:v1' },
+    history => { history.lastProgressAtMs = -1 },
+    history => { history.lastProgressAtMs = 1 },
+    history => { history.availableSinceByPod['missing'] = 0 },
+    history => { history.observedGeneration = 0 },
+    history => { history.progressSnapshot.updated = -1 },
+  ]
+  for (const corrupt of corruptions) {
+    const broken = structuredClone(run)
+    corrupt(broken.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid])
+    expect(validateKubernetesRuntime(broken.runtime.kubernetes, broken, lab)).toBe(false)
+  }
+  const broken = structuredClone(run)
+  const rs = Object.values(broken.runtime.kubernetes.clusters[clusterId].resources).find(item => item.kind === 'ReplicaSet')
+  rs.spec.selector = { matchLabels: { app: 'wrong' } }
+  expect(validateKubernetesRuntime(broken.runtime.kubernetes, broken, lab)).toBe(false)
+  const untracked = structuredClone(run)
+  delete untracked.runtime.kubernetes.clusters[clusterId].rollouts.deployments[uid]
+  expect(validateKubernetesRuntime(untracked.runtime.kubernetes, untracked, lab)).toBe(false)
 })
