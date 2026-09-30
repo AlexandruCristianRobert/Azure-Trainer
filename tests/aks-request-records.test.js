@@ -120,17 +120,53 @@ describe('container-owned correlated request records', () => {
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)), seedDiagnosisTest().lab)).toBeTruthy()
   })
 
-  it('bounds dependency attempts at thirty without persisting arbitrary outcome fields', () => {
-    const { run, clusterId } = seedDiagnosisTest(), sent = send(run, clusterId)
-    expect(records.recordRequestOutcome).toBeTypeOf('function')
-    const outcome = { ...sent.outcome, integrationTrace: { ...sent.outcome.integrationTrace,
-      attempts: Array.from({ length: 35 }, (_, index) => ({ operation: 'answer', attemptNumber: 1, startMs: index, durationMs: 1, timeoutMs: 100, errorCode: null, delayBeforeNextMs: 0 })) },
-      authorization: 'Bearer should-not-persist' }
-    const stored = records.recordRequestOutcome(records.allocateRequest(run).run,
-      { origin: { kind: 'external', clusterId }, hostname: '192.0.2.10', port: 80, method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, outcome)
-    expect(inspect(stored, clusterId, outcome.requestId).dependency).toHaveLength(30)
-    expect(inspect(stored, clusterId, outcome.requestId).truncated.dependency).toBe(5)
-    expect(JSON.stringify(stored.runtime.kubernetes.requests)).not.toContain('should-not-persist')
+  it('bounds the isolated dependency recorder without persisting impossible simulator traces', () => {
+    const { run, lab, clusterId } = seedDiagnosisTest(), sent = send(run, clusterId)
+    expect(records.boundDependencyRecords).toBeTypeOf('function')
+    const first = inspect(sent.run, clusterId, sent.outcome.requestId).dependency[0]
+    const attempts = Array.from({ length: 35 }, (_, index) => ({ operation: 'answer', attemptNumber: 1,
+      startMs: index, durationMs: 1, timeoutMs: 100, errorCode: null, delayBeforeNextMs: 0, authorization: 'Bearer should-not-persist' }))
+    const { id, requestElapsedMs, operation, attemptNumber, durationMs, timeoutMs, errorCode, delayBeforeNextMs, ...envelope } = first
+    const bounded = records.boundDependencyRecords(attempts, envelope, sent.run.runtime.kubernetes.requests[0].sequence)
+    expect(bounded.records).toHaveLength(30)
+    expect(bounded.truncated).toBe(5)
+    expect(JSON.stringify(bounded)).not.toContain('should-not-persist')
+    expect(JSON.parse(JSON.stringify(bounded))).toEqual(bounded)
+    expect(attempts).toHaveLength(35)
+    // Real profiles produce at most nine attempts; the thirty-record defense
+    // is tested in isolation, never saved as an impossible integration trace.
+    expect(sent.outcome.integrationTrace.attempts.length).toBeLessThanOrEqual(9)
+    expect(validateBehavioralRun(JSON.parse(JSON.stringify(sent.run)), lab)).toBeTruthy()
+    const impossible = structuredClone(sent.run)
+    impossible.runtime.kubernetes.requests[0].integrationTrace.attempts = Array.from({ length: 10 }, () => ({ ...sent.outcome.integrationTrace.attempts[0] }))
+    expect(() => validateBehavioralRun(impossible, lab)).toThrow(/Kubernetes/)
+  })
+
+  it('rejects permitted but unauthored application source fields after round-trip', () => {
+    const { run, lab, clusterId } = seedDiagnosisTest(), sent = send(run, clusterId)
+    const saved = JSON.parse(JSON.stringify(sent.run))
+    expect(validateBehavioralRun(saved, lab)).toBe(saved)
+    state(saved, clusterId).health.containers[sent.outcome.podUid].currentLogs[0].sourceFields.endpoint = 'https://forged.example.test'
+    expect(() => validateBehavioralRun(saved, lab)).toThrow(/Kubernetes/)
+  })
+
+  it('authenticates result-status in retained logs after real request-history eviction and reload', () => {
+    const { run, lab, clusterId } = seedDiagnosisTest(), sent = send(run, clusterId)
+    let aged = sent.run
+    for (let index = 0; index < 100; index++) aged = routeServiceRequest(aged,
+      { origin: { kind: 'external', clusterId }, hostname: 'unknown.example.test', port: 80,
+        method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, null).run
+    const saved = JSON.parse(JSON.stringify(aged))
+    expect(validateBehavioralRun(saved, lab)).toBe(saved)
+    const view = inspect(saved, clusterId, sent.outcome.requestId)
+    expect(view.request).toBeNull()
+    expect(view.application).toHaveLength(2)
+    expect(view.application.map(item => item.resultStatus)).toEqual([200, 200])
+    expect(view.application[1].sourceFields.status).toBe(200)
+    const pod = Object.values(state(saved, clusterId).resources).find(item => item.metadata.uid === sent.outcome.podUid)
+    expect(logs(saved, lab, pod.metadata.name).lines.map(item => item.text).join(' ')).toContain('"status":200')
+    state(saved, clusterId).health.containers[sent.outcome.podUid].currentLogs[1].sourceFields.status = 599
+    expect(() => validateBehavioralRun(saved, lab)).toThrow(/Kubernetes/)
   })
 
   it('strictly validates new state after JSON reload while isolating inspection callers', () => {
@@ -189,6 +225,20 @@ describe('container-owned correlated request records', () => {
     expect(view.application[1].sourceBindings).toMatchObject({ request_id: 'literal', status: 'literal' })
     expect(view.application[1].sourceFields.status).toBe(sent.outcome.status)
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(sent.run)), lab)).toBeTruthy()
+  })
+
+  it('rejects reassignment of current execution to an existing newer artifact which its container never captured', () => {
+    const { run: initial, lab, clusterId } = seedDiagnosisTest(), sent = send(initial, clusterId)
+    let run = act(sent.run, lab, { type: 'save-file', path: 'app.py', text: initial.project.savedFiles['app.py'].replace('SERVICE_VERSION = "2.0"', 'SERVICE_VERSION = "3.0"') }).run
+    run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksreleasesguided -t assistant:release-v2 .' }).run
+    const artifactId = run.artifacts.publishedTags['acraksreleasesguided.azurecr.io/assistant:release-v2']
+    expect(artifactId).not.toBe(sent.outcome.artifactId)
+    expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)), lab)).toBeTruthy()
+    const corrupt = structuredClone(run), request = corrupt.runtime.kubernetes.requests[0]
+    request.artifactId = artifactId; request.route.artifactId = artifactId
+    for (const dependency of request.dependencyRecords) dependency.artifactId = artifactId
+    for (const log of state(corrupt, clusterId).health.containers[request.podUid].currentLogs) log.artifactId = artifactId
+    expect(() => validateBehavioralRun(corrupt, lab)).toThrow(/Kubernetes/)
   })
 
   it('records scenario-probe samples through the same boundary without treating startup as request evidence', () => {

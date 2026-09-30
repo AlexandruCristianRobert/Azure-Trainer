@@ -39,8 +39,9 @@ export function redactRequestValue(value, state) {
   return clean(value)
 }
 
-function safeSource(fields, state) {
-  return redactRequestValue(Object.fromEntries(Object.entries(fields ?? {}).filter(([key]) => sourceKeys.has(key))), state)
+function safeSource(fields, descriptor, state) {
+  return redactRequestValue(Object.fromEntries(Object.entries(fields ?? {})
+    .filter(([key]) => Object.hasOwn(descriptor?.fields ?? {}, key))), state)
 }
 
 function logDescriptors(app) {
@@ -51,6 +52,16 @@ function logDescriptors(app) {
     if (statement.op === 'log' && statement.enabled !== false) result.push({ fields: statement.fields, afterCore })
   }
   return result
+}
+
+// Real integration profiles have at most nine attempts. Keep the record bound
+// independently defensive without changing or truncating the execution trace.
+export function boundDependencyRecords(attempts, envelope, sequence) {
+  return { records: attempts.slice(0, 30).map((attempt, index) => ({ ...envelope,
+    id: `dependency-${sequence}-${index + 1}`, requestElapsedMs: attempt.startMs,
+    operation: attempt.operation, attemptNumber: attempt.attemptNumber, durationMs: attempt.durationMs,
+    timeoutMs: attempt.timeoutMs, errorCode: attempt.errorCode, delayBeforeNextMs: attempt.delayBeforeNextMs })),
+  truncated: Math.max(0, attempts.length - 30) }
 }
 
 /** The dispatch boundary's sole append owner. The compatibility projection is
@@ -75,19 +86,19 @@ export function recordRequestOutcome(input, target, outcome) {
       origin: target.origin }
     const elapsedMs = outcome.integrationTrace?.elapsedMs ?? 0
     const attempts = executed ? outcome.integrationTrace?.attempts ?? [] : []
-    const dependencies = attempts.slice(0, 30).map((attempt, index) => ({ ...envelope,
-      id: `dependency-${sequence}-${index + 1}`, requestElapsedMs: attempt.startMs,
-      operation: attempt.operation, attemptNumber: attempt.attemptNumber, durationMs: attempt.durationMs,
-      timeoutMs: attempt.timeoutMs, errorCode: attempt.errorCode, delayBeforeNextMs: attempt.delayBeforeNextMs }))
+    const dependencies = boundDependencyRecords(attempts, envelope, sequence)
     Object.assign(base, { ...envelope, diagnosticsVersion: 1, requestElapsedMs: elapsedMs,
-      body: outcome.body, dependencyRecords: dependencies, dependencyTruncated: Math.max(0, attempts.length - 30) })
+      body: outcome.body, dependencyRecords: dependencies.records, dependencyTruncated: dependencies.truncated })
     if (executed) {
       const app = run.artifacts.buildsById[outcome.artifactId]?.appSpec
       const descriptors = logDescriptors(app)
       const application = (outcome.appLogRecords ?? []).slice(0, 100).map((fields, index) => ({ ...envelope,
         id: `application-${sequence}-${index + 1}`,
         requestElapsedMs: descriptors[index]?.afterCore ? elapsedMs : 0,
-        sourceFields: safeSource(fields, state),
+        // Retained logs can outlive the bounded request history. Preserve the
+        // actual execution result separately from learner-authored fields.
+        resultStatus: outcome.status,
+        sourceFields: safeSource(fields, descriptors[index], state),
         sourceBindings: Object.fromEntries(Object.entries(descriptors[index]?.fields ?? {}).filter(([key]) => sourceKeys.has(key))
           .map(([key, descriptor]) => [key, descriptor.kind])) }))
       const stream = [...container.currentLogs, ...redactRequestValue(application, state)]
@@ -169,6 +180,7 @@ export function validRequestDiagnostics(item, run) {
   // must never be reassigned to another Pod in a fabricated client trace.
   for (const [uid, container] of Object.entries(state.health?.containers ?? {})) {
     if ([container.containerId, container.previous?.containerId].includes(item.containerId) && uid !== item.podUid) return false
+    if (container.containerId === item.containerId && state.podSnapshots[uid]?.artifactId !== item.artifactId) return false
   }
   if (Number(item.containerId.slice(10)) >= item.sequence) return false
   return item.dependencyRecords.every((record, index) => exact(record, [...envelopeKeys,
@@ -193,8 +205,10 @@ export function validContainerRequestLogs(container, uid, state, run, clusterId)
   return [[container.currentLogs, container.containerId], [container.previous?.logs ?? [], container.previous?.containerId]].every(([stream, containerId]) =>
     stream.every((log, index) => {
       if (typeof log === 'string') return log.length <= 4096 && (!diagnosis || safe(log, state))
-      if (!diagnosis || !exact(log, [...envelopeKeys, 'sourceFields', 'sourceBindings']) || !validEnvelope(log, run, clusterId, state)
+      if (!diagnosis || !exact(log, [...envelopeKeys, 'resultStatus', 'sourceFields', 'sourceBindings']) || !validEnvelope(log, run, clusterId, state)
+        || !(log.resultStatus === null || Number.isInteger(log.resultStatus) && log.resultStatus >= 100 && log.resultStatus <= 599)
         || log.podUid !== uid || log.namespace !== pod?.metadata.namespace || log.containerId !== containerId
+        || containerId === container.containerId && state.podSnapshots[uid]?.artifactId !== log.artifactId
         || ids.has(log.id) || !plain(log.sourceFields) || !plain(log.sourceBindings)
         || Object.keys(log.sourceFields).some(key => !sourceKeys.has(key))
         || Object.values(log.sourceFields).some(value => value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean')
@@ -209,18 +223,18 @@ export function validContainerRequestLogs(container, uid, state, run, clusterId)
           || Number(previous[1]) === Number(match[1]) && Number(previous[2]) >= Number(match[2])
           || prior.simTimeMs > log.simTimeMs) return false
       }
-      if (log.requestId === null) return Object.values(log.sourceBindings).every(kind => kind === 'literal')
+      if (log.requestId === null) return log.resultStatus === null && Object.values(log.sourceBindings).every(kind => kind === 'literal')
       if (log.requestId !== `request-${match[1]}`) return false
       const request = run.runtime.kubernetes.requests.find(item => item.id === log.requestId)
       if (request && (!['podUid', 'containerId', 'artifactId', 'namespace', 'simTimeMs', 'clusterId'].every(key => request[key] === log[key])
-        || !same(log.origin, request.origin))) return false
+        || log.resultStatus !== request.status || !same(log.origin, request.origin))) return false
       const descriptors = logDescriptors(run.artifacts.buildsById[log.artifactId]?.appSpec)
       const descriptor = descriptors[Number(match[2]) - 1]
       const bindings = Object.fromEntries(Object.entries(descriptor?.fields ?? {}).map(([key, field]) => [key, field.kind]))
-      return same(log.sourceBindings, bindings)
+      return !!descriptor && exact(log.sourceFields, Object.keys(descriptor.fields)) && same(log.sourceBindings, bindings)
         && Object.entries(descriptor?.fields ?? {}).every(([key, field]) => {
           if (field.kind === 'request-id') return log.sourceFields[key] === log.requestId
-          if (field.kind === 'result-status') return !request || log.sourceFields[key] === request.status
+          if (field.kind === 'result-status') return log.sourceFields[key] === log.resultStatus
           return same(log.sourceFields[key], redactRequestValue(field.value, state))
         })
     }))
