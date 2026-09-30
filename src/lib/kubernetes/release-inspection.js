@@ -13,7 +13,9 @@ export function inspectRelease(run, target, lab) {
   if (!state?.rollouts || !deployment) return null
   const rollout = state.rollouts.deployments[deployment.metadata.uid]
   const proof = releaseFingerprint(run, target, lab)
-  const savedLiveMismatch = proof.invalidYaml || proof.savedObjects.some(item => item.hash !== proof.liveObjects.find(live => live.key === item.key)?.hash)
+  const savedLiveMismatch = proof.invalidYaml || new Set(proof.savedObjects.map(item => item.key)).size !== proof.savedObjects.length
+    || proof.savedObjects.some(item => item.hash !== proof.liveObjects.find(live => live.key === item.key)?.hash)
+    || proof.liveObjects.some(item => !proof.savedObjects.some(saved => saved.key === item.key))
   return { summary: getRolloutSummary(run, target), savedLiveMismatch,
     experiment: state.rollouts.experiment?.deploymentUid === deployment.metadata.uid ? structuredClone(state.rollouts.experiment) : null,
     revisions: (rollout?.revisions ?? []).map(item => ({ revision: item.revision, current: item.revision === rollout.currentRevision, rsUid: item.rsUid, image: redactRolloutOutput(item.imageRef, state) })),

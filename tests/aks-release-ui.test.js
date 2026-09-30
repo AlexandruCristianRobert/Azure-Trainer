@@ -96,3 +96,12 @@ test('cluster release inspection follows the selected namespace', async () => {
   expect(html).toMatch(/<option[^>]*>aaa-empty<\/option>/)
   expect(html).not.toContain('Release revisions and artifacts')
 })
+
+test.each(['namespace instead of Service', 'duplicate Service'])('inspection reports saved/live mismatch for %s', async kind => {
+  let run = releaseTestRun()
+  const text = kind === 'namespace instead of Service' ? 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: assistant\n'
+    : `${run.project.savedFiles['k8s/service-external.yaml']}\n---\n${run.project.savedFiles['k8s/service-external.yaml']}`
+  run = action(run, { type: 'save-file', path: 'k8s/service-external.yaml', text })
+  expect(await render(AksExperimentPanel, run)).toContain('mismatch; repair and reapply')
+  expect(await render(AksClusterBlade, run)).toContain('Saved/live mismatch')
+})

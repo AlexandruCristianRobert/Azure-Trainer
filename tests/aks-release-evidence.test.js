@@ -7,7 +7,7 @@ import { parse, stringify } from 'yaml'
 
 import { target, lab, state, action, start } from './helpers/release-evidence.js'
 import { releaseDependencies, verifyReleaseState } from '../src/lib/kubernetes/release-evidence.js'
-import { observeReleaseTimestamp } from '../src/lib/kubernetes/release-experiments.js'
+import { observeReleaseTimestamp, finishReleaseExperiment } from '../src/lib/kubernetes/release-experiments.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 const applyReleaseTemplate = (run, options = {}) => applyTemplate(run, options, lab)
 
@@ -160,9 +160,9 @@ test('finished receipt cap keeps forty immutable results and preserves earliest 
   expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
 })
 
-test('recovery milestone records engine evidence once and stays current across later edits and retry receipts', () => {
+test.each([1, null])('recovery milestone stays current across edits/retry receipts with historical epoch %s', incidentEpoch => {
   const scopedLab = { ...lab, tasks: [...lab.tasks, { id: 'release-proof', verification: { scenarioId: 'release-v2', scenarioVersion: 1 },
-    dependencies: releaseDependencies(target, { historical: true, scenarioId: 'release-v2', incidentEpoch: 1 }), check: () => true }] }
+    dependencies: releaseDependencies(target, { historical: true, scenarioId: 'release-v2', incidentEpoch }), check: () => true }] }
   let run = applyRunAction(releaseTestRun({ graceSeconds: 1 }), { type: 'aks-release-start', scenarioId: 'release-v2' }, scopedLab).run
   run = applyReleaseTemplate(run, {})
   run = advanceKubernetesTime(run, 45, scopedLab)
@@ -170,6 +170,12 @@ test('recovery milestone records engine evidence once and stays current across l
   expect(finished.diagnostics).toEqual([]); run = finished.run
   expect(evaluateLab(scopedLab, run).tasks.find(task => task.id === 'release-proof')).toMatchObject({ done: true })
   const evidenceId = run.evidence.currentEvidenceByTask['release-proof']; const source = run.project.savedFiles['app.py']
+  for (const change of [identity => { identity.scenarioId = 'other' }, identity => { identity.incidentEpoch = 999 },
+    identity => { identity.outcome = 'failed' }, identity => { identity.id = 'missing-receipt' }]) {
+    const copy = JSON.parse(JSON.stringify(run)); const record = copy.evidence.experimentsById[evidenceId]
+    change(Object.values(record.dependencyValues)[0][0])
+    expect(evaluateLab(scopedLab, copy).tasks.find(task => task.id === 'release-proof').done).toBe(false)
+  }
   run = applyRunAction(run, { type: 'save-file', path: 'app.py', text: source + '\n# later incident\n' }, scopedLab).run
   expect(run.evidence.currentEvidenceByTask['release-proof']).toBe(evidenceId)
   expect(evaluateLab(scopedLab, run).tasks.find(task => task.id === 'release-proof').done).toBe(true)
@@ -178,6 +184,16 @@ test('recovery milestone records engine evidence once and stays current across l
   const prior = selector(run)
   run = applyRunAction(run, { type: 'aks-release-finish', scenarioId: 'release-v2' }, scopedLab).run
   expect(selector(run)).toEqual(prior)
+  expect(state(run).rollouts.receipts.at(-1).outcome).toBe('failed')
+  expect(run.evidence.currentEvidenceByTask['release-proof']).toBe(evidenceId)
+  expect(evaluateLab(scopedLab, run).tasks.find(task => task.id === 'release-proof')).toMatchObject({ done: true })
+  for (let index = 0; index < 40; index++) {
+    run = applyRunAction(run, { type: 'aks-release-start', scenarioId: 'release-v2' }, scopedLab).run
+    run = applyRunAction(run, { type: 'aks-release-finish', scenarioId: 'release-v2' }, scopedLab).run
+  }
+  expect(state(run).rollouts.receipts).toHaveLength(40)
+  expect(run.evidence.currentEvidenceByTask['release-proof']).toBe(evidenceId)
+  expect(evaluateLab(scopedLab, run).tasks.find(task => task.id === 'release-proof').done).toBe(true)
 })
 
 test('a supplied stalled revision is observable without recreating the failure or mutating the Deployment', () => {
@@ -317,4 +333,74 @@ test('a same-time Service routing transition observes the actual failure before 
   const before = JSON.stringify(run.runtime)
   run = action(run, { type: 'command', line: 'kubectl get services -n assistant' })
   expect(JSON.stringify(run.runtime)).toBe(before)
+})
+
+test.each([1, 42])('cancelled traffic provenance survives cleaned old Pods and a new start after %i cancellations/reload', count => {
+  let run = releaseTestRun({ graceSeconds: 1 })
+  for (let index = 0; index < count; index++) run = action(start(run), { type: 'aks-release-cancel' })
+  const cancelled = structuredClone(state(run).rollouts.experiment)
+  run = advanceKubernetesTime(applyReleaseTemplate(run), 45, lab)
+  expect(state(run).podSnapshots[cancelled.samples[0].podUid]).toBeUndefined()
+  run = JSON.parse(JSON.stringify(run))
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  run = start(run)
+  expect(state(run).rollouts.experiment.status).toBe('active')
+  expect(state(run).rollouts.receipts.length).toBeLessThanOrEqual(40)
+  expect(validateKubernetesRuntime(JSON.parse(JSON.stringify(run.runtime.kubernetes)), run, lab)).toBe(true)
+})
+
+test('one final apply batch preserves earlier object witnesses while applying changed configuration', () => {
+  let run = advanceKubernetesTime(applyReleaseTemplate(releaseTestRun({ graceSeconds: 1 })), 45, lab)
+  const config = parse(run.project.savedFiles['k8s/configmap.yaml']); config.data.APP_ENV = 'final-batch'
+  run = action(run, { type: 'save-file', path: 'k8s/configmap.yaml', text: stringify(config) })
+  const paths = ['k8s/deployment.yaml', 'k8s/configmap.yaml', 'k8s/secret.yaml', 'k8s/service-internal.yaml', 'k8s/service-external.yaml']
+  // Ordinary multi-document YAML uses the actual atomic per-object apply path.
+  const batch = paths.map(path => run.project.savedFiles[path]).join('\n---\n')
+  run = action(run, { type: 'save-file', path: 'k8s/deployment.yaml', text: batch })
+  for (const path of paths.slice(1)) run = action(run, { type: 'save-file', path, text: 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: assistant\n' })
+  run = action(run, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' })
+  run = action(run, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' })
+  run = advanceKubernetesTime(run, 45, lab)
+  expect(verifyReleaseState(run, lab, 'final-v2')).toMatchObject({ passed: true })
+  const forged = JSON.parse(JSON.stringify(run)); const proof = Object.values(state(forged).rollouts.proofs)[0]
+  proof.reapply.objectGenerations['ConfigMap/assistant/assistant-config']++
+  expect(verifyReleaseState(forged, lab, 'final-v2')).toMatchObject({ passed: false, reason: expect.stringMatching(/reapply.*restart/i) })
+  const legacy = JSON.parse(JSON.stringify(run)); const legacyProof = Object.values(state(legacy).rollouts.proofs)[0]
+  delete legacyProof.inputsHash; delete legacyProof.objectStates; delete legacyProof.reapply.objectGenerations
+  expect(validateKubernetesRuntime(legacy.runtime.kubernetes, legacy, lab)).toBe(true)
+  const beforeRead = JSON.stringify(legacy.runtime)
+  const read = action(legacy, { type: 'command', line: 'kubectl rollout status deployment/assistant-api -n assistant --watch=false' })
+  expect(JSON.stringify(read.runtime)).toBe(beforeRead)
+  expect(verifyReleaseState(read, lab, 'final-v2').passed).toBe(true)
+  const saved = run.project.savedFiles['k8s/deployment.yaml']
+  run = action(run, { type: 'save-file', path: 'k8s/deployment.yaml', text: saved.replace('APP_ENV: final-batch', 'APP_ENV: later-edit') })
+  run = action(run, { type: 'save-file', path: 'k8s/deployment.yaml', text: saved })
+  expect(verifyReleaseState(run, lab, 'final-v2')).toMatchObject({ passed: false, reason: expect.stringMatching(/reapply.*restart/i) })
+})
+
+test('persisted incident flags, phase and timestamps must agree with the observed window', () => {
+  let run = start(releaseTestRun({ progressDeadlineSeconds: 10 }), 'recover-v2')
+  run = advanceKubernetesTime(applyReleaseTemplate(run, { readinessPath: '/health/missing' }), 20, lab)
+  expect(state(run).rollouts.experiment.incidentSeen).toBe(true)
+  for (const change of [e => { e.incident = null }, e => { e.incidentSeen = false }, e => { e.deadlineSeen = false },
+    e => { e.phase = 'baseline' }, e => { e.phase = 'finished' }, e => { e.incident.atMs = e.startedAtMs - 1 },
+    e => { e.incident.podUids = [] }, e => { e.incident.reasons = [] }, e => { e.samples[0].rollout.conditions = 0 }, e => { e.samples[0] = null }]) {
+    const copy = JSON.parse(JSON.stringify(run)); change(state(copy).rollouts.experiment)
+    expect(validateKubernetesRuntime(copy.runtime.kubernetes, copy, lab)).toBe(false)
+  }
+  run = action(run, { type: 'aks-release-finish', scenarioId: 'recover-v2' })
+  run = advanceKubernetesTime(run, 10, lab)
+  const copy = JSON.parse(JSON.stringify(run)); const receipt = state(copy).rollouts.receipts.at(-1)
+  receipt.incident.atMs = receipt.endedAtMs + 1
+  expect(validateKubernetesRuntime(copy.runtime.kubernetes, copy, lab)).toBe(false)
+})
+
+test('a real healthy v2 rollout cannot finish recovery from incident flags without observed incident provenance', () => {
+  let run = start(releaseTestRun({ graceSeconds: 1 }), 'recover-v2')
+  run = advanceKubernetesTime(applyReleaseTemplate(run), 45, lab)
+  expect(state(run).rollouts.experiment.samples.at(-1)).toMatchObject({ status: 200, release: '2.0', rollout: { complete: true } })
+  const forged = JSON.parse(JSON.stringify(run)); const e = state(forged).rollouts.experiment
+  Object.assign(e, { phase: 'recovered', incidentSeen: true, deadlineSeen: true, terminalSinceMs: forged.runtime.simTimeMs - 10000 })
+  expect(finishReleaseExperiment(forged, 'recover-v2', lab).run.runtime.kubernetes.clusters[target.clusterId].rollouts.receipts.at(-1).outcome).toBe('failed')
+  expect(() => applyRunAction(forged, { type: 'aks-release-finish', scenarioId: 'recover-v2' }, lab)).toThrow(/missing or malformed/i)
 })

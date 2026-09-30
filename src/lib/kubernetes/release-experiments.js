@@ -44,7 +44,7 @@ export function startReleaseExperiment(input, scenarioId, lab) {
     contextNamespace: runtime.contexts[runtime.currentContext]?.namespace ?? null,
     baselineReplicas: deployment.spec.replicas, baselineRevision: summary.currentRevision, incidentEpoch: scenario.incidentEpoch,
     baseline: { savedHash: releaseDigest(run.project.savedFiles), objectsHash: releaseDigest(Object.values(stateFor(run, scenario.target).resources).filter(item => ['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(item.kind))), artifactIds: [...new Set(getDeploymentPods(run, scenario.target.clusterId, scenario.target.namespace, scenario.target.deploymentName).map(pod => stateFor(run, scenario.target).podSnapshots[pod.metadata.uid]?.artifactId ?? null))] },
-    expected: clone(scenario), status: 'active', phase: 'baseline', startedAtMs: now, endedAtMs: null,
+    expected: clone(scenario), status: 'active', phase: ongoingRevision ? 'changed-template' : 'baseline', startedAtMs: now, endedAtMs: null,
     changedTemplate: ongoingRevision, incidentSeen: false, deadlineSeen: false, terminalSinceMs: null,
     incident: null,
     samples: [], lastSemanticHash: null, cancellationReason: null,
@@ -87,7 +87,17 @@ export function cancelReleaseExperiment(input, reason = 'learner-cancelled') {
   if (!experiment) return { run: input, diagnostics: [error('There is no active release experiment to cancel.')] }
   const run = clone(input); const e = stateFor(run, experiment.target).rollouts.experiment
   e.status = 'cancelled'; e.cancellationReason = reason; e.endedAtMs = run.runtime.simTimeMs
+  retainReleaseReceipt(stateFor(run, experiment.target), e)
   return { run, diagnostics: [] }
+}
+
+function retainReleaseReceipt(state, experiment) {
+  const receipts = [...state.rollouts.receipts, clone(experiment)]
+  const retiredRequestIds = new Set(receipts.slice(0, Math.max(0, receipts.length - 40)).flatMap(receipt => receipt.samples.map(sample => sample.requestId)))
+  state.rollouts.receipts = receipts.slice(-40)
+  // Raw request history has its own bound. Once a receipt retires, also retire
+  // dependent logs so old Pod cleanup cannot leave unverifiable provenance.
+  if (state.connectivity) state.connectivity.applicationLogs = state.connectivity.applicationLogs.filter(log => !retiredRequestIds.has(log.requestId))
 }
 
 export function cancelChangedReleaseExperiments(input) {
@@ -105,15 +115,26 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
   let run = clone(input); const e = stateFor(run, active.target).rollouts.experiment
   const terminal = e.terminalSinceMs !== null && run.runtime.simTimeMs - e.terminalSinceMs >= 10000
   const availability = !e.expected.zeroFailedRequests || e.samples.every(sample => sample.transport.ok && sample.status === 200 && sample.rollout.available >= e.expected.requiredAvailable)
-  const passed = !forcedReason && e.changedTemplate && (!e.expected.requireIncident || e.incidentSeen) && (!e.expected.requireDeadline || e.deadlineSeen) && terminal && availability
+  const incidentObserved = e.incidentSeen && e.incident !== null && e.incident.podUids.length > 0 && e.incident.reasons.length > 0
+  const passed = !forcedReason && e.changedTemplate && (!e.expected.requireIncident || incidentObserved)
+    && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability
   Object.assign(e, { status: 'finished', phase: 'finished', outcome: passed ? 'passed' : 'failed', endedAtMs: run.runtime.simTimeMs,
     reason: forcedReason ?? (passed ? 'terminal-release-observed' : 'Observe the required revision/incident and ten stable terminal seconds while meeting the availability brief.') })
-  const receipt = clone(e); const state = stateFor(run, e.target)
-  state.rollouts.receipts = [...state.rollouts.receipts, receipt].slice(-40)
+  retainReleaseReceipt(stateFor(run, e.target), e)
   run = refreshKubernetesDependencies(input, run, lab)
-  for (const task of lab.tasks.filter(task => task.verification?.scenarioId === scenarioId)) run = recordVerification(run, lab, task.id,
-    { scenarioId, scenarioVersion: 1, outcome: e.outcome, completed: passed, startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs,
-      measurements: { receiptId: e.id, clusterId: e.target.clusterId, namespace: e.target.namespace, deploymentUid: e.deploymentUid, incidentEpoch: e.incidentEpoch, reason: e.reason } })
+  for (const task of lab.tasks.filter(task => task.verification?.scenarioId === scenarioId)) {
+    const current = run.evidence.experimentsById[run.evidence.currentEvidenceByTask[task.id]]
+    const historicalPrefix = `aks-release:${e.target.clusterId}:${e.target.namespace}:${e.target.deploymentName}:history:${scenarioId}:`
+    const historical = [e.incidentEpoch, null].some(epoch => Object.hasOwn(task.dependencies ?? {}, `${historicalPrefix}${epoch}`))
+    // A failed retry is retained as a receipt, not allowed to erase an already
+    // earned historical milestone. Live final verification remains separate.
+    if (!passed && historical && current?.outcome === 'passed' && current.completed
+      && current.attemptId === e.attemptId && current.scenarioId === scenarioId && current.measurements?.deploymentUid === e.deploymentUid
+      && current.measurements?.incidentEpoch === e.incidentEpoch) continue
+    run = recordVerification(run, lab, task.id,
+      { scenarioId, scenarioVersion: 1, outcome: e.outcome, completed: passed, startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs,
+        measurements: { receiptId: e.id, clusterId: e.target.clusterId, namespace: e.target.namespace, deploymentUid: e.deploymentUid, incidentEpoch: e.incidentEpoch, reason: e.reason } })
+  }
   return { run, diagnostics: [] }
 }
 
@@ -156,12 +177,14 @@ export function observeReleaseTimestamp(input, atMs, lab) {
         const ref = env.valueFrom?.configMapKeyRef
         return ref && !Object.hasOwn(state.resources[`ConfigMap/${e.target.namespace}/${ref.name}`]?.data ?? {}, ref.key) ? [ref.key] : []
       })))], deadline }
+    e.incident.deadline ||= deadline
   }
   const s = captured.sample
   const terminal = summary.complete && s.rollout.available >= e.expected.requiredAvailable && s.transport.ok && s.status === 200 && s.release === e.expected.expectedRelease
     && ['embedding', 'postgres-query', 'answer'].every(operation => s.operations.some(item => item.operation === operation && item.status === 'succeeded'))
     && s.backends.length === e.baselineReplicas && s.backends.every(item => item.artifactId === s.artifactId)
-  if (terminal && e.changedTemplate && (!e.expected.requireIncident || e.incidentSeen)) { e.terminalSinceMs ??= atMs; e.phase = 'recovered' } else e.terminalSinceMs = null
+  if (terminal && e.changedTemplate && (!e.expected.requireIncident || e.incidentSeen)) { e.terminalSinceMs ??= atMs; e.phase = 'recovered' }
+  else { e.terminalSinceMs = null; e.phase = e.incidentSeen ? 'incident-seen' : e.changedTemplate ? 'changed-template' : 'baseline' }
   if (atMs - e.startedAtMs >= 300000) run = finishReleaseExperiment(run, e.scenarioId, lab, 'experiment-expired').run
   return run
 }

@@ -61,7 +61,7 @@ export function releaseFingerprint(run, target, lab) {
     artifact: artifact ? { id: artifactId, sourceHash: artifact.sourceHash, digest: artifact.digest } : null }
 }
 
-function proofState(run, target, lab) {
+function proofState(run, target, lab, { trackObjects = false } = {}) {
   const state = run.runtime.kubernetes.clusters[target.clusterId]
   if (!state?.rollouts) return null
   const key = `Deployment/${target.namespace}/${target.deploymentName}`; const uid = state.resources[key]?.metadata.uid
@@ -69,7 +69,22 @@ function proofState(run, target, lab) {
   const fingerprint = releaseFingerprint(run, target, lab); const hash = releaseDigest(fingerprint)
   const map = state.rollouts.proofs ??= {}
   const proof = map[uid] ??= { version: 1, target: clone(target), generation: 0, hash, appliedKeys: [], reapply: null, restart: null }
-  if (proof.hash !== hash) { proof.generation++; proof.hash = hash; proof.appliedKeys = []; proof.reapply = null; proof.restart = null }
+  if (!trackObjects && proof.objectStates === undefined && proof.hash === hash) return { proof, fingerprint, state, uid }
+  if (proof.objectStates === undefined && proof.hash !== hash) proof.appliedKeys = []
+  const inputsHash = releaseDigest({ deploymentUid: uid, sourceHash: fingerprint.sourceHash, sourceVersions: fingerprint.sourceVersions,
+    artifact: fingerprint.artifact, invalidYaml: fingerprint.invalidYaml })
+  const previousObjects = proof.objectStates ?? {}
+  const objectStates = {}
+  for (const key of new Set([...fingerprint.savedObjects.map(item => item.key), ...fingerprint.liveObjects.map(item => item.key)])) {
+    const objectHash = releaseDigest({ saved: fingerprint.savedObjects.filter(item => item.key === key), live: fingerprint.liveObjects.find(item => item.key === key) ?? null })
+    const previous = previousObjects[key]
+    objectStates[key] = { hash: objectHash, generation: (previous?.generation ?? 0) + (previous && previous.hash !== objectHash ? 1 : 0) }
+    if (previous && previous.hash !== objectHash) proof.appliedKeys = proof.appliedKeys.filter(item => item !== key)
+  }
+  proof.appliedKeys = proof.appliedKeys.filter(key => Object.hasOwn(objectStates, key))
+  if (proof.inputsHash !== undefined && proof.inputsHash !== inputsHash) proof.appliedKeys = []
+  proof.inputsHash = inputsHash; proof.objectStates = objectStates
+  if (proof.hash !== hash) { proof.generation++; proof.hash = hash; proof.reapply = null; proof.restart = null }
   return { proof, fingerprint, state, uid }
 }
 
@@ -78,12 +93,14 @@ export function noteReleaseReapply(run, clusterId, object, lab) {
   if (!lab.capabilities?.kubernetesRollouts || !['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object.kind)) return run
   const targets = Object.values(lab.scenarios ?? {}).filter(scenario => ['aks-release', 'aks-release-final'].includes(scenario.kind) && scenario.target.clusterId === clusterId && scenario.target.namespace === object.metadata.namespace).map(scenario => scenario.target)
   for (const target of targets) {
-    const view = proofState(run, target, lab); if (!view) continue
+    const view = proofState(run, target, lab, { trackObjects: true }); if (!view) continue
     const key = objectKey(object); const saved = view.fingerprint.savedObjects.find(item => item.key === key)
     if (!saved || saved.hash !== releaseDigest(desired(object))) continue
     if (!view.proof.appliedKeys.includes(key)) view.proof.appliedKeys.push(key)
     if (view.fingerprint.savedObjects.length > 0 && view.fingerprint.savedObjects.every(item => view.proof.appliedKeys.includes(item.key))) {
-      view.proof.reapply = { atMs: run.runtime.simTimeMs, hash: view.proof.hash, dependencyGenerations: { release: view.proof.generation, ...view.fingerprint.sourceVersions }, semanticHashes: { saved: releaseDigest(view.fingerprint.savedObjects), live: releaseDigest(view.fingerprint.liveObjects) } }
+      view.proof.reapply = { atMs: run.runtime.simTimeMs, hash: view.proof.hash, dependencyGenerations: { release: view.proof.generation, ...view.fingerprint.sourceVersions },
+        objectGenerations: Object.fromEntries(view.fingerprint.savedObjects.map(item => [item.key, view.proof.objectStates[item.key].generation])),
+        semanticHashes: { saved: releaseDigest(view.fingerprint.savedObjects), live: releaseDigest(view.fingerprint.liveObjects) } }
       view.proof.restart = null
     }
   }
@@ -144,6 +161,8 @@ export function verifyReleaseState(run, lab, scenarioId) {
   const fingerprint = releaseFingerprint(run, target, lab); const hash = releaseDigest(fingerprint)
   const proof = state.rollouts.proofs?.[deployment.metadata.uid]
   if (!proof?.reapply || !proof.restart || proof.hash !== hash || proof.reapply.hash !== hash || proof.restart.generation !== proof.generation
+    || proof.reapply.objectGenerations !== undefined && canonicalize(proof.reapply.objectGenerations)
+      !== canonicalize(Object.fromEntries(fingerprint.savedObjects.map(item => [item.key, proof.objectStates?.[item.key]?.generation ?? -1])))
     || proof.restart.atMs < proof.reapply.atMs || proof.restart.rsUid !== state.rollouts.deployments[deployment.metadata.uid].currentRsUid
     || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid))) return failed('Reapply all final files, then rollout restart and wait for successful completion.')
   const { sample } = captureReleaseSample(run, target, run.runtime.simTimeMs, 0)
@@ -156,8 +175,19 @@ export function releaseDependencies(target, { historical = false, scenarioId = n
   const key = `aks-release:${target.clusterId}:${target.namespace}:${target.deploymentName}:${historical ? `history:${scenarioId}:${incidentEpoch}` : 'live'}`
   return { [key]: context => {
     const state = context.runtime.kubernetes?.clusters[target.clusterId]
-    if (historical) return (state?.rollouts.receipts ?? []).filter(receipt => receipt.scenarioId === scenarioId && receipt.outcome === 'passed' && (incidentEpoch === null || receipt.incidentEpoch === incidentEpoch)).slice(0, 1)
-      .map(receipt => ({ id: receipt.id, attemptId: receipt.attemptId, scenarioId: receipt.scenarioId, deploymentUid: receipt.deploymentUid, incidentEpoch: receipt.incidentEpoch, outcome: receipt.outcome }))
+    if (historical) {
+      // Receipt arrays are bounded, but an earned milestone already retains
+      // its immutable receipt identity in the engine dependency snapshot.
+      const earned = Object.values(context.evidence?.currentEvidenceByTask ?? {}).map(id => context.evidence.experimentsById[id]).find(record => record?.outcome === 'passed' && record.completed
+        && record.scenarioId === scenarioId && record.measurements?.clusterId === target.clusterId && record.measurements?.namespace === target.namespace
+        && (incidentEpoch === null || record.measurements?.incidentEpoch === incidentEpoch) && record.dependencyValues?.[key]?.length === 1
+        && record.dependencyValues[key][0]?.attemptId === record.attemptId && record.dependencyValues[key][0]?.deploymentUid === record.measurements?.deploymentUid
+        && record.dependencyValues[key][0]?.scenarioId === scenarioId && record.dependencyValues[key][0]?.incidentEpoch === record.measurements?.incidentEpoch
+        && record.dependencyValues[key][0]?.outcome === 'passed' && record.dependencyValues[key][0]?.id === record.measurements?.receiptId)
+      if (earned) return earned.dependencyValues[key]
+      return (state?.rollouts.receipts ?? []).filter(receipt => receipt.scenarioId === scenarioId && receipt.outcome === 'passed' && (incidentEpoch === null || receipt.incidentEpoch === incidentEpoch)).slice(0, 1)
+        .map(receipt => ({ id: receipt.id, attemptId: receipt.attemptId, scenarioId: receipt.scenarioId, deploymentUid: receipt.deploymentUid, incidentEpoch: receipt.incidentEpoch, outcome: receipt.outcome }))
+    }
     const lab = { capabilities: { kubernetesRollouts: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesConnectivity: true } }
     const fingerprint = releaseFingerprint(context, target, lab)
     const uid = fingerprint.deploymentUid

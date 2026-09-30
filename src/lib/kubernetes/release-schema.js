@@ -48,27 +48,46 @@ export function validReleaseExperiment(experiment, state, clusterId, run, lab, r
     || !isJsonValue(experiment.expected) || !Array.isArray(experiment.samples) || experiment.samples.length < 1 || experiment.samples.length > 1200) return false
   const scenario = lab.scenarios?.[experiment.scenarioId]
   if (!scenario || canonicalize(experiment.expected) !== canonicalize(scenario) || experiment.incidentEpoch !== scenario.incidentEpoch || canonicalize(experiment.target) !== canonicalize(scenario.target)) return false
+  const limit = experiment.endedAtMs ?? run.runtime.simTimeMs
+  if (experiment.samples[0]?.atMs !== experiment.startedAtMs || experiment.samples[0]?.rollout?.desired !== experiment.baselineReplicas
+    || experiment.samples[0]?.rollout?.currentRevision !== experiment.baselineRevision
+    || !experiment.samples.every((sample, index) => sampleValid(sample, experiment, limit) && (index === 0 || sample.atMs >= experiment.samples[index - 1].atMs))) return false
+  const observedLimit = experiment.samples.at(-1)?.atMs
   const incident = experiment.incident
-  if (incident !== null && (!keys(incident, ['atMs', 'revision', 'podUids', 'reasons', 'missingKeys', 'deadline']) || !timestamp(incident.atMs, run.runtime.simTimeMs) || !counter(incident.revision)
-    || !['podUids', 'reasons', 'missingKeys'].every(key => Array.isArray(incident[key]) && incident[key].length <= 12 && incident[key].every(text)) || typeof incident.deadline !== 'boolean')) return false
+  if (experiment.incidentSeen !== (incident !== null) || experiment.deadlineSeen !== (incident?.deadline === true)
+    || experiment.incidentSeen && !experiment.changedTemplate) return false
+  if (incident !== null && (!keys(incident, ['atMs', 'revision', 'podUids', 'reasons', 'missingKeys', 'deadline'])
+    || !timestamp(incident.atMs, Math.min(limit, observedLimit, experiment.startedAtMs + 300000)) || incident.atMs < experiment.startedAtMs || !counter(incident.revision) || incident.revision < 1
+    || !['podUids', 'reasons', 'missingKeys'].every(key => Array.isArray(incident[key]) && incident[key].length <= 12 && incident[key].every(text))
+    || !incident.podUids.length || !incident.reasons.length || typeof incident.deadline !== 'boolean'
+    || !experiment.samples.some(sample => sample.atMs === incident.atMs && sample.rollout?.currentRevision === incident.revision && sample.rollout.complete === false))) return false
+  if (experiment.deadlineSeen && !experiment.samples.some(sample => sample.rollout?.conditions?.some(condition => condition.reason === 'ProgressDeadlineExceeded'))) return false
+  if (experiment.terminalSinceMs !== null && !timestamp(experiment.terminalSinceMs, Math.min(limit, observedLimit, experiment.startedAtMs + 300000))) return false
+  const expectedPhase = experiment.terminalSinceMs !== null ? 'recovered' : experiment.incidentSeen ? 'incident-seen' : experiment.changedTemplate ? 'changed-template' : 'baseline'
+  if (experiment.status !== 'finished' && (experiment.phase !== expectedPhase || experiment.outcome !== undefined || experiment.reason !== undefined)) return false
+  if (experiment.status === 'cancelled' ? !text(experiment.cancellationReason) : experiment.cancellationReason !== null) return false
   if (experiment.status === 'active') {
     if (receipt || experiment.endedAtMs !== null || run.runtime.simTimeMs - experiment.startedAtMs > 300000
       || state.resources[`Deployment/${experiment.target.namespace}/${experiment.target.deploymentName}`]?.metadata.uid !== experiment.deploymentUid) return false
   } else if (!timestamp(experiment.endedAtMs, run.runtime.simTimeMs) || experiment.endedAtMs < experiment.startedAtMs || experiment.endedAtMs - experiment.startedAtMs > 300000) return false
   if (experiment.status === 'finished' && (experiment.phase !== 'finished' || !['passed', 'failed'].includes(experiment.outcome) || !text(experiment.reason))) return false
-  const limit = experiment.endedAtMs ?? run.runtime.simTimeMs
-  return experiment.samples[0].atMs === experiment.startedAtMs && experiment.samples[0].rollout?.desired === experiment.baselineReplicas
-    && experiment.samples[0].rollout?.currentRevision === experiment.baselineRevision
-    && experiment.samples.every((sample, index) => sampleValid(sample, experiment, limit) && (index === 0 || sample.atMs >= experiment.samples[index - 1].atMs))
+  if (experiment.status === 'finished' && experiment.outcome === 'passed' && (!experiment.changedTemplate
+    || scenario.requireIncident && !experiment.incidentSeen || scenario.requireDeadline && !experiment.deadlineSeen
+    || experiment.terminalSinceMs === null || limit - experiment.terminalSinceMs < 10000)) return false
+  return true
 }
 
 export function validReleaseProofs(proofs, state, run) {
   return proofs === undefined || isPlainObject(proofs) && Object.keys(proofs).length <= 20 && Object.entries(proofs).every(([uid, proof]) => {
-    if (!keys(proof, ['version', 'target', 'generation', 'hash', 'appliedKeys', 'reapply', 'restart']) || proof.version !== 1 || !targetValid(proof.target) || !counter(proof.generation) || !hash(proof.hash)
+    if (!keys(proof, ['version', 'target', 'generation', 'hash', 'inputsHash', 'objectStates', 'appliedKeys', 'reapply', 'restart']) || proof.version !== 1 || !targetValid(proof.target) || !counter(proof.generation) || !hash(proof.hash)
       || !Array.isArray(proof.appliedKeys) || proof.appliedKeys.length > 128 || !proof.appliedKeys.every(text)) return false
+    if ((proof.inputsHash === undefined) !== (proof.objectStates === undefined)
+      || proof.inputsHash !== undefined && (!hash(proof.inputsHash) || !isPlainObject(proof.objectStates) || Object.keys(proof.objectStates).length > 128
+        || !Object.entries(proof.objectStates).every(([key, item]) => text(key) && keys(item, ['hash', 'generation']) && hash(item.hash) && counter(item.generation)))) return false
     const reapply = proof.reapply
-    if (reapply !== null && (!keys(reapply, ['atMs', 'hash', 'dependencyGenerations', 'semanticHashes']) || !timestamp(reapply.atMs, run.runtime.simTimeMs) || !hash(reapply.hash)
+    if (reapply !== null && (!keys(reapply, ['atMs', 'hash', 'dependencyGenerations', 'objectGenerations', 'semanticHashes']) || !timestamp(reapply.atMs, run.runtime.simTimeMs) || !hash(reapply.hash)
       || !isPlainObject(reapply.dependencyGenerations) || Object.keys(reapply.dependencyGenerations).length > 17 || !Object.values(reapply.dependencyGenerations).every(counter)
+      || reapply.objectGenerations !== undefined && (!isPlainObject(reapply.objectGenerations) || Object.keys(reapply.objectGenerations).length > 128 || !Object.entries(reapply.objectGenerations).every(([key, value]) => text(key) && counter(value)))
       || !keys(reapply.semanticHashes, ['saved', 'live']) || !Object.values(reapply.semanticHashes).every(hash))) return false
     const restart = proof.restart
     return (restart === null || keys(restart, ['atMs', 'rsUid', 'generation', 'beforePodUids', 'podUids']) && timestamp(restart.atMs, run.runtime.simTimeMs) && text(restart.rsUid) && counter(restart.generation)
