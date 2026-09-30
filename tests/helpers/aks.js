@@ -31,6 +31,37 @@ export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, que
   return [parsed.appSpec, snapshot, { method: 'POST', path: '/api/ask', body: { question }, requestId }, INTEGRATION_FIXTURES, profile]
 }
 
+export function seedDiagnosisTest({ fault = 'none', profile = 'training' } = {}) {
+  const files = structuredClone(DIAGNOSIS_SOLUTION_FILES)
+  files['k8s/configmap.yaml'] = files['k8s/configmap.yaml'].replaceAll('training', profile)
+  if (fault === 'target-port') for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml'])
+    files[path] = files[path].replace('targetPort: http', 'targetPort: 8081')
+  if (!['none', 'target-port'].includes(fault)) throw new Error(`Unknown diagnosis fault: ${fault}`)
+  const lab = makeAksLab({ manifestId: DIAGNOSIS_MANIFEST.id, initialProjectFiles: files,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true,
+      kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true,
+      kubernetesDiagnostics: true }, healthFixture: { initializationSeconds: 6 } })
+  let run = createBehavioralRun(lab, { attemptId: 'diagnosis-test' })
+  for (const line of ['az group create -n rgdiagnosis -l eastus', 'az acr create -g rgdiagnosis -n acraksreleasesguided --sku Basic',
+    'az acr build --registry acraksreleasesguided -t assistant:release-v2 .',
+    'az aks create -g rgdiagnosis -n aksdiagnosis --enable-managed-identity --generate-ssh-keys --attach-acr acraksreleasesguided',
+    'az aks get-credentials -g rgdiagnosis -n aksdiagnosis', ...DIAGNOSIS_MANIFEST.kubernetesFiles.map(path => `kubectl apply -f ${path}`)])
+    run = act(run, lab, { type: 'command', line }).run
+  run = advanceHealth(run, lab, 15)
+  const clusterId = run.sandbox.aksClusters[0].id, state = run.runtime.kubernetes.clusters[clusterId]
+  const diagnosticUid = `diagnostic/${clusterId}`
+  state.resources['Namespace//diagnostics'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'diagnostics', uid: `fixture-${clusterId}-diagnostics-namespace`, resourceVersion: '1' } }
+  state.resources['Pod/diagnostics/diagnostics'] = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'diagnostics', namespace: 'diagnostics', uid: diagnosticUid, resourceVersion: '1', labels: { app: 'diagnostics' } },
+    spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
+  state.connectivity.diagnosticPodUids = [diagnosticUid]
+  run = reconcileServices(run, clusterId)
+  const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant-api',
+    deploymentUid: state.resources['Deployment/assistant/assistant-api'].metadata.uid,
+    serviceName: 'assistant-internal', serviceUid: state.resources['Service/assistant/assistant-internal'].metadata.uid,
+    externalServiceName: 'assistant-public', externalServiceUid: state.resources['Service/assistant/assistant-public'].metadata.uid }
+  return { run, lab, clusterId, target }
+}
+
 export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
 export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
   capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true },

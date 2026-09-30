@@ -72,8 +72,10 @@ export function processContainerLifecycle(run, atMs, lab) {
     if (!pod) continue
     if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
       container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason,
+        ...(container.logsTruncated === undefined ? {} : { logsTruncated: container.logsTruncated }),
         ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }
       container.currentLogs = []
+      if (container.logsTruncated !== undefined) container.logsTruncated = 0
       container.terminatedAtMs = null
       const usage = state.resourcesRuntime?.usage?.[uid]
       if (usage) {

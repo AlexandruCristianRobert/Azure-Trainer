@@ -15,6 +15,7 @@ const RESOURCES_TROUBLESHOOTING_LAB_ID = 'aks-resources-troubleshooting'
 const RESOURCES_TROUBLESHOOTING_CLUSTER_ID = '/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourceGroups/rg-aks-resources-troubleshooting/providers/Microsoft.ContainerService/managedClusters/aks-resources-troubleshooting'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
+import { requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs } from './request-records.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -30,7 +31,8 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
     || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
     || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string'
       && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence < run.nextSequence
-      && item.id === `aks-request-${item.sequence}` && typeof item.namespace === 'string'
+      && item.id === `${item.diagnosticsVersion === 1 ? 'request' : 'aks-request'}-${item.sequence}` && typeof item.namespace === 'string'
+      && validRequestDiagnostics(item, run)
       && (item.connectivity === true
         ? (item.scenarioId === null || typeof item.scenarioId === 'string') && (item.status === null || Number.isInteger(item.status) && item.status >= 100 && item.status <= 599)
           && isPlainObject(item.transport) && typeof item.transport.ok === 'boolean'
@@ -43,6 +45,7 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
       && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace))
       && (item.integrationTrace === undefined || item.integrationTrace === null || validIntegrationTrace(item.integrationTrace))
       && (item.workload === undefined || validWorkloadRequest(item, run)))
+    || (runtime.requestsTruncated !== undefined && (!requestDiagnosticsEnabled(run) || !Number.isSafeInteger(runtime.requestsTruncated) || runtime.requestsTruncated < 0))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   if (!validConfigIncident(runtime, run)) return false
@@ -51,7 +54,8 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
-    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id))
+    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id)
+      && Object.entries(state.health?.containers ?? {}).every(([uid, container]) => validContainerRequestLogs(container, uid, state, run, id)))
 }
 
 export function migrateMissingRolloutState(input, lab) {
@@ -560,10 +564,10 @@ function validHealthState(health, byUid, nowMs, lab, clusterId) {
       || (value.restartAtMs !== null && value.terminatedAtMs !== null && value.restartAtMs <= value.terminatedAtMs)
       || !isPlainObject(value.localFaults) || typeof value.localFaults.admissionClosed !== 'boolean' || typeof value.localFaults.hung !== 'boolean'
       || !isPlainObject(value.checks) || !Array.isArray(value.currentLogs) || value.currentLogs.length > 100
-      || !value.currentLogs.every(line => typeof line === 'string' && line.length <= 4096)
+      || !value.currentLogs.every(line => typeof line === 'string' && line.length <= 4096 || isPlainObject(line))
       || (value.previous !== null && (!isPlainObject(value.previous) || typeof value.previous.containerId !== 'string'
         || !Array.isArray(value.previous.logs) || value.previous.logs.length > 100
-        || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096)
+        || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096 || isPlainObject(line))
         || !['StartupProbeFailed', 'LivenessProbeFailed', 'OOMKilled'].includes(value.previous.reason)
         || value.previous.reason === 'OOMKilled' && value.previous.exitCode !== 137))) return false
     ids.add(value.containerId)

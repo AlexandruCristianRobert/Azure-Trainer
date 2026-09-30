@@ -7,6 +7,7 @@ import { runDiagnosticCommand, redactRolloutOutput } from './diagnostics.js'
 import { undoDeployment } from './rollout-history.js'
 import { getRolloutSummary } from './rollouts.js'
 import { clearPodState, deleteCascade } from './pod-cleanup.js'
+import { formatContainerLog, requestDiagnosticsEnabled } from './request-records.js'
 import { setDeploymentReplicas } from './scheduling.js'
 import { inspectResources } from './resource-inspection.js'
 
@@ -190,8 +191,10 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (!snapshot) return response(sandbox, [err(`Pod '${name}' has no running container logs.`)])
     const health = lab.capabilities.kubernetesProbes === true ? selection.state.health?.containers?.[pod.metadata.uid] : null
     if (parsed.values.previous) return health?.previous
-      ? response(sandbox, [out(safeOutput(health.previous.logs.join('\n') || `Previous container terminated: ${health.previous.reason ?? 'Unknown'}${health.previous.exitCode == null ? '' : ` (exit code ${health.previous.exitCode})`}.` ))])
+      ? response(sandbox, [out(safeOutput(health.previous.logs.map(formatContainerLog).join('\n') || `Previous container terminated: ${health.previous.reason ?? 'Unknown'}${health.previous.exitCode == null ? '' : ` (exit code ${health.previous.exitCode})`}.` ))])
       : response(sandbox, [err(`Pod '${name}' has no previous terminated container logs.`)])
+    if (requestDiagnosticsEnabled(run)) return response(sandbox, [out(safeOutput(
+      [`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...(health?.currentLogs ?? []).map(formatContainerLog)].join('\n')))])
     const application = (selection.state.connectivity?.applicationLogs ?? []).filter(item => item.podUid === pod.metadata.uid)
       .map(item => `request=${item.requestId} ${item.method} ${item.path} status=${item.status} dependencies=${item.dependencySummary.map(hop => `${hop.operation}:${hop.status}${hop.reason ? `(${hop.reason})` : ''}`).join(',')}`)
     return response(sandbox, [out(safeOutput([`Simulated container log\nimage=${pod.spec.containers[0].image}`, ...application].join('\n')))])
@@ -238,7 +241,9 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
     if (kind === 'Pod') {
       const sequence = run.nextSequence
       const templateHash = getPodTemplateHash(state, item)
-      state.receipts = [...state.receipts, { cause: 'pod-delete', sequence, deletedPodUid: item.metadata.uid,
+      // Rollout reconciliation owns replacement Pods and revision receipts;
+      // the legacy immediate-replacement receipt cannot be completed there.
+      if (lab.capabilities.kubernetesRollouts !== true) state.receipts = [...state.receipts, { cause: 'pod-delete', sequence, deletedPodUid: item.metadata.uid,
         deletedPodName: item.metadata.name, deletedReplicaSetUid: item.metadata.ownerReferences?.[0]?.uid ?? null,
         templateHash, replacementPodUid: null, replacementPodName: null, replacementReplicaSetUid: null,
         replacementTemplateHash: null }].slice(-100)

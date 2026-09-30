@@ -101,6 +101,7 @@ export function runDiagnosticCommand(input, rawTokens, lab) {
   if (!['/api/info', '/api/ask'].includes(path)) return fail('curl path is not supported.')
   if (method === 'POST' && (!seenData || !seenHeader || path !== '/api/ask')) return fail('POST requires the JSON header, a question body and /api/ask.')
   if (seenData && (method !== 'POST' || path !== '/api/ask' || typeof body?.question !== 'string')) return fail('curl JSON body is supported only for a question sent to /api/ask.')
+  if (seenData && Object.keys(body).join(',') !== 'question') return fail('curl JSON body accepts only a question field.')
   if (method === 'GET' && (seenData || seenHeader)) return fail('GET does not accept a request body or JSON header.')
   const pod = Object.values(cluster.resources).find(item => item.kind === 'Pod' && item.metadata.uid === diagnosticUid)
   if (!pod) return fail('The supplied diagnostic Pod is unavailable.', 'DIAGNOSTIC_ORIGIN')
