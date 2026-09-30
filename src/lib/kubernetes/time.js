@@ -11,6 +11,7 @@ import { observeResourceExperiment } from './resource-experiments.js'
 import { nextRolloutDeadline, reconcileRollouts } from './rollouts.js'
 import { nextReleaseTimestamp, observeReleaseTimestamp } from './release-experiments.js'
 import { refreshReleaseProofs } from './release-evidence.js'
+import { refreshDiagnosisIncidents } from './diagnosis-incidents.js'
 
 const clone = value => structuredClone(value)
 
@@ -156,7 +157,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = observeResourceExperiment(run, target, lab)
   run = observeReleaseTimestamp(run, target, lab)
   run = refreshReleaseProofs(run, lab)
-  return { run: finishProbeExperiment(run, lab), diagnostics: [] }
+  return { run: refreshDiagnosisIncidents(finishProbeExperiment(run, lab), lab), diagnostics: [] }
 }
 
 export function advanceKubernetesTime(input, seconds, lab) { return advanceKubernetesTimeResult(input, seconds, lab).run }

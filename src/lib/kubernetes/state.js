@@ -16,6 +16,7 @@ const RESOURCES_TROUBLESHOOTING_CLUSTER_ID = '/subscriptions/7f3c9a2e-4b81-4d6a-
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
 import { requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs } from './request-records.js'
+import { validDiagnosisState } from './diagnosis-incidents.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -95,7 +96,7 @@ function validIntegrationIncident(runtime, run) {
   return true
 }
 
-function validIntegrationTrace(trace) {
+export function validIntegrationTrace(trace) {
   const safeBindingKeys = new Set(['collection', 'audience', 'published', 'vector', 'cutoff', 'limit'])
   const profileIds = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'answer-wait-150ms', 'embedding-timeout-always', 'retry-after-too-long'])
   const validAttempt = attempt => isPlainObject(attempt) && Object.keys(attempt).every(key => ['operation', 'attemptNumber', 'startMs', 'durationMs', 'timeoutMs', 'errorCode', 'delayBeforeNextMs'].includes(key))
@@ -174,6 +175,7 @@ function validClusterState(state, run, lab, clusterId) {
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
+  if (!validDiagnosisState(state.diagnosis, run, lab, clusterId)) return false
   if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
   if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 40)) return false

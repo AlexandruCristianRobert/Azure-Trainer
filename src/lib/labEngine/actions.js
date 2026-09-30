@@ -558,8 +558,9 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
-  if (['aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type) || action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel' || action.type === 'aks-resource-next-incident') {
+  if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay', 'aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type) || action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel' || action.type === 'aks-resource-next-incident') {
     const aks = applyAksAction(run, action, lab)
+    if (action.type === 'aks-diagnosis-replay' || aks.diagnostics.length && action.type.startsWith('aks-diagnosis-')) return aks
     if (!aks.diagnostics.length && activeRelease(aks.run)
       && ['aks-integration-next-incident', 'aks-resource-next-incident'].includes(action.type))
       aks.run = cancelReleaseExperiment(aks.run, 'unrelated-fault-started').run

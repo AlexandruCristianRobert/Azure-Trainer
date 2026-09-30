@@ -62,6 +62,31 @@ export function seedDiagnosisTest({ fault = 'none', profile = 'training' } = {})
   return { run, lab, clusterId, target }
 }
 
+/** A Task-local immutable diagnosis fixture; no journey Lab content. */
+export function seedDiagnosisIncidentTest({ multiCause = false } = {}) {
+  const fixture = seedDiagnosisTest(), { run, target } = fixture
+  const requestTarget = { clusterId: target.clusterId, namespace: target.namespace,
+    deploymentName: target.deploymentName, serviceName: target.serviceName }
+  const request = { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }
+  const healthy = { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training', release: '2.0' } }
+  const connection = { status: null, body: null, transport: { ok: false, reason: 'CONNECTION_REFUSED' } }
+  const scenario = expected => ({ kind: 'aks-request', version: 1, target: requestTarget, request,
+    connectivity: { origin: { kind: 'diagnostic', name: 'diagnostics', namespace: 'diagnostics' }, hostname: 'assistant-internal.assistant', port: 80 }, expected })
+  const portPath = 'k8s/service-internal.yaml', configPath = 'k8s/configmap.yaml'
+  const port = { path: portPath, before: run.project.savedFiles[portPath], after: run.project.savedFiles[portPath].replace('targetPort: http', 'targetPort: 8081') }
+  const config = { path: configPath, before: run.project.savedFiles[configPath], after: run.project.savedFiles[configPath].replace('pg-training.example', 'pg-missing.example') }
+  const phases = [{ id: 'port', edits: multiCause ? [port, config] : [port],
+    commands: multiCause ? [`kubectl apply -f ${portPath}`, `kubectl apply -f ${configPath}`, 'kubectl rollout restart deployment/assistant-api -n assistant'] : [`kubectl apply -f ${portPath}`], observationScenarioId: 'observe-port', recoveryScenarioId: 'recover' }]
+  if (!multiCause) phases.push({ id: 'dependency', edits: [config], commands: [`kubectl apply -f ${configPath}`, 'kubectl rollout restart deployment/assistant-api -n assistant'], observationScenarioId: 'observe-dependency', recoveryScenarioId: 'recover' })
+  const diagnosis = { kind: 'aks-diagnosis', version: 1, target: requestTarget, investigationArea: 'Service routing and captured dependency configuration', phases,
+    ...(multiCause ? { controlledProbe: { kind: 'isolated-port-repair', labId: 'aks-diagnosis-troubleshooting', phaseId: 'port', servicePort: 'http' } } : {}) }
+  const lab = { ...fixture.lab, ...(multiCause ? { id: 'aks-diagnosis-troubleshooting' } : {}), scenarios: { incident: diagnosis,
+    'observe-port': scenario(connection), 'observe-dependency': scenario({ status: 503, body: { error: 'The configured PostgreSQL host is not available in this trainer.', code: 'POSTGRES_CONNECTION' } }), recover: scenario(healthy) },
+  tasks: ['observe-port', 'observe-dependency', 'recover'].map(id => ({ id, check: () => false, dependencies: {}, verification: { scenarioId: id, scenarioVersion: 1 } })) }
+  if (multiCause) run.labId = lab.id
+  return { ...fixture, lab }
+}
+
 export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
 export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
   capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true },

@@ -13,6 +13,7 @@ import { advanceResourceIncident } from './resource-incidents.js'
 import { startReleaseExperiment, finishReleaseExperiment, cancelReleaseExperiment } from './release-experiments.js'
 import { recordFinalReleaseVerification } from './release-evidence.js'
 import { recordReleaseMilestone } from './release-milestones.js'
+import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive } from './diagnosis-incidents.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -28,6 +29,16 @@ function validConnectivityExpected(expected) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay'].includes(action.type)) {
+    const replay = action.type === 'aks-diagnosis-replay'
+    if (lab?.capabilities?.kubernetesDiagnostics !== true || Object.keys(action).sort().join(',') !== (replay ? 'observationId,type' : 'scenarioId,type'))
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Diagnosis controls accept only a declared scenario ID or retained observation ID.' }] }
+    const result = replay ? replayDiagnosisObservation(run, action.observationId, lab)
+      : action.type === 'aks-diagnosis-start' ? startDiagnosisIncident(run, action.scenarioId, lab) : advanceDiagnosisIncident(run, action.scenarioId, lab)
+    return { run, lines: [], ...result, portalEvents: [] }
+  }
+  if (diagnosisIncidentActive(run) && ['aks-release-start', 'aks-resource-start', 'aks-probe-start', 'aks-integration-next-incident', 'aks-resource-next-incident'].includes(action.type))
+    return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Recover and finish the active diagnosis incident before starting another experiment.' }] }
   if (['aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type)) {
     if (lab?.capabilities?.kubernetesRollouts !== true || Object.keys(action).sort().join(',') !== (action.type === 'aks-release-cancel' ? 'type' : 'scenarioId,type'))
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Release controls accept only a declared scenario ID; cancellation accepts no values.' }] }
@@ -127,6 +138,7 @@ export function applyAksAction(run, action, lab) {
     outcome: response.outcome ? 'passed' : 'failed', completed: response.outcome,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs, measurements: response.measurements })
   next = recordConnectivityIncidentEvidence(next, lab, task, next.evidence.experimentsById[next.evidence.currentEvidenceByTask[task.id]])
+  next = captureDiagnosisObservation(next, action.scenarioId, { requestId: `request-${response.measurements.requestSequence}` }, lab)
   const text = `HTTP ${response.status} ${JSON.stringify(response.body)}`
   return { run: next, lines: [{ kind: response.status === scenario.expected.status ? 'out' : 'err', text,
     status: response.status, body: response.body, measurements: response.measurements }], portalEvents: [], diagnostics: response.outcome || !response.diagnostic ? [] : [response.diagnostic] }
