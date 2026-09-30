@@ -17,6 +17,8 @@ import { previewBicepDeployment } from '../bicep/preview.js'
 import { getResourceGroup } from '../sandbox/ops.js'
 import { getContainerApp } from '../sandbox/containerapps.js'
 import { capstoneStages, cleanupReady, createStageSeal, recoveryCheckpoint, stageMilestone } from './stages.js'
+import { isAksCapstone, advanceAksStage, finalizeAksVerification } from '../kubernetes/capstone/stages.js'
+import { commitAksOwnership } from '../kubernetes/capstone/ownership.js'
 import { injectCapstoneIncident } from './incident.js'
 import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
@@ -322,6 +324,11 @@ function commandAction(run, action, lab) {
     next = { ...next, evidence: { ...next.evidence, groupReceipts },
       stages: { ...next.stages, groupCreations, ownedGroups, deletedApps } }
   }
+  if (isAksCapstone(lab)) {
+    const ownership = commitAksOwnership(run, next, result.events ?? [])
+    if (ownership.diagnostics.length) return envelope(run, [], [], ownership.diagnostics)
+    next = ownership.run
+  }
   next = appendOutput(next, result.clear ? [] : [{ kind: 'cmd', text: action.line }, ...result.lines], action.line, result.clear === true)
   return envelope(next, result.lines, [...(result.events ?? []), ...appliedEffects.events], diagnostics)
 }
@@ -558,6 +565,11 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
+  if (isAksCapstone(lab) && action.scenarioId !== undefined) {
+    const task = lab.tasks.find(item => item.verification?.scenarioId === action.scenarioId)
+    if (task && !lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id))
+      return envelope(run, [], [], [diagnostic('AKS_STAGE_INACTIVE', 'Only the active AKS stage can be verified.')])
+  }
   if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay', 'aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type) || action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel' || action.type === 'aks-resource-next-incident') {
     const aks = applyAksAction(run, action, lab)
     if (action.type === 'aks-diagnosis-replay' || aks.diagnostics.length && action.type.startsWith('aks-diagnosis-')) return aks
@@ -565,13 +577,19 @@ export function applyRunAction(run, action, lab) {
       && ['aks-integration-next-incident', 'aks-resource-next-incident'].includes(action.type))
       aks.run = cancelReleaseExperiment(aks.run, 'unrelated-fault-started').run
     if (lab.capabilities?.kubernetesRollouts) aks.run = refreshReleaseProofs(aks.run, lab)
-    const refreshed = refreshKubernetesDependencies(run, aks.run, lab)
+    const refreshed = finalizeAksVerification(run, refreshKubernetesDependencies(run, aks.run, lab), lab)
     const result = { ...aks, run: refreshed }
     validateBehavioralRun(result.run, lab)
     return result
   }
   let result
   switch (action.type) {
+    case 'aks-advance-stage': {
+      if (!isAksCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'AKS stage advancement accepts no caller state.')
+      const advanced = advanceAksStage(run, lab)
+      result = envelope(advanced.run, [], [], advanced.diagnostics)
+      break
+    }
     case 'inject-incident': {
       if (Object.keys(action).length !== 1) return actionError(run, 'Incident injection accepts no caller state.')
       const injected = injectCapstoneIncident(run, lab)
@@ -643,13 +661,13 @@ export function applyRunAction(run, action, lab) {
         draftFiles: { ...run.project.draftFiles, [action.path]: text }, diagnostics: [] } })
       else {
         const key = `file:${action.path}`
-        if (capstoneStages(lab) && run.project.sourceJournal.length >= MAX_SOURCE_SAVES)
+        if ((capstoneStages(lab) || isAksCapstone(lab)) && run.project.sourceJournal.length >= MAX_SOURCE_SAVES)
           return actionError(run, 'The Capstone source save limit has been reached.')
-        const project = capstoneStages(lab)
+        const project = capstoneStages(lab) || isAksCapstone(lab)
           ? { ...saved.project, sourceJournal: [...run.project.sourceJournal, { sequence: run.nextSequence,
             path: action.path, version: saved.project.fileVersions[action.path], hash: sourceTextHash(text) }] }
           : saved.project
-        result = envelope({ ...run, project, nextSequence: run.nextSequence + (capstoneStages(lab) ? 1 : 0),
+        result = envelope({ ...run, project, nextSequence: run.nextSequence + (capstoneStages(lab) || isAksCapstone(lab) ? 1 : 0),
           dependencyGenerations: { ...run.dependencyGenerations, [key]: (run.dependencyGenerations[key] ?? 0) + 1 } })
       }
       break
@@ -700,6 +718,7 @@ export function applyRunAction(run, action, lab) {
   if (lab.capabilities?.kubernetesRollouts) result.run = refreshReleaseProofs(result.run, lab, { previous: run, restarted: action.type === 'command' && result.lines.some(line => /deployment(?:\.apps)?\/.+ restarted$/.test(line.text)) })
   if (lab.capabilities?.kubernetesRollouts && !result.diagnostics.length && ['command', 'save-file'].includes(action.type)) result.run = observeReleaseTimestamp(result.run, result.run.runtime.simTimeMs, lab)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
+  result.run = finalizeAksVerification(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result
 }

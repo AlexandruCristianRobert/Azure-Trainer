@@ -1,6 +1,35 @@
 import { applyRunAction } from '../../src/lib/labEngine/actions.js'
 import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
+import { recordVerification } from '../../src/lib/labEngine/evidence.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
+
+// The small eight-stage fixture uses real engine verification records. Production
+// journey helpers execute the full Solutions once the Lab content is registered.
+export function verifyAksCapstoneFixture(run, lab, taskId = lab.stages.find(stage => stage.id === run.stages.activeStageId).taskIds[0]) {
+  const task = lab.tasks.find(item => item.id === taskId)
+  return recordVerification(run, lab, taskId, { ...task.verification, outcome: 'passed', completed: true,
+    startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs, measurements: {} })
+}
+
+export function seedAksCapstoneAt(stageId = 'source') {
+  const ids = ['source', 'deployment', 'configuration', 'behavior', 'resilience', 'release', 'incident', 'cleanup']
+  const lab = { id: 'aks-capstone-fixture', engineVersion: 2, contentVersion: 1,
+    manifestId: FOUNDATION_MANIFEST.id, initialProjectFiles: { ...FOUNDATION_FILES },
+    capabilities: { kubernetes: true, aksCapstone: true, acrBuild: true },
+    stages: ids.map(id => ({ id, taskIds: [`task-${id}`] })),
+    tasks: ids.map(id => ({ id: `task-${id}`, check: () => true,
+      dependencies: { source: ({ project }) => project.fileVersions },
+      verification: { scenarioId: `verify-${id}`, scenarioVersion: 1 } })) }
+  let run = createBehavioralRun(lab, { attemptId: 'aks-capstone-test-attempt' })
+  if (!ids.includes(stageId)) throw new Error('Unknown fixture stage')
+  while (run.stages.activeStageId !== stageId) {
+    run = verifyAksCapstoneFixture(run, lab)
+    const result = applyRunAction(run, { type: 'aks-advance-stage' }, lab)
+    if (result.diagnostics.length) throw new Error(JSON.stringify(result.diagnostics))
+    run = result.run
+  }
+  return { lab, run }
+}
 import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../src/data/templates/aks-python/configuration.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 import { initializeConnectivity, reconcileServices } from '../../src/lib/kubernetes/services.js'
