@@ -1,5 +1,6 @@
 import { verifyCapstoneSource } from './scenarios.js'
 import { simulateKubernetesRequest } from '../requests.js'
+import { resolveServiceDns } from '../connectivity.js'
 import { inspectRequestRecords } from '../request-records.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
@@ -39,16 +40,21 @@ export function verifyAksCapstone(run, lab, scenarioId) {
   }
   const live = capstoneLive(run)
   if (id === 'routing-ready' && live.sourceBuilt && live.configured && live.routed) {
+    const dns = resolveServiceDns(run, { clusterId: CAPSTONE_TARGET.clusterId, clientNamespace: 'assistant',
+      hostname: 'assistant-internal.assistant.svc.cluster.local' })
+    const dnsMatches = dns.ok === true && dns.serviceKey === 'Service/assistant/assistant-internal'
+      && dns.canonicalName === 'assistant-internal.assistant.svc.cluster.local'
+      && dns.address === live.internal.spec.clusterIP
     const expected = { status: 200, body: { service: 'knowledge-assistant', version: '1.0', environment: 'training' } }
     const request = { method: 'GET', path: '/api/info' }
     const internal = simulateKubernetesRequest(run, { id: `${scenarioId}-internal`, target: CAPSTONE_TARGET, request, expected })
     const external = simulateKubernetesRequest(internal.run, { id: `${scenarioId}-external`, target: CAPSTONE_EXTERNAL, request, expected,
       connectivity: { origin: { kind: 'external' }, service: { name: 'assistant-external', namespace: 'assistant' }, port: 80 } })
-    const passed = internal.outcome && external.outcome && internal.measurements.artifactId === live.buildId
+    const passed = dnsMatches && internal.outcome && external.outcome && internal.measurements.artifactId === live.buildId
       && external.measurements.artifactId === live.buildId
     return { run: external.run, result: result(!!passed, { reason: passed ? 'observed-internal-and-external' : 'routing-failed',
       clusterId: CAPSTONE_TARGET.clusterId, deploymentUid: live.deployment.metadata.uid,
-      internalStatus: internal.status, externalStatus: external.status,
+      internalDns: dns, internalStatus: internal.status, externalStatus: external.status,
       internalPodUid: internal.measurements.podUid ?? null, externalPodUid: external.measurements.podUid ?? null,
       artifactId: live.buildId, internalServiceUid: live.internal.metadata.uid, externalServiceUid: live.external.metadata.uid }) }
   }

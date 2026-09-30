@@ -5,6 +5,7 @@ import { CAPSTONE_SOLUTION_FILES } from '../src/data/templates/aks-python/capsto
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { seedAksProductionAt } from './helpers/aks.js'
+import { resolveServiceDns } from '../src/lib/kubernetes/connectivity.js'
 
 const act = (run, action) => {
   const result = applyRunAction(run, action, aksCapstoneLab)
@@ -44,6 +45,8 @@ describe('AKS capstone first four stages', () => {
     const routeEvidence = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['routing-ready']]
     expect(routeEvidence.measurements.internalStatus).toBe(200)
     expect(routeEvidence.measurements.externalStatus).toBe(200)
+    expect(routeEvidence.measurements.internalDns).toMatchObject({ ok: true,
+      serviceKey: 'Service/assistant/assistant-internal', canonicalName: 'assistant-internal.assistant.svc.cluster.local' })
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)).toEqual(run)
   })
 
@@ -111,6 +114,12 @@ describe('AKS capstone first four stages', () => {
       run = act(run, { type: 'save-file', path, text: run.project.savedFiles[path].replace('minReadySeconds: 5', 'minReadySeconds: 0') })
       run = act(run, { type: 'command', line: `kubectl apply -f ${path}` })
       expect(verifyAksCapstone(run, baseline.lab, 'capstone-answer-backups').result.outcome).toBe('failed')
+    })
+
+    it('does not resolve the internal Service from a different namespace name', () => {
+      const dns = resolveServiceDns(baseline.run, { clusterId: baseline.run.sandbox.aksClusters[0].id,
+        clientNamespace: 'default', hostname: 'assistant-internal.default.svc.cluster.local' })
+      expect(dns).toMatchObject({ ok: false, reason: 'DNS_NOT_FOUND', serviceKey: null })
     })
   })
 })
