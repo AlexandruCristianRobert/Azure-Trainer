@@ -57,12 +57,13 @@ function retainedLiveFailure(run, lab, scenarioId, scenario, incident) {
       || record.sequence !== measured.requestSequence + 1 || record.startedAtMs < incident.startedAtMs
       || measured.deploymentUid !== incident.target.deploymentUid || measured.serviceUid !== incident.target.serviceUid
       || measured.route?.serviceUid !== incident.target.serviceUid
-      || !Array.isArray(measured.dependencyTrace)
+      || !request || !Array.isArray(measured.dependencyTrace)
       || !same(measured.dependencyTrace.map(item => [item.operation, item.status]), [['embedding', 'failed']])
-      || request && (request.scenarioId !== scenarioId || request.clusterId !== scenario.target.clusterId
-        || request.route?.serviceUid !== incident.target.serviceUid || request.simTimeMs < incident.startedAtMs
-        || request.sequence !== measured.requestSequence || request.status !== measured.status || !same(request.body, measured.body)
-        || !same(request.transport, measured.transport) || !same(request.dependencyTrace, measured.dependencyTrace))) continue
+      || request.scenarioId !== scenarioId || request.clusterId !== scenario.target.clusterId
+      || request.route?.serviceUid !== incident.target.serviceUid || request.simTimeMs < incident.startedAtMs
+      || request.sequence !== measured.requestSequence || request.status !== measured.status || !same(request.body, measured.body)
+      || !same(request.origin, measured.origin) || request.podUid !== measured.podUid
+      || !same(request.transport, measured.transport) || !same(request.dependencyTrace, measured.dependencyTrace)) continue
     return structuredClone(measured)
   }
   return null

@@ -97,7 +97,7 @@ test('ConfigMap-first repair leaves refused traffic until both Services are corr
   expect(second.measurements).toMatchObject({ origin: 'incident-snapshot', status: 502, body: { code: 'AI_ENDPOINT' } })
 })
 
-test('re-Verify after recovery retains an earlier authentic live 502 instead of invoking the controlled probe', () => {
+test('re-Verify after recovery retains an authentic live 502 while its request exists, then labels a pruned observation as snapshot', () => {
   const recovered = executeDiagnosisRepair(structuredClone(routed), lab, { targetPort: 8080 })
   const prior = recovered.evidence.experimentsById[recovered.evidence.currentEvidenceByTask['dependency-observed']]
   expect(prior.measurements.origin.kind).toBe('pod')
@@ -115,7 +115,22 @@ test('re-Verify after recovery retains an earlier authentic live 502 instead of 
   expect(validateBehavioralRun(pruned, lab)).toBeTruthy()
   const afterPruning = verify(pruned, 'dependency-observed')
   const retained = afterPruning.run.evidence.experimentsById[afterPruning.run.evidence.currentEvidenceByTask['dependency-observed']]
-  expect(retained.measurements).toMatchObject({ observationOrigin: 'observed-live-history', requestId: prior.measurements.requestId })
+  expect(retained.measurements).toMatchObject({ origin: 'incident-snapshot', status: 502, body: { code: 'AI_ENDPOINT' } })
+})
+
+test('a forged probe-only record cannot be relabeled as observed-live history', () => {
+  const run = executeDiagnosisRepair(structuredClone(routed), lab, { targetPort: 'http', repairTogether: true })
+  const record = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['dependency-observed']]
+  const incident = state(run).diagnosis.incident
+  record.measurements = { ...record.measurements, origin: { kind: 'pod', clusterId: target().clusterId, podUid: incident.observations[0].capsule.podUid },
+    requestId: 'request-999999', requestSequence: record.sequence - 1, transport: { ok: true, reason: null },
+    route: { serviceUid: incident.target.serviceUid }, serviceUid: incident.target.serviceUid,
+    deploymentUid: incident.target.deploymentUid }
+  expect(validateBehavioralRun(run, lab)).toBeTruthy()
+  const again = verify(run, 'dependency-observed')
+  const current = again.run.evidence.experimentsById[again.run.evidence.currentEvidenceByTask['dependency-observed']]
+  expect(current.measurements.origin).toBe('incident-snapshot')
+  expect(current.measurements).not.toHaveProperty('observationOrigin', 'observed-live-history')
 })
 
 test('authored Solutions grade at each Task, require final witness, survive reload and produce Result', async () => {
