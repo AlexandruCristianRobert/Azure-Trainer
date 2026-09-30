@@ -85,7 +85,7 @@ function publicDiagnostic(code) {
 }
 
 /** Execute only the bounded graph captured in an integration AppSpec. */
-export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalog, scenarioProfile = 'healthy') {
+function simulateIntegrationCore(appSpec, podSnapshot, request, fixtureCatalog, scenarioProfile = 'healthy') {
   const integration = appSpec?.integration
   const graph = integration?.graph
   const trace = []
@@ -261,4 +261,33 @@ export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalo
     integrationTrace.elapsedMs = values.get('__budget')?.value?.elapsedMs ?? integrationTrace.elapsedMs
     return result(status, { error: error?.public_message ?? 'The supplied assistant dependency is unavailable.', ...(error?.code ? { code: error.code } : {}) }, trace, diagnostic, integrationTrace)
   }
+}
+
+/** Project the finite authored wrapper around every actual core return path.
+ * Records are application JSON messages, separate from dependency observations.
+ * Request allocation and persistence belong to the dispatch layer. */
+export function simulateIntegration(appSpec, podSnapshot, request, fixtureCatalog, scenarioProfile = 'healthy') {
+  if (appSpec?.diagnostics?.version !== 1 || request?.method !== 'POST' || request?.path !== '/api/ask')
+    return simulateIntegrationCore(appSpec, podSnapshot, request, fixtureCatalog, scenarioProfile)
+  const appLogRecords = []; let outcome = null
+  const bindings = new Map()
+  for (const statement of appSpec.diagnostics.statements ?? []) {
+    if (statement.op === 'return') break
+    if (statement.op === 'core') {
+      outcome = simulateIntegrationCore(appSpec, podSnapshot, request, fixtureCatalog, scenarioProfile)
+      bindings.set(statement.binding, outcome)
+    } else if (statement.op === 'log' && statement.enabled !== false) {
+      const record = {}
+      for (const [key, descriptor] of Object.entries(statement.fields ?? {})) {
+        record[key] = descriptor.kind === 'request-id' ? request.requestId ?? null
+          : descriptor.kind === 'result-status' ? bindings.get(descriptor.binding)?.status ?? null
+            : descriptor.value
+      }
+      appLogRecords.push(record)
+    }
+  }
+  // Compiled wrappers contain one core call. A malformed captured descriptor
+  // cannot invent application events or dependency success.
+  outcome ??= result(503, { error: 'The supplied assistant dependency is unavailable.' }, [], publicDiagnostic('ASSISTANT_FLOW_INVALID'), null)
+  return { ...outcome, appLogRecords }
 }

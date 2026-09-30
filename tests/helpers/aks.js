@@ -17,6 +17,19 @@ import { RELEASE_FILES, RELEASE_MANIFEST, RELEASE_SOLUTION_FILES } from '../../s
 import { SUBSCRIPTION_ID } from '../../src/lib/sandbox/model.js'
 import { advanceKubernetesTime } from '../../src/lib/kubernetes/time.js'
 import { evaluateLab } from '../../src/lib/labEngine/evaluate.js'
+import { DIAGNOSIS_MANIFEST, DIAGNOSIS_SOLUTION_FILES } from '../../src/data/templates/aks-python/diagnosis.js'
+import { parsePythonProject } from '../../src/lib/project/python.js'
+import { INTEGRATION_FIXTURES } from '../../src/data/fixtures/aks/integration.js'
+
+export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, question = 'How long are backups kept?', requestId = 'request-test-1',
+  requestIdExpression = 'current_request_id()', environment = {}, profile = 'healthy' } = {}) {
+  const source = files['app.py'].replace('current_request_id()', requestIdExpression)
+  const parsed = parsePythonProject({ ...files, 'app.py': source }, DIAGNOSIS_MANIFEST)
+  if (parsed.diagnostics.length) throw new Error(parsed.diagnostics.map(item => `${item.path}:${item.line}:${item.column} ${item.message}`).join('\n'))
+  const snapshot = makeTrainingSnapshot()
+  snapshot.environment = { ...snapshot.environment, AUDIENCE: 'employee', ...environment }
+  return [parsed.appSpec, snapshot, { method: 'POST', path: '/api/ask', body: { question }, requestId }, INTEGRATION_FIXTURES, profile]
+}
 
 export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
 export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
