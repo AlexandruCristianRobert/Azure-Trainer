@@ -36,6 +36,16 @@ const commands = [
   { label: 'Delete', icon: 'delete', readOnlyHint: RO('az cosmosdb sql container delete --help') },
   { label: 'Refresh', icon: 'arrow-sync' },
 ]
+function throughputModeLabel(c) {
+  if (!c) return 'Not set'
+  if (c.throughputMode === 'autoscale') return `Autoscale up to ${c.maxThroughput} RU/s`
+  return `Manual ${c.throughput} RU/s`
+}
+function itemCountLabel(c) {
+  if (!c) return 'Not set'
+  const count = (c.items?.length ?? 0) * (c.logicalScale ?? 1)
+  return `${count} (simulated)`
+}
 const essentials = computed(() => [
   { label: 'Resource group', value: props.resourceGroup, blade: { kind: 'resource-group', name: props.resourceGroup } },
   { label: 'Account', value: props.account, blade: { kind: 'cosmos-account', resourceGroup: props.resourceGroup, name: props.account } },
@@ -43,8 +53,10 @@ const essentials = computed(() => [
   { label: 'Container id', value: container.value?.name ?? props.name },
   { label: 'Partition key', value: container.value?.partitionKeyPath ?? 'Not set' },
   { label: 'Throughput', value: container.value?.throughput == null ? 'Not set' : `${container.value.throughput} RU/s` },
+  { label: 'Throughput mode', value: throughputModeLabel(container.value) },
   { label: 'Indexing mode', value: container.value?.indexingPolicy?.indexingMode ?? 'Not set' },
   { label: 'Automatic indexing', value: container.value?.indexingPolicy?.automatic ? 'Enabled' : 'Disabled' },
+  { label: 'Item count', value: itemCountLabel(container.value) },
 ])
 const embeddingColumns = [
   { key: 'path', label: 'Path', grow: 1.4 },
@@ -57,9 +69,14 @@ const indexColumns = [
   { key: 'type', label: 'Index type', grow: 1 },
 ]
 const pathColumns = [{ key: 'path', label: 'Path', grow: 1 }]
+const compositeIndexColumns = [{ key: 'paths', label: 'Paths', grow: 1 }]
 const embeddings = computed(() => (container.value?.vectorEmbeddingPolicy?.vectorEmbeddings ?? []).map((item) => ({ ...item, _row: `embedding:${item.path}` })))
 const vectorIndexes = computed(() => (container.value?.indexingPolicy?.vectorIndexes ?? []).map((item) => ({ ...item, _row: `index:${item.path}` })))
 const excludedPaths = computed(() => (container.value?.indexingPolicy?.excludedPaths ?? []).map((item) => ({ ...item, _row: `excluded:${item.path}` })))
+const compositeIndexes = computed(() => (container.value?.indexingPolicy?.compositeIndexes ?? []).map((entry, index) => ({
+  _row: `composite:${index}`,
+  paths: entry.map((part) => `${part.path} ${part.order === 'descending' ? 'DESC' : 'ASC'}`).join(', '),
+})))
 </script>
 
 <template>
@@ -72,6 +89,8 @@ const excludedPaths = computed(() => (container.value?.indexingPolicy?.excludedP
       <EntityTable :columns="embeddingColumns" :rows="embeddings" empty-text="No vector embedding policy configured" name-key="_row" />
       <h3 class="blade__section-title">Vector indexes</h3>
       <EntityTable :columns="indexColumns" :rows="vectorIndexes" empty-text="No vector indexes configured" name-key="_row" />
+      <h3 class="blade__section-title">Composite indexes</h3>
+      <EntityTable :columns="compositeIndexColumns" :rows="compositeIndexes" empty-text="No composite indexes configured" name-key="_row" />
       <h3 class="blade__section-title">Excluded indexing paths</h3>
       <EntityTable :columns="pathColumns" :rows="excludedPaths" empty-text="No excluded indexing paths configured" name-key="_row" />
     </div>

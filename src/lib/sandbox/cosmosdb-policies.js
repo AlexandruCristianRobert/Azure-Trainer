@@ -3,6 +3,7 @@ import { AzError } from './errors.js'
 const VECTOR_TYPES = ['float32', 'float16', 'int8', 'uint8']
 const DISTANCE_FUNCTIONS = ['cosine', 'dotproduct', 'euclidean']
 const VECTOR_INDEX_TYPES = ['flat', 'quantizedFlat', 'diskANN']
+const COMPOSITE_ORDERS = ['ascending', 'descending']
 
 export const DEFAULT_INDEXING_POLICY = {
   indexingMode: 'consistent',
@@ -10,6 +11,7 @@ export const DEFAULT_INDEXING_POLICY = {
   includedPaths: [{ path: '/*' }],
   excludedPaths: [{ path: '/_etag/?' }],
   vectorIndexes: [],
+  compositeIndexes: [],
 }
 
 function bad(message) {
@@ -64,9 +66,24 @@ export function validateVectorEmbeddingPolicy(value) {
   return { vectorEmbeddings }
 }
 
+function compositeIndexEntry(entry) {
+  if (!plainObject(entry) || Object.keys(entry).some((key) => !['path', 'order'].includes(key))) bad('Each composite index entry must define path and order.')
+  jsonPath(entry.path, 'Composite index path')
+  if (!COMPOSITE_ORDERS.includes(entry.order)) bad(`Unsupported composite index order '${entry.order}'.`)
+  return { path: entry.path, order: entry.order }
+}
+
+function compositeIndexArray(value) {
+  if (!Array.isArray(value)) bad('--idx compositeIndexes must be an array of composite index definitions.')
+  return value.map((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) bad('Each composite index must list at least two paths.')
+    return entry.map(compositeIndexEntry)
+  })
+}
+
 export function validateIndexingPolicy(value, vectorEmbeddingPolicy = null) {
   if (!plainObject(value)) bad('--idx must be a JSON object.')
-  const allowed = ['indexingMode', 'automatic', 'includedPaths', 'excludedPaths', 'vectorIndexes']
+  const allowed = ['indexingMode', 'automatic', 'includedPaths', 'excludedPaths', 'vectorIndexes', 'compositeIndexes']
   if (Object.keys(value).some((key) => !allowed.includes(key))) bad('--idx contains an unsupported indexing policy property.')
   const indexingMode = value.indexingMode ?? 'consistent'
   const automatic = value.automatic ?? true
@@ -90,7 +107,8 @@ export function validateIndexingPolicy(value, vectorEmbeddingPolicy = null) {
     return { path: index.path, type: index.type }
   })
   if (!vectorEmbeddingPolicy && vectorIndexes.length) bad('A vector index requires --vector-embeddings.')
-  return { indexingMode, automatic, includedPaths, excludedPaths, vectorIndexes }
+  const compositeIndexes = compositeIndexArray(value.compositeIndexes ?? [])
+  return { indexingMode, automatic, includedPaths, excludedPaths, vectorIndexes, compositeIndexes }
 }
 
 export function sameJson(left, right) {

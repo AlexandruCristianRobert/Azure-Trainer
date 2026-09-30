@@ -177,18 +177,37 @@ export function listCosmosContainers(sandbox, resourceGroup, account, database) 
   return databaseOrThrow(sandbox, resourceGroup, account, database).database.containers.slice()
 }
 
-export function createCosmosContainer(sandbox, { resourceGroup, account, database, name, partitionKeyPath, throughput = 400, vectorEmbeddingPolicy = null, indexingPolicy = null }) {
+function throughputSettings(throughput, maxThroughput) {
+  if (throughput !== undefined && maxThroughput !== undefined) throw new AzError('BadRequest', '--throughput and --max-throughput are mutually exclusive.', { kind: 'cli' })
+  if (maxThroughput !== undefined) {
+    if (!Number.isInteger(maxThroughput) || maxThroughput < 1000 || maxThroughput % 1000 !== 0) throw new AzError('BadRequest', 'Max throughput must be at least 1000 RU/s and in increments of 1000.', { kind: 'cli' })
+    return { throughputMode: 'autoscale', throughput: maxThroughput / 10, maxThroughput }
+  }
+  const resolved = throughput ?? 400
+  if (!Number.isInteger(resolved) || resolved < 400 || resolved % 100 !== 0) throw new AzError('BadRequest', 'Throughput must be at least 400 RU/s and in increments of 100.', { kind: 'cli' })
+  return { throughputMode: 'manual', throughput: resolved, maxThroughput: null }
+}
+
+export function createCosmosContainer(sandbox, { resourceGroup, account, database, name, partitionKeyPath, throughput, maxThroughput, physicalPartitions = 1, logicalScale = 1, vectorEmbeddingPolicy = null, indexingPolicy = null }) {
   const parent = databaseOrThrow(sandbox, resourceGroup, account, database)
   childName(name, 'SQL container')
   partitionPath(partitionKeyPath)
-  if (!Number.isInteger(throughput) || throughput < 400 || throughput % 100 !== 0) throw new AzError('BadRequest', 'Throughput must be at least 400 RU/s and in increments of 100.', { kind: 'cli' })
+  const resolvedThroughput = throughputSettings(throughput, maxThroughput)
   const validatedEmbeddingPolicy = vectorEmbeddingPolicy === null ? null : validateVectorEmbeddingPolicy(vectorEmbeddingPolicy)
   const validatedIndexingPolicy = validateIndexingPolicy(indexingPolicy ?? DEFAULT_INDEXING_POLICY, validatedEmbeddingPolicy)
   if (validatedEmbeddingPolicy && !parent.account.capabilities.includes(VECTOR_CAPABILITY)) throw new AzError('BadRequest', `Enable '${VECTOR_CAPABILITY}' on account '${parent.account.name}' before creating a vector container.`, { kind: 'cli' })
-  const desired = { partitionKeyPath, throughput, vectorEmbeddingPolicy: validatedEmbeddingPolicy, indexingPolicy: validatedIndexingPolicy }
+  const desired = { partitionKeyPath, ...resolvedThroughput, vectorEmbeddingPolicy: validatedEmbeddingPolicy, indexingPolicy: validatedIndexingPolicy }
   const existing = parent.database.containers.find((item) => item.name === name)
   if (existing) {
-    if (!sameJson({ partitionKeyPath: existing.partitionKeyPath, throughput: existing.throughput, vectorEmbeddingPolicy: existing.vectorEmbeddingPolicy, indexingPolicy: existing.indexingPolicy }, desired)) {
+    const existingConfig = {
+      partitionKeyPath: existing.partitionKeyPath,
+      throughputMode: existing.throughputMode ?? 'manual',
+      throughput: existing.throughput,
+      maxThroughput: existing.maxThroughput ?? null,
+      vectorEmbeddingPolicy: existing.vectorEmbeddingPolicy,
+      indexingPolicy: existing.indexingPolicy,
+    }
+    if (!sameJson(existingConfig, desired)) {
       throw new AzError('Conflict', `SQL container '${name}' already exists with immutable configuration. To change its configuration, delete and recreate it.`, { kind: 'cli' })
     }
     const next = cloneSandbox(sandbox)
@@ -199,9 +218,22 @@ export function createCosmosContainer(sandbox, { resourceGroup, account, databas
   const next = cloneSandbox(sandbox)
   const storedAccount = findAccount(next, resourceGroup, account)
   const storedDatabase = storedAccount.databases.find((item) => item.name === database)
-  const resource = { name, ...desired, createdAt: nowIso() }
+  const resource = { name, ...desired, physicalPartitions, logicalScale, items: [], createdAt: nowIso() }
   storedDatabase.containers.push(resource)
   return { sandbox: next, resource, account: storedAccount, database: storedDatabase }
+}
+
+export function updateCosmosContainer(sandbox, { accountName, resourceGroup, databaseName, name, indexingPolicy, partitionKeyPath, vectorEmbeddingPolicy }) {
+  if (partitionKeyPath !== undefined || vectorEmbeddingPolicy !== undefined) {
+    throw new AzError('BadRequest', 'Partition key and vector embedding policy cannot be changed after the container is created.', { kind: 'cli' })
+  }
+  const parent = containerOrThrow(sandbox, resourceGroup, accountName, databaseName, name)
+  const validatedIndexingPolicy = validateIndexingPolicy(indexingPolicy, parent.container.vectorEmbeddingPolicy)
+  const next = cloneSandbox(sandbox)
+  const storedDatabase = findAccount(next, resourceGroup, accountName).databases.find((item) => item.name === databaseName)
+  const storedContainer = storedDatabase.containers.find((item) => item.name === name)
+  storedContainer.indexingPolicy = validatedIndexingPolicy
+  return { sandbox: next, container: storedContainer }
 }
 
 export function deleteCosmosContainer(sandbox, { resourceGroup, account, database, name }) {
