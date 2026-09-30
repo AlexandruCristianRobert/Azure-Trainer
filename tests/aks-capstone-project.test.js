@@ -95,4 +95,32 @@ describe('AKS capstone teaching project', () => {
     expect(result.passed).toBe(false)
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_HEALTH' }))
   })
+
+  it('rejects remote dependency coupling in readiness for both complete solutions', () => {
+    const localReadiness = 'initialized() and accepting_requests()'
+    const expectedHealth = {
+      startupBefore: 503, startupAfter: 200, readyBefore: 503, readyBeforeClosed: 503,
+      readyOpen: 200, readyClosed: 503, liveBefore: 200, liveAfter: 200,
+    }
+    const coupledReadiness = [
+      `${localReadiness} and postgres_available()`,
+      `${localReadiness} and ai_available()`,
+      `${localReadiness} and (postgres_available() or ai_available())`,
+    ]
+    for (const variant of ['v1', 'v2']) {
+      const valid = verifyCapstoneSource(CAPSTONE_SOLUTION_FILES[variant], CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
+      expect(valid.passed).toBe(true)
+      for (const cases of Object.values(valid.measurements.health.remoteDependencyCases)) {
+        expect(Object.fromEntries(Object.keys(expectedHealth).map(name => [name, cases[name].status]))).toEqual(expectedHealth)
+      }
+      for (const expression of coupledReadiness) {
+        const files = { ...CAPSTONE_SOLUTION_FILES[variant],
+          'app.py': CAPSTONE_SOLUTION_FILES[variant]['app.py'].replace(localReadiness, expression) }
+        expect(files['app.py']).not.toBe(CAPSTONE_SOLUTION_FILES[variant]['app.py'])
+        const result = verifyCapstoneSource(files, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
+        expect(result.passed).toBe(false)
+        expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_HEALTH' }))
+      }
+    }
+  })
 })

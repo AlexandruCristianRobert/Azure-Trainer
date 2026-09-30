@@ -81,20 +81,31 @@ export function verifyCapstoneSource(files, manifest, fixtureCatalog) {
 
   const pod = { spec: { containers: [{ ports: [{ name: 'http', containerPort: 8080 }] }] } }
   const container = { initializedAtMs: 6000, localFaults: {} }
-  const health = (path, nowMs, faults = {}) => evaluateHealthEndpoint(app, { ...container, localFaults: faults }, {}, path, 'http', nowMs, pod)
-  measurements.health = {
-    startupBefore: health('/health/startup', 0), startupAfter: health('/health/startup', 6000),
-    readyBefore: health('/health/ready', 0), readyBeforeClosed: health('/health/ready', 0, { admissionClosed: true }),
-    readyOpen: health('/health/ready', 6000),
-    readyClosed: health('/health/ready', 6000, { admissionClosed: true }),
-    liveBefore: health('/health/live', 0), liveAfter: health('/health/live', 6000),
+  const health = (path, nowMs, faults = {}, dependencySignals = {}) => evaluateHealthEndpoint(app,
+    { ...container, localFaults: faults }, dependencySignals, path, 'http', nowMs, pod)
+  const healthCases = (dependencySignals = {}) => ({
+    startupBefore: health('/health/startup', 0, {}, dependencySignals),
+    startupAfter: health('/health/startup', 6000, {}, dependencySignals),
+    readyBefore: health('/health/ready', 0, {}, dependencySignals),
+    readyBeforeClosed: health('/health/ready', 0, { admissionClosed: true }, dependencySignals),
+    readyOpen: health('/health/ready', 6000, {}, dependencySignals),
+    readyClosed: health('/health/ready', 6000, { admissionClosed: true }, dependencySignals),
+    liveBefore: health('/health/live', 0, {}, dependencySignals),
+    liveAfter: health('/health/live', 6000, {}, dependencySignals),
+  })
+  const unavailableDependencies = {
+    postgres: { postgres_available: false }, ai: { ai_available: false },
+    postgresAndAi: { postgres_available: false, ai_available: false },
   }
-  check(measurements.health.startupBefore.status === 503 && measurements.health.startupAfter.status === 200
-    && measurements.health.readyBefore.status === 503 && measurements.health.readyBeforeClosed.status === 503
-    && measurements.health.readyOpen.status === 200
-    && measurements.health.readyClosed.status === 503
-    && measurements.health.liveBefore.status === 200 && measurements.health.liveAfter.status === 200,
-  'CAPSTONE_HEALTH', 'Startup, readiness and liveness must reflect the taught lifecycle signals.')
+  const expectedHealth = cases => cases.startupBefore.status === 503 && cases.startupAfter.status === 200
+    && cases.readyBefore.status === 503 && cases.readyBeforeClosed.status === 503
+    && cases.readyOpen.status === 200 && cases.readyClosed.status === 503
+    && cases.liveBefore.status === 200 && cases.liveAfter.status === 200
+  measurements.health = { ...healthCases(), remoteDependencyCases: Object.fromEntries(
+    Object.entries(unavailableDependencies).map(([name, signals]) => [name, healthCases(signals)])) }
+  check(expectedHealth(measurements.health), 'CAPSTONE_HEALTH', 'Startup, readiness and liveness must reflect the taught lifecycle signals.')
+  for (const [name, cases] of Object.entries(measurements.health.remoteDependencyCases))
+    check(expectedHealth(cases), 'CAPSTONE_HEALTH', `Health checks must retain their local lifecycle behavior when ${name} is unavailable.`)
 
   const work = app.workload
   measurements.workload = work && { route: work.route, operation: work.operation, units: work.units,
