@@ -70,11 +70,14 @@ export function captureDiagnosisBaseline(run, lab) {
   if (!declaration || lab.capabilities?.kubernetesDiagnostics !== true || !nativeDiagnosisRequest(request)) return run
   const state = stateFor(run, declaration.target), task = lab.tasks.find(item => item.id === declaration.taskId)
   const expected = lab.scenarios[task?.verification?.scenarioId]
-  if (!state || state.diagnosis?.baseline || !request.transport.ok || request.status !== 200
+  if (!state || !request.transport.ok || request.status !== 200
     || request.clusterId !== declaration.target.clusterId || request.route.serviceName !== declaration.target.serviceName
     || request.namespace !== declaration.target.namespace || request.origin.kind !== 'pod' || !state.connectivity.diagnosticPodUids.includes(request.origin.podUid)
     || !same(request.request, expected?.request) || !same(request.body, expected?.expected.body)) return run
   const target = stableTarget(run, declaration.target), scenario = Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis')
+  // Preserve authentic proof while its target still exists; a repaired replacement needs fresh proof.
+  if (!target || state.diagnosis?.baseline && (!validDiagnosisBaseline(run, lab, target.clusterId)
+    || liveTarget(run, state.diagnosis.baseline.target))) return run
   const capsule = capsuleFor(run, target, request), coordinates = capsuleCoordinates(run, target, capsule, scenario, lab)
   const sourceHash = run.artifacts.buildsById[request.artifactId]?.sourceHash
   if (!coordinates || !sourceHash || sourceHash !== projectSourceHash(selectBuildFiles(run.project.savedFiles, getProjectManifest(run.project.manifestId)))) return run

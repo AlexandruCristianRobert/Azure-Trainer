@@ -152,3 +152,38 @@ test('native baseline receipts cannot be minted from clones or retargeted by rec
   const deleted = act(replaced, lab, { type: 'command', line: 'kubectl delete service assistant-internal -n assistant' }).run
   expect(baselineDone(deleted)).toBe(false)
 })
+
+test('baseline renews only stale live-target proof after authentic healthy Service replacement', () => {
+  let run = executeAksSolution(createBehavioralRun(lab, { attemptId: 'review-renewed-baseline' }), lab, lab.tasks[0])
+  const target = lab.diagnosisBaseline.target
+  const original = structuredClone(run.runtime.kubernetes.clusters[target.clusterId].diagnosis.baselineReceipt)
+  run = act(run, lab, { type: 'command', line: internal }).run
+  expect(run.runtime.kubernetes.clusters[target.clusterId].diagnosis.baselineReceipt).toEqual(original)
+  run = act(run, lab, { type: 'command', line: 'kubectl delete service assistant-internal -n assistant' }).run
+  expect(baselineDone(run)).toBe(false)
+  run = act(run, lab, { type: 'command', line: 'kubectl apply -f k8s/service-internal.yaml' }).run
+  const state = run.runtime.kubernetes.clusters[target.clusterId]
+  const serviceUid = state.resources['Service/assistant/assistant-internal'].metadata.uid
+  expect(serviceUid).not.toBe(original.target.serviceUid)
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'baseline' }).run
+  expect(baselineDone(run)).toBe(false)
+  const routed = routeServiceRequest(run, { origin: { kind: 'pod', clusterId: target.clusterId, podUid: state.connectivity.diagnosticPodUids[0] },
+    hostname: 'assistant-internal.assistant', port: 80, method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, lab).run
+  const cloned = structuredClone(routed)
+  expect(captureDiagnosisBaseline(cloned, lab)).toBe(cloned)
+  routed.runtime.kubernetes.requests.at(-1).route.address = '203.0.113.99'
+  expect(captureDiagnosisBaseline(routed, lab)).toBe(routed)
+  const source = run.project.savedFiles['app.py']
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: source + '\n# not deployed\n' }).run
+  run = act(run, lab, { type: 'command', line: internal }).run
+  expect(run.runtime.kubernetes.clusters[target.clusterId].diagnosis.baselineReceipt).toEqual(original)
+  expect(baselineDone(run)).toBe(false)
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: source }).run
+  run = executeAksSolution(run, lab, lab.tasks[0])
+  expect(run.runtime.kubernetes.requests.slice(-2).map(request => request.status)).toEqual([200, 200])
+  expect(baselineDone(run)).toBe(true)
+  const renewed = run.runtime.kubernetes.clusters[target.clusterId].diagnosis.baselineReceipt
+  expect(renewed.id).not.toBe(original.id)
+  expect(renewed.target.serviceUid).toBe(serviceUid)
+  expect(baselineDone(validateBehavioralRun(JSON.parse(JSON.stringify(run)), lab))).toBe(true)
+})
