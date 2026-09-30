@@ -1,0 +1,35 @@
+﻿{
+    "task":  "Task 5c",
+    "files":  [
+                  {
+                      "path":  "src/lib/labEngine/actions.js",
+                      "sha256":  "bac3a4314d3e981b5d9c1f9bb9a65a9f0eceb482b0d90a139d7b466afe5c8e4a",
+                      "bytes":  44395
+                  },
+                  {
+                      "path":  "src/lib/labEngine/run.js",
+                      "sha256":  "1a1fd38313c96afbfb633dff20677a1baa9dbedfdb8d14f18a42b144032869e1",
+                      "bytes":  16561
+                  },
+                  {
+                      "path":  "src/lib/labEngine/stages.js",
+                      "sha256":  "38d53174aad8c2d62ac29a9a8573d5e1253db6df4eeb7c0aa416edd523e7db11",
+                      "bytes":  14915
+                  },
+                  {
+                      "path":  "src/lib/labEngine/incident.js",
+                      "sha256":  "776ca2a290d10f66dc8bece487eed73726e181bd6b72702727ad278f64f16744",
+                      "bytes":  10828
+                  },
+                  {
+                      "path":  "tests/aca-capstone-stages.test.js",
+                      "sha256":  "0b9204a1921b041964cd1e14aea542674e7b494cd46beeb793c69cca46c61f0c",
+                      "bytes":  15559
+                  },
+                  {
+                      "path":  "tests/aca-capstone-incident.test.js",
+                      "sha256":  "785d13a5f529425ca2c33d8153ed7bd527d49dadad7103e4619986c9a8e165f9",
+                      "bytes":  17386
+                  }
+              ]
+}

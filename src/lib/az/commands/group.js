@@ -33,8 +33,9 @@ export const groupGroup = defineGroup(['group'], 'Manage resource groups and tem
     run: ({ sandbox }, v) => {
       const g = ops.getResourceGroup(sandbox, v.name)
       if (!v.yes) throw new AzError('Cancelled', 'Operation cancelled. Pass --yes to confirm deletion in the Sandbox.', { kind: 'cli' })
+      const registryIds = (sandbox.containerRegistries ?? []).filter((registry) => registry.resourceGroup.toLowerCase() === g.name.toLowerCase()).map((registry) => registry.id)
       const { sandbox: next } = ops.deleteResourceGroup(sandbox, { name: v.name })
-      return { sandbox: next, output: null, events: [event('deleted', 'resourceGroup', { name: g.name, resourceGroup: g.name })] }
+      return { sandbox: next, output: null, events: [event('deleted', 'resourceGroup', { name: g.name, resourceGroup: g.name })], ...(registryIds.length ? { effects: [{ type: 'delete-registry-publications', registryIds }] } : {}) }
     },
   }),
 })

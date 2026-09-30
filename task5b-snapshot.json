@@ -1,0 +1,53 @@
+{
+    "task":  "Task 5b",
+    "files":  [
+                  {
+                      "path":  "src/lib/labEngine/actions.js",
+                      "sha256":  "d565ee08cb282781459e9644db6dd2fb9f6ac8d7d4a34898d59654037d62e80a",
+                      "bytes":  38730
+                  },
+                  {
+                      "path":  "src/lib/labEngine/run.js",
+                      "sha256":  "67ade67dc5253d4fb62d7d7d1161348ea6f89d604ceb70f1b9e5ecc497f4c7fc",
+                      "bytes":  16308
+                  },
+                  {
+                      "path":  "src/lib/labEngine/stages.js",
+                      "sha256":  "62ba43671e47778b743abad9d278702fdddadded8fc5be4d8eed9ed78b62ae90",
+                      "bytes":  9816
+                  },
+                  {
+                      "path":  "src/lib/simulation/runtime.js",
+                      "sha256":  "3afa1bb93ec2d2cb23918f5a5b7a9ae1d3707521fb437294a80cbd5c07ba3838",
+                      "bytes":  7602
+                  },
+                  {
+                      "path":  "src/lib/simulation/inference.js",
+                      "sha256":  "89d4c5babbda6fa00f4ca6c1fa5080a9c556178be2b69f7fdafa8149e8dfe488",
+                      "bytes":  14181
+                  },
+                  {
+                      "path":  "src/lib/bicep/preview.js",
+                      "sha256":  "f2cfc60b9857647c62032348f2ff34caaacfd5c57903f38415b714fac8166b28",
+                      "bytes":  1879
+                  },
+                  {
+                      "path":  "src/lib/bicep/deploy.js",
+                      "sha256":  "32804f9da9c5eee5198dd36da03d382d85e571566f251b5f606a49e1917c044b",
+                      "bytes":  8977
+                  },
+                  {
+                      "path":  "src/lib/bicep/projection.js",
+                      "sha256":  "113849ef340d11b02a991dba3b31f65cb232ec36611f182bea2dd94efc9a56df",
+                      "bytes":  7323
+                  },
+                  {
+                      "missing":  true,
+                      "path":  "tests/aca-capstone-incident.test.js"
+                  },
+                  {
+                      "path":  "src/lib/labEngine/incident.js",
+                      "missing":  true
+                  }
+              ]
+}

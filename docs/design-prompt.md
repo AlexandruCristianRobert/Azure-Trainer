@@ -1,5 +1,7 @@
 # Azure-Trainer — UI design brief for Claude Design
 
+Current implementation status (2026-09-24): all 16 Container Apps journey Labs, including the seven-stage Capstone, are implemented in the worktree; Lab 16 awaits scoped review and guarded delivery. The Capstone Lab Panel displays stage seals, checkpoint and ownership, and saved source/published artifact/active deployment. The deployment review separates bootstrap and main roots and exposes simulated live drift. The three artboards below remain the original demo design reference. No live Azure resources are created.
+
 ## What you are designing
 
 Azure-Trainer is a private, single-user web app for hands-on preparation for Microsoft exam
@@ -62,7 +64,7 @@ it; do not restyle.
   Managed Redis, Container Registry) and the Microsoft Azure wordmark exactly as in the real portal.
   If you cannot render a logo or icon, leave a clearly labelled placeholder slot at the exact size;
   I will drop the real assets in locally.
-- Desktop only, no responsive variants. Light theme only.
+- Design for 1280px desktop and 768px narrow layouts. Keep the Lab Panel, tool controls, deployment review, and long resource IDs usable at both widths; stack the workspace below the narrow breakpoint when space requires it. Light theme only. The three original artboards remain desktop reference material.
 
 ## Cloud Shell (bottom dock)
 

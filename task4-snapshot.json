@@ -1,0 +1,16 @@
+﻿{
+    "task":  "Task 4",
+    "files":  [
+                  {
+                      "path":  "src/lib/labEngine/actions.js",
+                      "sha256":  "e9bb846f86172d8209bf9c7c2d0abd4a05e15eea19221b70eccdb18f2de6759d",
+                      "bytes":  36973
+                  },
+                  {
+                      "path":  "tests/aca-capstone-mixed-experiments.test.js",
+                      "sha256":  "dd10686fe727536fe1f1e63dc45693bbf529bd58db7d92e220a960a48b974e19",
+                      "bytes":  7346
+                  }
+              ],
+    "capturedAt":  "2026-09-23T22:53:53.4418940Z"
+}

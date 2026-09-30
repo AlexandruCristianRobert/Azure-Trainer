@@ -1,0 +1,62 @@
+{
+    "task":  "Task 7",
+    "phase":  "post-implementation",
+    "note":  "Created after implementation; this is a delivery snapshot, not a pre-edit baseline.",
+    "files":  [
+                  {
+                      "path":  "src/components/lab/LabPanel.vue",
+                      "sha256":  "b856191f25969a5caf3ee8e50ef8e349bddb56812bebc03add724c71cd1fab15",
+                      "bytes":  13237
+                  },
+                  {
+                      "path":  "src/components/lab/BicepDeploymentPanel.vue",
+                      "sha256":  "650d7f3ae9dddae1671961538ff49b1e9c7c4426f022cea9958256974a420be5",
+                      "bytes":  11525
+                  },
+                  {
+                      "path":  "src/components/lab/CpuExperimentPanel.vue",
+                      "sha256":  "c01399a3ec37db62a50391a67cc8144ed13c4e338c74d1a10087af868193e7cf",
+                      "bytes":  7033
+                  },
+                  {
+                      "path":  "src/components/lab/ProbeExperimentPanel.vue",
+                      "sha256":  "a82a25538752f0b8f431684b65ac7a0f1965afef67533e64233f437937394d40",
+                      "bytes":  11075
+                  },
+                  {
+                      "path":  "src/styles/pages.css",
+                      "sha256":  "daac183d8753ade88c67a46fed617067d55874a4242579df2e757f1bd95d771a",
+                      "bytes":  21948
+                  },
+                  {
+                      "path":  "tests/capstone-ui.test.js",
+                      "sha256":  "a07a45f00fd44efa10cdc9833025e74c626fdc099893d80355149b55651505c3",
+                      "bytes":  8984
+                  },
+                  {
+                      "path":  "README.md",
+                      "sha256":  "fb2d40f6f802270946e695d7c2dab7582ac490b330267ca61c5058088c284812",
+                      "bytes":  15413
+                  },
+                  {
+                      "path":  "SPEC.md",
+                      "sha256":  "e77980c231539215bf0d6b99df969e6bd27d11531e913a14fdf091ff6fb211eb",
+                      "bytes":  29997
+                  },
+                  {
+                      "path":  "CONTEXT.md",
+                      "sha256":  "c78511c10730284805471b434c47f5628884d6757607c44cc44d93bf18eb5a4f",
+                      "bytes":  4989
+                  },
+                  {
+                      "path":  "docs/adr/0002-behavioral-labs-with-bounded-local-simulation.md",
+                      "sha256":  "8ab24f32256812dd96aedbe59fa5bc4c13435b21fdc193b2997a7961841603a8",
+                      "bytes":  8027
+                  },
+                  {
+                      "path":  "docs/design-prompt.md",
+                      "sha256":  "4216afba48bccd3c59fb5d4f443b18c07357fcf0741b105fd5d79e6c09ef48b0",
+                      "bytes":  12829
+                  }
+              ]
+}

@@ -1,0 +1,36 @@
+{
+    "task":  "Task 5a",
+    "files":  [
+                  {
+                      "path":  "src/lib/labEngine/run.js",
+                      "sha256":  "93120daaa6a93760f2f261ed4771dc99aac47538528eb1645345496159b462c7",
+                      "bytes":  16022
+                  },
+                  {
+                      "path":  "src/lib/labEngine/actions.js",
+                      "sha256":  "e9bb846f86172d8209bf9c7c2d0abd4a05e15eea19221b70eccdb18f2de6759d",
+                      "bytes":  36973
+                  },
+                  {
+                      "path":  "src/lib/labEngine/evaluate.js",
+                      "sha256":  "d5ca09ffbad0208605169acaa1ab6ad839d3a676619688efc39d5f0c8a240dce",
+                      "bytes":  4824
+                  },
+                  {
+                      "path":  "src/lib/labEngine/evidence.js",
+                      "sha256":  "ee01385ad974fd5d0f05bbb743444bea9137c08a05a9237759faac5537a4c588",
+                      "bytes":  3758
+                  },
+                  {
+                      "path":  "src/lib/labEngine/migrations.js",
+                      "sha256":  "180e51f90cb2bbdd585ca33617f21703550eb63b32e11ac81fc6f9dccebffa36",
+                      "bytes":  757
+                  },
+                  {
+                      "path":  "src/lib/labEngine/session.js",
+                      "sha256":  "f23be0a2f10e13e65d8b7c0b10d9a59d3e9d79a35a199db42c6814f0e292d814",
+                      "bytes":  10942
+                  }
+              ],
+    "capturedAt":  "2026-09-23T22:55:40.2952682Z"
+}

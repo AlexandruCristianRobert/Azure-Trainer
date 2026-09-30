@@ -15,7 +15,7 @@ let spinner = null
 watch(() => run.running, (r) => {
   clearInterval(spinner)
   if (r) spinner = setInterval(() => { frame.value = (frame.value + 1) % frames.length }, 120)
-  else nextTick(focus)
+  else if (run.lab?.engineVersion !== 2) nextTick(focus)
 })
 
 const spinnerText = computed(() => `${frames[frame.value]} Running ..`)
@@ -27,12 +27,12 @@ async function scrollToBottom() {
 watch(() => [run.scrollback.length, run.running], scrollToBottom)
 
 async function submit() {
-  if (run.running) return
+  if (run.busy || (run.lab?.engineVersion === 2 && (run.readOnly || run.completedAt || run.storageError))) return
   const line = input.value
   input.value = ''
   histIndex.value = -1
   draft.value = ''
-  await run.execute(line)
+  try { await run.execute(line) } catch { /* Lab Panel shows the session error. */ }
   scrollToBottom()
 }
 
@@ -51,9 +51,9 @@ function onKeydown(e) {
     if (histIndex.value < run.history.length - 1) { histIndex.value++; input.value = run.history[histIndex.value] } else { histIndex.value = -1; input.value = draft.value }
     return
   }
-  if (e.key === 'Tab') { e.preventDefault(); return }
-  if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); run.clearScrollback(); return }
-  if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); run.pushLine({ kind: 'cmd', text: `${input.value}^C` }); input.value = ''; histIndex.value = -1 }
+  if (e.key === 'Tab') { if (run.lab?.engineVersion !== 2) e.preventDefault(); return }
+  if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); if (!run.readOnly && !run.completedAt && !run.storageError) void run.clearScrollback(); return }
+  if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); if (run.lab?.engineVersion !== 2) run.pushLine({ kind: 'cmd', text: `${input.value}^C` }); input.value = ''; histIndex.value = -1 }
 }
 
 function focus() { inputEl.value?.focus() }
@@ -72,7 +72,7 @@ onBeforeUnmount(() => clearInterval(spinner))
 </template><span v-else-if="line.kind === 'err'" class="terminal__err">{{ line.text }}
 </span><template v-else>{{ line.text }}
 </template></template><span v-if="run.running" class="terminal__spinner">{{ spinnerText }}</span></pre>
-    <form v-if="!run.running" class="terminal__input-row" @submit.prevent="submit">
+    <form v-if="!run.running && !(run.lab?.engineVersion === 2 && (run.readOnly || run.completedAt || run.storageError || run.loading))" class="terminal__input-row" @submit.prevent="submit">
       <span><span class="terminal__user">user@sandbox</span>:<span class="terminal__path">~</span>$&nbsp;</span>
       <input ref="inputEl" v-model="input" class="terminal__input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Cloud Shell command input" @keydown="onKeydown" />
     </form>

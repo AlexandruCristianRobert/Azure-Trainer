@@ -1,0 +1,41 @@
+﻿{
+    "task":  "Task 3",
+    "files":  [
+                  {
+                      "path":  "src/lib/bicep/providers.js",
+                      "sha256":  "4696ec7399c3ddd23574f4c912afcd4a721a88c7efdb91d865c4ae07146eca16",
+                      "bytes":  19582
+                  },
+                  {
+                      "path":  "src/lib/bicep/projection.js",
+                      "sha256":  "b9157e75eefdf41ac58235d63f06b49d4326fb767ce342a796f0e774740cda34",
+                      "bytes":  7147
+                  },
+                  {
+                      "path":  "src/lib/bicep/preview.js",
+                      "sha256":  "7f67cad6e05a034074516cf75ee345fa99cd80714c3c62b4c5d408a2a374f924",
+                      "bytes":  1862
+                  },
+                  {
+                      "path":  "src/lib/bicep/deploy.js",
+                      "sha256":  "143f350c925ec1db541f18fd9fc3ce7680a437925445270e6f7bd4a222076811",
+                      "bytes":  8654
+                  },
+                  {
+                      "path":  "src/data/templates/containerapps-dotnet/capstone.js",
+                      "sha256":  "6d242b3c56275164bb74d54b92264875b8d4a76620a8bbc4ebfccc2a86f9075e",
+                      "bytes":  4133
+                  },
+                  {
+                      "path":  "src/lib/sandbox/containerapps.js",
+                      "sha256":  "5cee7a2c166a3d9783a9cd4ad002387064871b6851b4fff3d67a203044bc166f",
+                      "bytes":  21759
+                  },
+                  {
+                      "path":  "src/lib/simulation/runtime.js",
+                      "sha256":  "3afa1bb93ec2d2cb23918f5a5b7a9ae1d3707521fb437294a80cbd5c07ba3838",
+                      "bytes":  7602
+                  }
+              ],
+    "capturedAt":  "2026-09-23T22:34:51.5312784Z"
+}

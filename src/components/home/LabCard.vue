@@ -13,8 +13,8 @@ const comingSoon = computed(() => props.lab.status !== 'available')
 const status = computed(() => (comingSoon.value ? 'coming-soon' : progress.labStatus(props.lab.id)))
 const summary = computed(() => (comingSoon.value ? null : progress.runSummary(props.lab.id)))
 const pct = computed(() => (summary.value ? Math.round((summary.value.tasksDone / summary.value.total) * 100) : 0))
-const label = computed(() => ({ 'not-started': 'Not started', 'in-progress': 'In progress', completed: 'Completed', 'coming-soon': 'Coming soon' })[status.value])
-const button = computed(() => ({ 'not-started': 'Start', 'in-progress': 'Resume', completed: 'Open' })[status.value])
+const label = computed(() => ({ 'not-started': 'Not started', 'in-progress': 'In progress', completed: 'Completed', 'coming-soon': 'Coming soon', loading: 'Loading progress…', error: 'Progress unavailable' })[status.value])
+const button = computed(() => ({ 'not-started': 'Start', 'in-progress': 'Resume', completed: 'Open', error: 'Open' })[status.value])
 </script>
 
 <template>
@@ -31,7 +31,7 @@ const button = computed(() => ({ 'not-started': 'Start', 'in-progress': 'Resume'
       <span v-if="summary" class="lab-card__count">{{ summary.tasksDone }} of {{ summary.total }} tasks</span>
     </div>
     <div v-if="summary" class="bar lab-card__bar" :class="{ 'bar--success': status === 'completed' }"><div class="bar__fill" :style="{ width: pct + '%' }" /></div>
-    <div v-if="!comingSoon" class="lab-card__actions">
+    <div v-if="!comingSoon && status !== 'loading'" class="lab-card__actions">
       <RouterLink class="btn btn--primary" :to="{ name: 'lab', params: { labId: lab.id } }">{{ button }}</RouterLink>
     </div>
   </article>

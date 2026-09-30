@@ -1,0 +1,115 @@
+{
+    "task":  "Task 6",
+    "files":  [
+                  {
+                      "path":  "src/data/labs/containerapps-journey/capstone.lab.js",
+                      "sha256":  "b6136162b10974006d09971640c1627af8de179e043f47e10503ab9254b2162c",
+                      "bytes":  19885
+                  },
+                  {
+                      "path":  "src/data/labs/index.js",
+                      "sha256":  "7a1eeea0a0fa3d37da54181c92b8f5e1ba986e7e46e70cd577740a5a5c9ed52c",
+                      "bytes":  3014
+                  },
+                  {
+                      "path":  "src/lib/labEngine/actions.js",
+                      "sha256":  "3aa0239a1c8fc946cb695ebfdc3133558a090e193baf5f37ba95e9f6ebf72eab",
+                      "bytes":  45012
+                  },
+                  {
+                      "path":  "src/lib/labEngine/run.js",
+                      "sha256":  "627dc0b0a18bbe315aa05a1d14715a1cae99cfac25e9c2314756850560868490",
+                      "bytes":  16591
+                  },
+                  {
+                      "path":  "src/lib/simulation/cpu.js",
+                      "sha256":  "f19839eefc6121ebd3de4ee554c0612d15ed5760c95f053903446dc75e53ecf2",
+                      "bytes":  6796
+                  },
+                  {
+                      "path":  "tests/aca-capstone-lab.test.js",
+                      "sha256":  "c3b2da31303070867c5155f7ca3a4dd74d556317e555c50f8c0a5682136de2be",
+                      "bytes":  9403
+                  },
+                  {
+                      "path":  "tests/aca-cpu-independent.test.js",
+                      "sha256":  "9fdce612d8e4972411c9a5d31452d835a50865cebf84d03c0531a3db4e975b1e",
+                      "bytes":  14060
+                  },
+                  {
+                      "path":  "tests/aca-cpu-guided.test.js",
+                      "sha256":  "2c3032beac69431c89cd495bce4e74758052b194fb40b92887bd0c96de447df0",
+                      "bytes":  9461
+                  },
+                  {
+                      "path":  "tests/aca-cpu-troubleshooting.test.js",
+                      "sha256":  "05ecd9f8df29fcefde07f57642190cd81c3e3a52539d0bbe9ad2a9d2cab03c1e",
+                      "bytes":  13598
+                  },
+                  {
+                      "path":  "tests/aca-foundry-guided.test.js",
+                      "sha256":  "ca46e2f4f1bf71ad0550316948ae1ce04141e458d023813b35aa099e9e9c663f",
+                      "bytes":  7368
+                  },
+                  {
+                      "path":  "tests/aca-bicep-guided.test.js",
+                      "sha256":  "432d05b96df6bf9ea423be53880589639e163ad939da2508ba64897889bd8025",
+                      "bytes":  11281
+                  },
+                  {
+                      "path":  "tests/aca-foundry-troubleshooting.test.js",
+                      "sha256":  "7c2c4594e6b0225bba5dbb94fa2e4c2b49cbd452e96dcb57e90bce5f52eb1a64",
+                      "bytes":  10544
+                  },
+                  {
+                      "path":  "tests/aca-probes-guided.test.js",
+                      "sha256":  "b4845d0e2c64f65b3f1f808ab08782556b1ac07be0211fb1ebda83a270a1dae6",
+                      "bytes":  15750
+                  },
+                  {
+                      "path":  "tests/aca-probes-troubleshooting.test.js",
+                      "sha256":  "0e1ac8dfad8a2d0bf65831923d379becc642909f9e78d14d8d444cbb1ebf4aeb",
+                      "bytes":  15671
+                  },
+                  {
+                      "path":  "tests/aca-probes-independent.test.js",
+                      "sha256":  "4b7b6df5568a59395ac87ab430242a365bbe43503614d339dbc4394c50520040",
+                      "bytes":  19904
+                  },
+                  {
+                      "path":  "tests/aca-foundry-independent.test.js",
+                      "sha256":  "a621b590596ef90a3a718ced54be7931fa963bbf92c53f6c61148c2ff632009a",
+                      "bytes":  11688
+                  },
+                  {
+                      "path":  "tests/containerapps-lab.test.js",
+                      "sha256":  "68aa11378769d8f6a59a046008fa1c4bf19699af60408762541abe9127249c5f",
+                      "bytes":  8398
+                  },
+                  {
+                      "path":  "tests/progress-store.test.js",
+                      "sha256":  "5437155a80cdb27c9eed768f4fae9e83ef6309684aaff4fbb0c622a746459d49",
+                      "bytes":  4187
+                  },
+                  {
+                      "path":  "tests/next-lab.test.js",
+                      "sha256":  "3d238c792f0c8ecccc75f32037649c5538c89fb1f87bad6173afde78cc0c07a4",
+                      "bytes":  2151
+                  },
+                  {
+                      "path":  "tests/aca-bicep-troubleshooting.test.js",
+                      "sha256":  "247867081e2e7bd970403936b845658d44461c121a7882886f5d7bd290b3d50e",
+                      "bytes":  15322
+                  },
+                  {
+                      "path":  "tests/aca-bicep-independent.test.js",
+                      "sha256":  "96994752b68dc2f2741d24df52acb67f38771715ac5d339e2b616f3ecc6b6f5e",
+                      "bytes":  13394
+                  },
+                  {
+                      "path":  "tests/aca-capstone-incident.test.js",
+                      "sha256":  "e50b845c9aed6877660bb3112239482a99fa1f77f43bbe42297033c7482fb156",
+                      "bytes":  18567
+                  }
+              ]
+}

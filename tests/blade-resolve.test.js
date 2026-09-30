@@ -26,4 +26,17 @@ describe('resolveBlade', () => {
     sb = runLine(sb, 'az servicebus namespace create -g rg-orders -n sb-contoso-orders').sandbox
     expect(resolveBlade({ kind: 'servicebus-namespace', resourceGroup: 'rg-orders', name: 'sb-contoso-orders' }, sb).tab).toBe('queues')
   })
+  it('resolves registry and identity Blades and falls back after deletion', () => {
+    let sb = runLine(createSandbox(), 'az group create -n rg-guided -l eastus').sandbox
+    sb = runLine(sb, 'az acr create -g rg-guided -n acrguided --sku Basic').sandbox
+    sb = runLine(sb, 'az identity create -g rg-guided -n id-guided').sandbox
+    const acr = { kind: 'container-registry', resourceGroup: 'rg-guided', name: 'acrguided' }
+    const identity = { kind: 'managed-identity', resourceGroup: 'rg-guided', name: 'id-guided' }
+    expect(resolveBlade(acr, sb)).toEqual(acr)
+    expect(resolveBlade(identity, sb)).toEqual(identity)
+    sb = runLine(sb, 'az acr delete -g rg-guided -n acrguided --yes').sandbox
+    sb = runLine(sb, 'az identity delete -g rg-guided -n id-guided --yes').sandbox
+    expect(resolveBlade(acr, sb)).toEqual({ kind: 'resource-group', name: 'rg-guided' })
+    expect(resolveBlade(identity, sb)).toEqual({ kind: 'resource-group', name: 'rg-guided' })
+  })
 })

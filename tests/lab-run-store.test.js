@@ -26,6 +26,19 @@ describe('labRun store', () => {
     expect(JSON.parse(localStorage.getItem(`at_run_${LAB}`)).labId).toBe(LAB)
   })
 
+  it('keeps the legacy Task shape when a check throws', () => {
+    const run = useLabRunStore()
+    run.load(LAB)
+    const original = run.lab.tasks[0].check
+    run.lab.tasks[0].check = () => { throw new Error('bad predicate') }
+    try {
+      expect(run.taskStates[0]).toMatchObject({ id: 'resource-group', index: 0, done: false })
+      expect(run.taskStates[0]).not.toHaveProperty('status')
+    } finally {
+      run.lab.tasks[0].check = original
+    }
+  })
+
   it('a corrupt saved run (sandbox: null) is discarded for a fresh seeded run, which is re-persisted', () => {
     localStorage.setItem(`at_run_${LAB}`, JSON.stringify({ labId: LAB, sandbox: null }))
     const run = useLabRunStore()

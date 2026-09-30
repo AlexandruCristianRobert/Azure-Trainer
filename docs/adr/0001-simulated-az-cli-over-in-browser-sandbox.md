@@ -17,3 +17,12 @@ a configured model).
 are read-only mirrors; portal-click mutation can be added later over the same Sandbox without
 changing this decision. Command coverage must be stated per Lab so learners know the boundary of
 the simulation.
+
+**Agreed extension, 2026-09-22 (not yet implemented):** The Container Apps learning journey
+adds guided file editing and visual Experiment Controls for simulated requests, load, and
+faults. Resource deployment continues through Cloud Shell, while experiments can also change
+Sandbox behavior through these controls. Resource Blades remain read-only. This extends the
+original interaction scope while retaining the local simulation decision. See the
+[learning-journey design](../superpowers/specs/2026-09-22-containerapps-learning-journeys-design.md)
+and [ADR-0002](0002-behavioral-labs-with-bounded-local-simulation.md), which records the accepted
+behavioral simulation architecture and one-Lab-at-a-time delivery rule.

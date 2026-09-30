@@ -28,7 +28,7 @@ const sections = [
   { label: 'Automation', collapsed: true, items: [] },
   { label: 'Help', collapsed: true, items: [] },
 ]
-const HINT = 'Blades are read-only in this Lab. Create resources from the Cloud Shell, e.g. az servicebus namespace create --help'
+const HINT = 'Blades are read-only in this Lab. Create resources from the Cloud Shell; run az --help to see supported commands.'
 const commands = [
   { label: 'Create', icon: 'add', readOnlyHint: HINT },
   { label: 'Manage view', icon: 'settings' },
@@ -48,7 +48,21 @@ const essentials = computed(() => [
   { label: 'Tags', value: group.value?.tags ? Object.entries(group.value.tags).map(([k, v]) => `${k}: ${v}`).join(', ') : 'Add tags', link: !group.value?.tags },
 ])
 const columns = [{ key: 'name', label: 'Name', grow: 1.6 }, { key: 'type', label: 'Type', grow: 1.2 }, { key: 'location', label: 'Location', grow: 1 }]
-const rows = computed(() => run.sandbox.namespaces.filter((n) => n.resourceGroup.toLowerCase() === props.name.toLowerCase()).map((n) => ({ name: n.name, type: 'Service Bus Namespace', location: displayLocation(n.location), resourceGroup: n.resourceGroup })))
+const rows = computed(() => [
+  ...(run.sandbox.namespaces ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Service Bus Namespace', location: displayLocation(resource.location), blade: { kind: 'servicebus-namespace', resourceGroup: resource.resourceGroup, name: resource.name, tab: 'queues' } })),
+  ...(run.sandbox.containerAppEnvironments ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Container Apps Environment', location: displayLocation(resource.location), blade: { kind: 'containerapp-environment', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.containerApps ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Container App', location: displayLocation(resource.location), blade: { kind: 'containerapp', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.containerRegistries ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Container registry', location: displayLocation(resource.location), blade: { kind: 'container-registry', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.managedIdentities ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Managed identity', location: displayLocation(resource.location), blade: { kind: 'managed-identity', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.cosmosAccounts ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Azure Cosmos DB account', location: displayLocation(resource.location), blade: { kind: 'cosmos-account', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.keyVaults ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Key vault', location: displayLocation(resource.location), blade: { kind: 'key-vault', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.storageAccounts ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Storage account', location: displayLocation(resource.location), blade: { kind: 'storage-account', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.functionApps ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Function App', location: displayLocation(resource.location), blade: { kind: 'function-app', resourceGroup: resource.resourceGroup, name: resource.name } })),
+  ...(run.sandbox.eventGridTopics ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Event Grid topic', location: displayLocation(resource.location), blade: { kind: 'eventgrid-topic', resourceGroup: resource.resourceGroup, name: resource.name } })),
+])
+function inGroup(resource) {
+  return resource.resourceGroup.toLowerCase() === props.name.toLowerCase()
+}
 </script>
 
 <template>
@@ -58,8 +72,8 @@ const rows = computed(() => run.sandbox.namespaces.filter((n) => n.resourceGroup
       <BladeHeader :crumbs="[{ label: 'Home', route: '/' }, { label: 'Resource groups', blade: { kind: 'resource-groups' } }, { label: name, blade: null }]" :title="name" subtitle="Resource group" icon="resource-group" :commands="commands" @navigate="portal.showBlade($event)" />
       <EssentialsGrid :items="essentials" />
       <h3 class="blade__section-title">Resources</h3>
-      <div class="blade__filters"><input type="search" placeholder="Filter for any field..." aria-label="Filter resources" /><span class="blade__count">Showing 1 to {{ rows.length }} of {{ rows.length }} records.</span></div>
-      <EntityTable :columns="columns" :rows="rows" empty-text="No resources to display" @open="portal.showBlade({ kind: 'servicebus-namespace', resourceGroup: $event.resourceGroup, name: $event.name, tab: 'queues' })" />
+      <div class="blade__filters"><input type="search" placeholder="Filter for any field..." aria-label="Filter resources" /><span class="blade__count">Showing {{ rows.length ? 1 : 0 }} to {{ rows.length }} of {{ rows.length }} records.</span></div>
+      <EntityTable :columns="columns" :rows="rows" empty-text="No resources to display" @open="portal.showBlade($event.blade)" />
     </div>
   </section>
 </template>
