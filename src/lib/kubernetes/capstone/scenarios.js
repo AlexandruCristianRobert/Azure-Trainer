@@ -83,11 +83,13 @@ export function verifyCapstoneSource(files, manifest, fixtureCatalog) {
   const health = (path, nowMs, faults = {}) => evaluateHealthEndpoint(app, { ...container, localFaults: faults }, {}, path, 'http', nowMs, pod)
   measurements.health = {
     startupBefore: health('/health/startup', 0), startupAfter: health('/health/startup', 6000),
-    readyOpen: health('/health/ready', 6000), readyClosed: health('/health/ready', 6000, { admissionClosed: true }),
+    readyBefore: health('/health/ready', 0), readyOpen: health('/health/ready', 6000),
+    readyClosed: health('/health/ready', 6000, { admissionClosed: true }),
     liveBefore: health('/health/live', 0), liveAfter: health('/health/live', 6000),
   }
   check(measurements.health.startupBefore.status === 503 && measurements.health.startupAfter.status === 200
-    && measurements.health.readyOpen.status === 200 && measurements.health.readyClosed.status === 503
+    && measurements.health.readyBefore.status === 503 && measurements.health.readyOpen.status === 200
+    && measurements.health.readyClosed.status === 503
     && measurements.health.liveBefore.status === 200 && measurements.health.liveAfter.status === 200,
   'CAPSTONE_HEALTH', 'Startup, readiness and liveness must reflect the taught lifecycle signals.')
 

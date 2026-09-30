@@ -38,6 +38,7 @@ describe('AKS capstone teaching project', () => {
     expect(result.measurements.cases.invalid).toMatchObject({ status: 400, dependencyTrace: [] })
     expect(result.measurements.cases.noMatch).toMatchObject({ status: 200, body: { sources: [] } })
     expect(result.measurements.cases.retryFailure).toMatchObject({ status: 503 })
+    expect(result.measurements.health.readyBefore.status).toBe(503)
     expect(result.measurements.health.readyClosed.status).toBe(503)
     expect(result.measurements.workload).toMatchObject({ operation: 'process_batch', units: 20, checksum: 3230 })
   })
@@ -56,5 +57,13 @@ describe('AKS capstone teaching project', () => {
     expect(verifyCapstoneSource(badSql, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).passed).toBe(false)
     const badServer = { ...CAPSTONE_SOLUTION_FILES.v1, 'server.py': 'print("altered")' }
     expect(verifyCapstoneSource(badServer, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).diagnostics).toContainEqual(expect.objectContaining({ code: 'SCAFFOLD_MODIFIED', path: 'server.py' }))
+  })
+
+  it('requires readiness to stay closed until initialization even when admission is open', () => {
+    const files = { ...CAPSTONE_SOLUTION_FILES.v1,
+      'app.py': CAPSTONE_SOLUTION_FILES.v1['app.py'].replace('initialized() and accepting_requests()', 'accepting_requests()') }
+    const result = verifyCapstoneSource(files, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
+    expect(result.passed).toBe(false)
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_HEALTH' }))
   })
 })
