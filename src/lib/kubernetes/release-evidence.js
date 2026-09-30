@@ -1,4 +1,4 @@
-import { releaseDigest, captureReleaseSample, validReleaseScenario } from './release-experiments.js'
+import { releaseDigest, captureReleaseSample, validReleaseScenario, releasePolicy, releasePolicyMeetsBrief } from './release-experiments.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash, selectBuildFiles } from '../project/build.js'
 import { parseKubernetesYaml } from './yaml.js'
@@ -7,6 +7,7 @@ import { getDeploymentPods } from './reconcile.js'
 import { getRolloutSummary } from './rollouts.js'
 import { recordVerification } from '../labEngine/evidence.js'
 import { canonicalize } from '../labEngine/evidence.js'
+import { routeServiceRequest } from './connectivity.js'
 
 const clone = value => structuredClone(value)
 const objectKey = object => `${object.kind}/${object.metadata.namespace ?? ''}/${object.metadata.name}`
@@ -138,6 +139,7 @@ export function verifyReleaseState(run, lab, scenarioId) {
   const deployment = resourcesFor(run, target)[`Deployment/${target.namespace}/${target.deploymentName}`]
   const summary = getRolloutSummary(run, target)
   if (!deployment || !summary?.complete) return failed('Complete the intended rollout; inspect every new Pod, events and rollout status.')
+  if (!releasePolicyMeetsBrief(releasePolicy(run, target), lab.releaseRequirements)) return failed('Meet the independent replica, rolling budget, readiness, deadline and retained-history brief.')
   const manifest = getProjectManifest(run.project.manifestId)
   const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, manifest))
   const image = deployment.spec.template.spec.containers[0].image; const artifactId = run.artifacts.publishedTags[image]
@@ -165,10 +167,17 @@ export function verifyReleaseState(run, lab, scenarioId) {
       !== canonicalize(Object.fromEntries(fingerprint.savedObjects.map(item => [item.key, proof.objectStates?.[item.key]?.generation ?? -1])))
     || proof.restart.atMs < proof.reapply.atMs || proof.restart.rsUid !== state.rollouts.deployments[deployment.metadata.uid].currentRsUid
     || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid))) return failed('Reapply all final files, then rollout restart and wait for successful completion.')
-  const { sample } = captureReleaseSample(run, target, run.runtime.simTimeMs, 0)
+  const service = state.resources[`Service/${target.namespace}/${target.serviceName}`]
+  const info = routeServiceRequest(run, { origin: { kind: 'external', clusterId: target.clusterId },
+    hostname: service?.status.loadBalancer?.ingress?.[0]?.ip ?? 'unassigned', port: service?.spec.ports[0].port ?? 80,
+    method: 'GET', path: '/api/info' }, null)
+  if (!info.outcome.transport.ok || info.outcome.status !== 200 || info.outcome.body?.version !== scenario.expectedRelease
+    || info.outcome.route.artifactId !== artifactId) return failed('Verify fresh /api/info version 2.0 through the intended current artifact.')
+  const { sample } = captureReleaseSample(info.run, target, run.runtime.simTimeMs, 0)
   if (!sample.transport.ok || sample.status !== 200 || sample.release !== scenario.expectedRelease || !['embedding', 'postgres-query', 'answer'].every(operation => sample.operations.some(item => item.operation === operation && item.status === 'succeeded'))) return failed('Repair and verify a fresh embedding, PostgreSQL retrieval and answer flow.')
   return { passed: true, reason: 'Current saved source, applied objects and newly restarted Pods agree.', evidence: { clusterId: target.clusterId, namespace: target.namespace,
-    deploymentUid: deployment.metadata.uid, sourceHash, artifactId, digest: artifact.digest, currentRevision: summary.currentRevision, podUids: pods.map(pod => pod.metadata.uid), sample, witness: clone(proof) } }
+    deploymentUid: deployment.metadata.uid, sourceHash, artifactId, digest: artifact.digest, currentRevision: summary.currentRevision,
+    infoVersion: info.outcome.body.version, podUids: pods.map(pod => pod.metadata.uid), sample, witness: clone(proof) } }
 }
 
 export function releaseDependencies(target, { historical = false, scenarioId = null, incidentEpoch = null } = {}) {

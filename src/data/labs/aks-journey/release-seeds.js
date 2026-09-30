@@ -6,6 +6,16 @@ export const RELEASES_GUIDED_GROUP = 'rg-aks-releases-guided'
 export const RELEASES_GUIDED_REGISTRY = 'acraksreleasesguided'
 export const RELEASES_GUIDED_CLUSTER = 'aks-releases-guided'
 export const RELEASES_GUIDED_IMAGE = `${RELEASES_GUIDED_REGISTRY}.azurecr.io/assistant:release-v1`
+export const RELEASES_INDEPENDENT_GROUP = 'rg-aks-releases-independent'
+export const RELEASES_INDEPENDENT_REGISTRY = 'acraksreleasesindependent'
+export const RELEASES_INDEPENDENT_CLUSTER = 'aks-releases-independent'
+export const RELEASES_INDEPENDENT_SOLUTION_FILES = Object.freeze(Object.fromEntries(Object.entries(RELEASE_SOLUTION_FILES)
+  .map(([path, text]) => [path, text.replaceAll(RELEASES_GUIDED_REGISTRY, RELEASES_INDEPENDENT_REGISTRY)
+    .replace('  replicas: 2', '  replicas: 3')])))
+export const RELEASES_INDEPENDENT_FILES = Object.freeze({ ...RELEASES_INDEPENDENT_SOLUTION_FILES,
+  'app.py': RELEASE_FILES['app.py'],
+  'k8s/deployment.yaml': RELEASES_INDEPENDENT_SOLUTION_FILES['k8s/deployment.yaml'].replace('release-v2', 'release-v1')
+    .replace(/  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  minReadySeconds: 5\n  progressDeadlineSeconds: 60\n  revisionHistoryLimit: 3\n/, '') })
 export const RELEASES_TROUBLESHOOTING_GROUP = 'rg-aks-releases-troubleshooting'
 export const RELEASES_TROUBLESHOOTING_REGISTRY = 'acraksreleasestroubleshooting'
 export const RELEASES_TROUBLESHOOTING_CLUSTER = 'aks-releases-troubleshooting'
@@ -15,7 +25,10 @@ export const RELEASES_TROUBLESHOOTING_FILES = Object.freeze({ ...RELEASES_TROUBL
   'k8s/deployment.yaml': RELEASES_TROUBLESHOOTING_SOLUTION_FILES['k8s/deployment.yaml'].replace(/\bkey: ANSWER_DEPLOYMENT\b/, 'key: ANSWER_DEPLOYMENT_V2') })
 
 /** Seed only through learner-facing build, apply and clock actions. */
-export function createReleaseSeed(lab, { run, group = RELEASES_GUIDED_GROUP, registry = RELEASES_GUIDED_REGISTRY, cluster = RELEASES_GUIDED_CLUSTER, incident = null } = {}) {
+export function createReleaseSeed(lab, { run, independent = false, replicas = independent ? 3 : 2,
+  group = independent ? RELEASES_INDEPENDENT_GROUP : RELEASES_GUIDED_GROUP,
+  registry = independent ? RELEASES_INDEPENDENT_REGISTRY : RELEASES_GUIDED_REGISTRY,
+  cluster = independent ? RELEASES_INDEPENDENT_CLUSTER : RELEASES_GUIDED_CLUSTER, incident = null } = {}) {
   let seeded = run
   const seedLab = { ...lab, tasks: [], scenarios: {} }
   const act = action => {
@@ -25,6 +38,7 @@ export function createReleaseSeed(lab, { run, group = RELEASES_GUIDED_GROUP, reg
     seeded = result.run
   }
   const finalFiles = { ...run.project.savedFiles }
+  if (!new RegExp(`replicas: ${replicas}\\b`).test(finalFiles['k8s/deployment.yaml'])) throw new Error('Release seed replicas must match the independently supplied Deployment.')
   if (incident === 'missing-config-key') {
     act({ type: 'save-file', path: 'app.py', text: RELEASE_FILES['app.py'] })
     act({ type: 'save-file', path: 'k8s/deployment.yaml', text: finalFiles['k8s/deployment.yaml']

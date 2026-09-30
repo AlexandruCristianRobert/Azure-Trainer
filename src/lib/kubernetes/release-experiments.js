@@ -5,6 +5,8 @@ import { getRolloutSummary } from './rollouts.js'
 import { getDeploymentPods } from './reconcile.js'
 import { refreshKubernetesDependencies } from './evidence.js'
 import { retainReleaseReceipt } from './release-receipts.js'
+import { resolveRolloutBudget } from './rollout-schema.js'
+import { normalizeContainerResources } from './resource-schema.js'
 
 const clone = value => structuredClone(value)
 const error = message => ({ code: 'INVALID_RELEASE_EXPERIMENT', message })
@@ -15,6 +17,24 @@ export const releaseDigest = value => {
 }
 const stateFor = (run, target) => run.runtime.kubernetes.clusters[target.clusterId]
 const deploymentFor = (run, target) => stateFor(run, target)?.resources[`Deployment/${target.namespace}/${target.deploymentName}`]
+export function releasePolicy(run, target) {
+  const spec = deploymentFor(run, target)?.spec
+  if (!spec) return null
+  const budget = resolveRolloutBudget(spec.strategy?.rollingUpdate ?? { maxSurge: '25%', maxUnavailable: '25%' }, spec.replicas)
+  const requests = normalizeContainerResources(spec.template.spec.containers[0].resources).effective
+  return { replicas: spec.replicas, surge: budget.surge, unavailable: budget.unavailable, minReadySeconds: spec.minReadySeconds ?? 0,
+    progressDeadlineSeconds: spec.progressDeadlineSeconds ?? 600, revisionHistoryLimit: spec.revisionHistoryLimit ?? 10,
+    cpuRequestM: requests.cpuRequestM, memoryRequestBytes: requests.memoryRequestBytes,
+    nonterminating: getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName).filter(pod => pod.metadata.deletionTimestamp === undefined).length }
+}
+
+export function releasePolicyMeetsBrief(policy, brief) {
+  return !brief || !!policy && policy.replicas === brief.replicas && policy.surge <= brief.maxSurge && policy.unavailable === brief.maxUnavailable
+    && policy.minReadySeconds >= brief.minReadySeconds && policy.progressDeadlineSeconds >= brief.deadlineMinimum
+    && policy.progressDeadlineSeconds <= brief.deadlineMaximum && policy.revisionHistoryLimit >= brief.historyMinimum
+    && policy.cpuRequestM === brief.cpuRequestM && policy.memoryRequestBytes === brief.memoryRequestBytes
+    && policy.nonterminating <= brief.replicas + brief.maxSurge
+}
 export function activeRelease(run) { return Object.values(run.runtime.kubernetes?.clusters ?? {}).find(state => state.rollouts?.experiment?.status === 'active')?.rollouts.experiment ?? null }
 
 export function validReleaseScenario(scenario, final = false) {
@@ -83,7 +103,7 @@ export function captureReleaseSample(input, target, atMs, index) {
     podUid: outcome.route.podUid ?? null, artifactId: outcome.route.artifactId ?? null, operations,
     integrationTrace: trace ? { version: trace.version, graphHash: trace.graphHash, queryHash: trace.queryHash, fixtureVersion: trace.fixtureVersion,
       profileId: trace.profileId, vectorProvenance: trace.vectorProvenance, sourceProvenance: trace.sourceProvenance, elapsedMs: trace.elapsedMs } : null,
-    rollout: getRolloutSummary(input, target), backends: inventory }
+    rollout: getRolloutSummary(input, target), rolloutPolicy: releasePolicy(input, target), backends: inventory }
   return { run: response.run, sample }
 }
 
@@ -112,8 +132,10 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
   const terminal = e.terminalSinceMs !== null && run.runtime.simTimeMs - e.terminalSinceMs >= 10000
   const availability = !e.expected.zeroFailedRequests || e.samples.every(sample => sample.transport.ok && sample.status === 200 && sample.rollout.available >= e.expected.requiredAvailable)
   const incidentObserved = e.incidentSeen && e.incident !== null && e.incident.podUids.length > 0 && e.incident.reasons.length > 0
+  const policy = releasePolicyMeetsBrief(releasePolicy(run, e.target), lab.releaseRequirements)
+    && e.samples.filter(sample => sample.rollout.currentRevision !== e.baselineRevision).every(sample => releasePolicyMeetsBrief(sample.rolloutPolicy, lab.releaseRequirements))
   const passed = !forcedReason && e.changedTemplate && (!e.expected.requireIncident || incidentObserved)
-    && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability
+    && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability && policy
   Object.assign(e, { status: 'finished', phase: 'finished', outcome: passed ? 'passed' : 'failed', endedAtMs: run.runtime.simTimeMs,
     reason: forcedReason ?? (passed ? 'terminal-release-observed' : 'Observe the required revision/incident and ten stable terminal seconds while meeting the availability brief.') })
   retainReleaseReceipt(stateFor(run, e.target), e)
@@ -146,7 +168,7 @@ export function observeReleaseTimestamp(input, atMs, lab) {
   // Hash routing and captured configuration as well as rollout counts: a
   // same-time Service edit or projected-file change can alter actual traffic
   // without replacing a Pod. Only the digest is retained, never these values.
-  const semanticHash = releaseDigest({ summary, service: backends.service ?? null, endpoints: backends.readyEndpoints,
+  const semanticHash = releaseDigest({ summary, rolloutPolicy: releasePolicy(input, active.target), service: backends.service ?? null, endpoints: backends.readyEndpoints,
     pods: pods.map(pod => ({ uid: pod.metadata.uid, phase: pod.status.phase, deletion: pod.metadata.deletionTimestamp ?? null,
       reason: pod.status.containerStatuses?.[0]?.state ?? null, snapshot: state.podSnapshots[pod.metadata.uid] ?? null })) })
   if (active.samples.at(-1)?.atMs === atMs && active.lastSemanticHash === semanticHash) return input

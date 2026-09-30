@@ -114,6 +114,21 @@ export function executeReleaseRecovery(run, lab, path) {
   return run
 }
 
+/** Use saved files, build/apply, observed missing-image incident, undo and final restart. */
+export function executeIndependentRelease(run, lab, strategy) {
+  for (const [index, task] of lab.tasks.entries()) {
+    const selected = { ...task, solution: { ...task.solution, steps: task.solution.steps.map(step => {
+      if (step.kind !== 'file' || step.path !== 'k8s/deployment.yaml') return step
+      const object = parseYaml(step.content)
+      object.spec.strategy.rollingUpdate = { ...strategy }
+      return { ...step, content: stringifyYaml(object) }
+    }) } }
+    run = executeAksSolution(run, lab, selected)
+    if (!evaluateLab(lab, run).tasks[index].done) throw new Error(`Independent release failed Task ${task.id}: ${evaluateLab(lab, run).tasks[index].reason}`)
+  }
+  return run
+}
+
 export function executeAksSolution(run, lab, task) {
   for (const step of task.solution?.steps ?? []) {
     if (step.kind === 'file') {

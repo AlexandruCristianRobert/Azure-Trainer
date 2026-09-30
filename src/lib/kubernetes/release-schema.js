@@ -10,7 +10,7 @@ const timestamp = (value, limit) => counter(value) && value <= limit
 const targetValid = value => keys(value, ['clusterId', 'namespace', 'deploymentName', 'serviceName']) && Object.keys(value).length === 4 && Object.values(value).every(text)
 
 function sampleValid(sample, experiment, nowMs) {
-  if (!keys(sample, ['atMs', 'requestId', 'question', 'transport', 'status', 'answer', 'sources', 'release', 'podUid', 'artifactId', 'operations', 'integrationTrace', 'rollout', 'backends'])
+  if (!keys(sample, ['atMs', 'requestId', 'question', 'transport', 'status', 'answer', 'sources', 'release', 'podUid', 'artifactId', 'operations', 'integrationTrace', 'rollout', 'rolloutPolicy', 'backends'])
     || !timestamp(sample.atMs, Math.min(nowMs, experiment.startedAtMs + 300000)) || sample.atMs < experiment.startedAtMs
     || !/^aks-request-\d+$/.test(sample.requestId) || !['How long are backups kept?', 'Who provides support?'].includes(sample.question)
     || !keys(sample.transport, ['ok', 'reason']) || typeof sample.transport.ok !== 'boolean' || !nullableText(sample.transport.reason)
@@ -23,6 +23,10 @@ function sampleValid(sample, experiment, nowMs) {
     || !Array.isArray(sample.backends) || sample.backends.length > 12 || !sample.backends.every(item => keys(item, ['podUid', 'revision', 'artifactId', 'digest', 'sourceHash']) && text(item.podUid)
       && (item.revision === null || counter(item.revision) && item.revision > 0) && [item.artifactId, item.digest, item.sourceHash].every(nullableText))) return false
   const rollout = sample.rollout
+  if (sample.rolloutPolicy !== undefined && (!keys(sample.rolloutPolicy, ['replicas', 'surge', 'unavailable', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit', 'nonterminating', 'cpuRequestM', 'memoryRequestBytes'])
+    || !['replicas', 'surge', 'unavailable', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit', 'nonterminating'].every(key => counter(sample.rolloutPolicy[key]))
+    || (sample.rolloutPolicy.cpuRequestM === undefined) !== (sample.rolloutPolicy.memoryRequestBytes === undefined)
+    || sample.rolloutPolicy.cpuRequestM !== undefined && !['cpuRequestM', 'memoryRequestBytes'].every(key => sample.rolloutPolicy[key] === null || counter(sample.rolloutPolicy[key])))) return false
   if (!keys(rollout, ['desired', 'updated', 'ready', 'available', 'unavailable', 'terminating', 'complete', 'currentRevision', 'conditions'])
     || !['desired', 'updated', 'ready', 'available', 'unavailable', 'terminating', 'currentRevision'].every(key => counter(rollout[key]))
     || rollout.desired < 1 || rollout.desired > 6 || typeof rollout.complete !== 'boolean' || !Array.isArray(rollout.conditions) || rollout.conditions.length > 4

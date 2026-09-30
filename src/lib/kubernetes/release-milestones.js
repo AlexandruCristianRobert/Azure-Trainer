@@ -57,7 +57,9 @@ export function releaseMilestonePassed(context, taskId, scenarioId, target) {
     if (scenarioId === 'published-v2' && (proof.artifact?.version !== '2.0' || record.measurements.identity.receiptId !== proof.artifact?.artifactId)) return false
   } else if (proof?.incidentKind === 'missing-config-key') {
     if (!configReleaseMilestonePassed(context, record, target)) return false
-  } else if (proof?.experimentId !== record.measurements.identity.receiptId || !proof.incident?.deadline || !proof.incident.reasons?.includes('readiness')
+  } else if (proof?.experimentId !== record.measurements.identity.receiptId || !proof.incident?.deadline
+    || !proof.incident.reasons?.includes(proof.incidentKind === 'missing-image' ? 'ImageNotFound' : 'readiness')
+    || proof.incidentKind === 'missing-image' && !proof.failedImage?.endsWith('/assistant:release-missing')
     || scenarioId === 'recovered-v2' && (proof.outcome !== 'passed' || proof.terminalRevision <= proof.incident.revision)) return false
   if (scenarioId === 'recovered-v2' && proof?.incidentKind !== 'missing-config-key' && !diagnosisMatches(context.evidence.experimentsById[proof.diagnosisEvidenceId], {
     id: proof.experimentId, scenarioId: proof.experimentScenarioId, attemptId: record.attemptId,
@@ -84,12 +86,13 @@ export function recordReleaseMilestone(input, lab, scenarioId) {
       hostname: service?.status.loadBalancer?.ingress?.[0]?.ip ?? 'unassigned', port: 80, method: 'GET', path: '/api/info' }, null)
     const captured = captureReleaseSample(info.run, target, run.runtime.simTimeMs, 0); run = captured.run
     const pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName)
-    const runningV1 = summary?.complete && summary.desired === 2 && pods.every(pod => run.artifacts.buildsById[state.podSnapshots[pod.metadata.uid]?.artifactId]?.appSpec.version === '1.0')
+    const requiredReplicas = scenario.requiredReplicas ?? 2
+    const runningV1 = summary?.complete && summary.desired === requiredReplicas && pods.every(pod => run.artifacts.buildsById[state.podSnapshots[pod.metadata.uid]?.artifactId]?.appSpec.version === '1.0')
     const flow = validFlow(captured.sample) && info.outcome.transport.ok && info.outcome.status === 200 && info.outcome.body?.version === '1.0'
     proof = { infoVersion: info.outcome.body?.version ?? null, info: { requestId: info.outcome.requestId, status: info.outcome.status,
       podUid: info.outcome.route.podUid ?? null, artifactId: info.outcome.route.artifactId ?? null }, sample: captured.sample }
     passed = runningV1 && flow
-    reason = 'Inspect two Available v1 Pods and verify info plus a real three-stage backups answer.'
+    reason = `Inspect ${requiredReplicas} Available v1 Pods and verify info plus a real three-stage backups answer.`
     if (scenarioId === 'published-v2') {
       const artifactId = run.artifacts.publishedTags[scenario.imageRef]; const artifact = run.artifacts.buildsById[artifactId]
       const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, getProjectManifest(run.project.manifestId)))
@@ -103,16 +106,23 @@ export function recordReleaseMilestone(input, lab, scenarioId) {
     const incident = e?.incident
     passed = e?.attemptId === run.attemptId && e?.deploymentUid === deployment(run, target)?.metadata.uid
       && e?.scenarioId === scenario.experimentScenarioId && e?.incidentSeen && e?.deadlineSeen && incident?.deadline
-      && incident.reasons.includes('readiness') && e.samples.some(sample => sample.status === 200 && sample.release === '2.0'
+      && incident.reasons.includes(scenario.incidentKind === 'missing-image' ? 'ImageNotFound' : 'readiness') && e.samples.some(sample => sample.status === 200 && sample.release === '2.0'
         && sample.rollout.currentRevision === incident.revision && !sample.rollout.complete)
     let diagnosisEvidence = null
+    let failedImage = null
+    if (scenario.incidentKind === 'missing-image') {
+      failedImage = state.rollouts.deployments[e?.deploymentUid]?.revisions.find(item => item.revision === incident?.revision)?.imageRef
+      passed &&= failedImage?.endsWith('/assistant:release-missing') && !run.artifacts.publishedTags[failedImage]
+    }
     if (scenarioId === 'failed-revision') {
       const currentRsUid = state.rollouts.deployments[e?.deploymentUid]?.currentRsUid
       passed &&= e.status === 'active' && summary?.currentRevision === incident.revision && !summary.complete
         && summary.conditions.some(condition => condition.reason === 'ProgressDeadlineExceeded')
         && getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName).some(pod => !pod.metadata.deletionTimestamp
           && pod.metadata.ownerReferences?.some(owner => owner.uid === currentRsUid)
-          && incident.podUids.includes(pod.metadata.uid) && !pod.status.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'))
+          && incident.podUids.includes(pod.metadata.uid) && !pod.status.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
+          && (scenario.incidentKind !== 'missing-image' || pod.status.containerStatuses[0].state.waiting?.reason === 'ImageNotFound'
+            && state.events.some(event => event.reason === 'ImageNotFound' && event.message.includes(failedImage))))
       if (passed) diagnosis = { experimentId: e.id, experimentScenarioId: e.scenarioId, deploymentUid: e.deploymentUid,
         incidentEpoch: e.incidentEpoch, atMs: run.runtime.simTimeMs, revision: summary.currentRevision, incident: structuredClone(incident) }
       else if (earned) return preserveEarned()
@@ -123,10 +133,11 @@ export function recordReleaseMilestone(input, lab, scenarioId) {
         && e.samples.at(-1).backends.every(item => e.baseline.artifactIds.includes(item.artifactId))
     }
     proof = e ? { experimentId: e.id, experimentScenarioId: e.scenarioId, incident, baselineRevision: e.baselineRevision,
+      ...(scenario.incidentKind === 'missing-image' ? { incidentKind: 'missing-image', failedImage } : {}),
       terminalRevision: e.samples.at(-1).rollout.currentRevision, outcome: e.outcome ?? null,
       startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs, diagnosisEvidenceId: diagnosisEvidence?.id ?? null } : {}
     reason = scenarioId === 'failed-revision' ? 'Verify the diagnosis while recover-v2 is active and its current failed revision is still stalled.'
-      : 'Earn failed-revision diagnosis for this incident before undo, then finish and verify the matching recovery receipt.'
+      : 'Earn failed-revision diagnosis for this incident before repair, then finish and verify the matching recovery receipt.'
   }
   run = recordVerification(run, lab, task.id, { scenarioId, scenarioVersion: 1, outcome: passed ? 'passed' : 'failed', completed: !!passed,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs,
