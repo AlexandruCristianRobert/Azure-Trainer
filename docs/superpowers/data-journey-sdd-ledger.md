@@ -38,3 +38,8 @@ Task 3: fix round 1/5 (1 addressed, 0 open; commits 1a42fdb..37d9aed)
 Task 3: complete (commits 428781b..37d9aed, review clean)
 Task 4: dispatched (base e7f97c9)
 Task 4: complete (commits e7f97c9..537a607, review clean)
+Task 5: dispatched (base ca97432); rulings in dispatch: wiring entries for get_database_client/get_container_client; raise NotImplementedError → DATA_UNSUPPORTED 'not completed'; sdk-attribute for last_response_headers etag
+Ruling 5: Task 5 invalid consistency_level uses SDK_ARGUMENT; call-local args positional-only — both reasonable and unspecified — cost if wrong: small recognizer tweak
+Task 5: complete (commits ca97432..a5002b4, review clean)
+Task 5: minor (deferred): lookupCall returns {key, ...entry}
+Task 5: minor (deferred): if/else, raise, invalid consistency, call-local paths covered only informally (light-testing rule)
