@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseDataApp } from '../src/lib/data/python-sdk.js'
+import { runDataFunction } from '../src/lib/data/runtime.js'
 
 const manifest = { editZones: ['get_session', 'recent'], receivers: { sessions: 'cosmos-container' } }
 const files = (app, clients = 'from azure.cosmos import CosmosClient\nclient = CosmosClient(URL, credential=KEY, consistency_level="Session")\n') => ({ 'app.py': app, 'clients.py': clients })
@@ -24,5 +25,29 @@ describe('parseDataApp', () => {
     const r = parseDataApp(files('def recent(user_id):\n    return [x for x in range(3)]\n'), manifest)
     expect(r.diagnostics[0].code).toBe('DATA_UNSUPPORTED')
     expect(r.diagnostics[0].message).toMatch(/^Not supported by the simulator:/)
+  })
+  it('runs a recognized read_item against the Sandbox and charges ~1 RU', () => {
+    const r = parseDataApp(files('def get_session(session_id):\n    return sessions.read_item(item=session_id, partition_key=session_id)\n'), manifest)
+    const sandbox = {
+      cosmosAccounts: [{
+        name: 'cosmos1',
+        defaultConsistencyLevel: 'Session',
+        databases: [{
+          name: 'assistant',
+          containers: [{
+            name: 'sessions',
+            partitionKeyPath: '/sessionId',
+            indexingPolicy: { indexingMode: 'consistent', automatic: true, includedPaths: [{ path: '/*' }], excludedPaths: [] },
+            items: [{ id: 's1', sessionId: 's1', text: 'hi' }],
+          }],
+        }],
+      }],
+    }
+    const result = runDataFunction({
+      appSpec: r.appSpec, sandbox, account: 'cosmos1', database: 'assistant', functionName: 'get_session',
+      args: ['s1'], nowMs: 1000, scenarioState: { writesThisRequest: new Set() },
+    })
+    expect(result.status).toBe(200)
+    expect(result.calls[0].charge).toBe(1)
   })
 })
