@@ -6,6 +6,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { seedAksProductionAt } from './helpers/aks.js'
 import { resolveServiceDns } from '../src/lib/kubernetes/connectivity.js'
+import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 
 const act = (run, action) => {
   const result = applyRunAction(run, action, aksCapstoneLab)
@@ -70,6 +71,37 @@ describe('AKS capstone first four stages', () => {
     expect(verifyAksCapstone(run, lab, 'capstone-cluster-connected').result.outcome).toBe('failed')
     run = act(run, { type: 'command', line: 'az aks get-credentials -g rg-aks-capstone -n aks-capstone' })
     expect(verifyAksCapstone(run, lab, 'capstone-cluster-connected').result.outcome).toBe('passed')
+  })
+
+  it('rejects one-node AKS even with pull access and the selected context', () => {
+    let { lab, run } = seedAksProductionAt('provision')
+    for (const line of ['az group create -n rg-aks-capstone -l westeurope',
+      'az acr create -g rg-aks-capstone -n acrakscapstone --sku Basic',
+      'az acr build --registry acrakscapstone --image assistant:capstone-v1 .',
+      'az aks create -g rg-aks-capstone -n aks-capstone --node-count 1 --node-vm-size Standard_D2s_v5 --enable-managed-identity --generate-ssh-keys',
+      'az aks update -g rg-aks-capstone -n aks-capstone --attach-acr acrakscapstone',
+      'az aks get-credentials -g rg-aks-capstone -n aks-capstone']) run = act(run, { type: 'command', line })
+    for (const id of ['registry-created', 'image-v1', 'cluster-connected'])
+      run = act(run, { type: 'aks-request', scenarioId: `capstone-${id}` })
+    expect(verifyAksCapstone(run, lab, 'capstone-cluster-connected').result.outcome).toBe('failed')
+    expect(evaluateLab(lab, run).tasks.find(task => task.id === 'cluster-connected').done).toBe(false)
+    expect(applyRunAction(run, { type: 'aks-advance-stage' }, lab).diagnostics[0].code).toBe('AKS_STAGE_INCOMPLETE')
+  })
+
+  it('fails image Verify when saved build files change after publication', () => {
+    let { lab, run } = seedAksProductionAt('provision')
+    for (const line of ['az group create -n rg-aks-capstone -l westeurope',
+      'az acr create -g rg-aks-capstone -n acrakscapstone --sku Basic',
+      'az acr build --registry acrakscapstone --image assistant:capstone-v1 .']) run = act(run, { type: 'command', line })
+    run = act(run, { type: 'save-file', path: 'app.py', text: run.project.savedFiles['app.py'] + '\n# newer saved source\n' })
+    expect(verifyAksCapstone(run, lab, 'capstone-image-v1').result.outcome).toBe('failed')
+  })
+
+  it('states required configuration, resource sizing and rollout policy before Solutions', () => {
+    const task = id => aksCapstoneLab.tasks.find(item => item.id === id).text
+    expect(task('config-applied')).toMatch(/APP_ENV.*AI_ENDPOINT.*ANSWER_DEPLOYMENT.*EMBEDDING_DEPLOYMENT.*PGHOST.*PGDATABASE.*PGUSER.*COLLECTION.*AUDIENCE.*PGPASSWORD/s)
+    expect(task('deployment-ready')).toMatch(/250m.*128Mi.*500m.*256Mi/s)
+    expect(task('deployment-ready')).toMatch(/maxSurge=1.*maxUnavailable=0.*minReadySeconds=5.*progressDeadlineSeconds=60.*revisionHistoryLimit=3/s)
   })
 
   it('requires the assistant namespace before config evidence', () => {

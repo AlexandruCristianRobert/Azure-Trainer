@@ -31,7 +31,7 @@ const image = run => !!live(run).build && live(run).build.sourceHash === sourceH
   && live(run).build.image?.loginServer === CAPSTONE_IMAGE.split('/')[0]
   && live(run).build.image?.repository === 'assistant' && live(run).build.image?.tag === 'capstone-v1'
   && live(run).build.appSpec?.version === '1.0'
-const connected = run => !!live(run).cluster && !!live(run).grant && live(run).context?.clusterId === CAPSTONE_CLUSTER_ID
+const connected = run => live(run).clusterReady && !!live(run).grant && live(run).context?.clusterId === CAPSTONE_CLUSTER_ID
 const configured = run => !!live(run).namespace && !!live(run).config && !!live(run).secret
   && live(run).config.data?.APP_ENV === 'training' && !!live(run).secret.data?.PGPASSWORD
 const deployed = run => configured(run) && connected(run) && live(run).sourceBuilt && live(run).currentPods
@@ -82,7 +82,7 @@ const authored = {
     examNote: 'Kubernetes context and ACR pull authorization are separate requirements.',
   },
   'config-applied': {
-    text: 'Save and apply the assistant Namespace, training ConfigMap and PostgreSQL Secret.', check: configured,
+    text: 'Save and apply Namespace assistant; ConfigMap assistant-config with APP_ENV=training, AI_ENDPOINT=https://ai-training.example, ANSWER_DEPLOYMENT=answers-v1, EMBEDDING_DEPLOYMENT=embeddings-v1, PGHOST=pg-training.example, PGDATABASE=knowledge, PGUSER=assistant_training, COLLECTION=training and AUDIENCE=employee; Secret assistant-credentials with PGPASSWORD=training-only-password. AI and PostgreSQL are external prerequisites.', check: configured,
     dependencies: { ...sourceVersions, ...infrastructure, 'capstone-config': run => ({ config: live(run).config?.data ?? null,
       secretUid: live(run).secret?.metadata?.uid ?? null }) },
     hints: ['Use the assistant namespace for both resources.', 'Keep the external PostgreSQL and AI fixture references in the supplied configuration.'],
@@ -90,7 +90,7 @@ const authored = {
     examNote: 'A manifest on disk does not configure Pods until it is applied and consumed.',
   },
   'deployment-ready': {
-    text: 'Apply the v1 Deployment with two ready Pods, named HTTP port, probes, explicit resources and live ConfigMap/Secret references.', check: deployed,
+    text: 'Apply Deployment assistant-api in namespace assistant with image acrakscapstone.azurecr.io/assistant:capstone-v1, imagePullPolicy Always, two ready replicas, named http port 8080, ConfigMap/Secret key refs, startup /health/startup, readiness /health/ready and liveness /health/live. Set requests CPU 250m and memory 128Mi; limits CPU 500m and memory 256Mi. Use RollingUpdate maxSurge=1, maxUnavailable=0, minReadySeconds=5, progressDeadlineSeconds=60 and revisionHistoryLimit=3.', check: deployed,
     dependencies: { ...sourceVersions, ...published, ...deployment },
     hints: ['Use assistant-api with image assistant:capstone-v1 and two replicas.', 'Advance simulation time after applying so startup and readiness can settle.'],
     solution: solution(file('k8s/deployment.yaml'), command('kubectl apply -f k8s/deployment.yaml'),

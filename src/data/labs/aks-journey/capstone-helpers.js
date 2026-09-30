@@ -37,6 +37,9 @@ export function capstoneLive(run) {
     && item.principalId?.toLowerCase() === cluster.identityProfile?.kubeletidentity?.objectId?.toLowerCase()
     && item.roleDefinitionId === ACR_PULL_ROLE_ID)
   const namespace = resources['Namespace//assistant']
+  const clusterReady = cluster?.nodeCount === 2 && cluster.nodeVmSize === 'Standard_D2s_v5'
+    && cluster.location === 'westeurope' && cluster.provisioningState === 'Succeeded'
+    && cluster.identity?.type === 'SystemAssigned'
   const config = resources['ConfigMap/assistant/assistant-config']
   const secret = resources['Secret/assistant/assistant-credentials']
   const internal = resources['Service/assistant/assistant-internal']
@@ -67,7 +70,7 @@ export function capstoneLive(run) {
   const serviceReady = service => service?.spec?.ports?.[0]?.port === 80 && service.spec.ports[0].targetPort === 'http'
     && service.spec.selector?.app === 'assistant'
   return { cluster, registry, context, state, deployment, buildId, build, sourceHash, pods,
-    group: run.sandbox.resourceGroups.find(item => item.name === CAPSTONE_GROUP), grant, namespace, config, secret,
+    group: run.sandbox.resourceGroups.find(item => item.name === CAPSTONE_GROUP), grant, clusterReady, namespace, config, secret,
     internal, external, image, container, currentPods,
     sourceBuilt: !!build && build.sourceHash === sourceHash && image === CAPSTONE_IMAGE,
     configured: !!config && !!secret && !!deployment && probes && sized && releasePolicy && currentPods,

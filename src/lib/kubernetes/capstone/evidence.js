@@ -8,10 +8,11 @@ import { CAPSTONE_IMAGE, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, capstoneLive } from
 
 const checks = {
   'registry-created': live => !!live.group && !!live.registry,
-  'image-v1': live => !!live.build && live.build.image?.loginServer === `${CAPSTONE_IMAGE.split('/')[0]}`
+  'image-v1': live => !!live.build && live.build.sourceHash === live.sourceHash
+    && live.build.image?.loginServer === `${CAPSTONE_IMAGE.split('/')[0]}`
     && live.build.image?.repository === 'assistant' && live.build.image?.tag === 'capstone-v1'
     && live.build.appSpec?.version === '1.0',
-  'cluster-connected': live => !!live.cluster && !!live.grant && live.context?.clusterId === CAPSTONE_TARGET.clusterId,
+  'cluster-connected': live => live.clusterReady && !!live.grant && live.context?.clusterId === CAPSTONE_TARGET.clusterId,
   'config-applied': live => !!live.namespace && !!live.config && !!live.secret && live.config.data?.APP_ENV === 'training'
     && !!live.secret.data?.PGPASSWORD,
   'deployment-ready': live => live.sourceBuilt && live.configured && !!live.grant
