@@ -26,7 +26,7 @@ test('standalone Lab21 starts with three healthy v1 Pods and leaves policy for t
   const run = initial(); const deployment = parse(run.project.savedFiles['k8s/deployment.yaml'])
   expect(labById(lab.id)).toBe(lab)
   expect(nextLabFor(labById('aks-releases-troubleshooting'))).toBe(lab)
-  expect(nextLabFor(lab)).toBeNull()
+  expect(nextLabFor(lab)).toBe(labById('aks-diagnosis-guided'))
   expect(lab).toMatchObject({ journeyOrder: 21, labMode: 'independent', engineVersion: 2, contentVersion: 1 })
   expect(deployment.spec.replicas).toBe(3)
   for (const key of ['strategy', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit']) expect(deployment.spec[key]).toBeUndefined()
