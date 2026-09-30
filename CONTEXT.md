@@ -46,6 +46,10 @@ _Avoid_: Final quiz, Final exam
 A reusable application starter containing a REST API, configuration, container image, and deployment infrastructure that the learner adapts and deploys during Labs.
 _Avoid_: Azure Data Factory, application factory function
 
+**Knowledge Assistant**:
+The example application in the AKS learning journey that answers practice questions using retrieved document passages and returns answers with source references.
+_Avoid_: General-purpose chatbot, live AI assistant
+
 **Task**:
 One checkable step of a Lab, stated as a condition over the Sandbox's resource configuration or evidence of observed behavior (e.g. replicas increasing under load). A Task is satisfied by meeting its condition, rather than by entering a prescribed command sequence.
 _Avoid_: Step, Objective, Requirement, Check
