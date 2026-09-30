@@ -82,7 +82,8 @@ export function parsePythonDiagnostics(files, manifest = {}) {
       const imported = raw(statement, text).trim().replace(/\s+/g, ' ')
       if (!['import logging', 'import json', 'import os', 'from pathlib import Path', 'from training_diagnostics import current_request_id'].includes(imported)
         && !/^from training_clients import \(\s*EmbeddingClient, AnswerClient, PgClient, RetryPolicy, RequestBudget, DependencyError, as_vector,?\s*\)$/.test(imported)
-        && imported !== 'from training_health import initialized, accepting_requests, postgres_available, ai_available')
+        && imported !== 'from training_health import initialized, accepting_requests, postgres_available, ai_available'
+        && !(manifest.workloadVersion === 1 && imported === 'import training_workload'))
         fail(statement, 'This import is outside the declared diagnosis teaching subset.')
       for (const name of importNames(statement)) availableImports.add(name)
     }
@@ -95,7 +96,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
           fail(statement, 'getLogger() must bind a local logger using one bounded literal name.')
         else if (shadowsLocal(raw(values[0], text))) fail(statement, 'Logger bindings must not shadow imports, declarations, or another logger.')
         else loggerNames.add(raw(values[0], text))
-      } else if (values.length !== 2 || values[0].name !== 'VariableName' || !['SERVICE_NAME', 'SERVICE_VERSION', 'PORT', 'SQL', 'QUERY_SOURCE'].includes(raw(values[0], text)))
+      } else if (values.length !== 2 || values[0].name !== 'VariableName' || !['SERVICE_NAME', 'SERVICE_VERSION', 'PORT', 'SQL', 'QUERY_SOURCE', ...(manifest.workloadVersion === 1 ? ['WORK_UNITS', 'SCRATCH_MIB'] : [])].includes(raw(values[0], text)))
         fail(statement, 'Only service constants, retrieval source, and declared loggers may be bound at module scope.')
     }
     if (statement.name === 'ExpressionStatement') {
@@ -152,7 +153,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
   }
   // A helper can bind the dictionary locally, then emit it once. Parameters
   // remain symbolic until a wrapper call supplies a literal event/status.
-  for (const helper of functions.filter(node => !['answer', 'answer_core', 'settings', 'info', 'format_answer', 'startup', 'ready', 'live'].includes(functionName(node, text)))) {
+  for (const helper of functions.filter(node => !['answer', 'answer_core', 'settings', 'info', 'format_answer', 'startup', 'ready', 'live', ...(manifest.workloadVersion === 1 ? ['work'] : [])].includes(functionName(node, text)))) {
     const name = functionName(helper, text)
     const params = kids(kids(helper).find(node => node.name === 'ParamList')).filter(node => !['(', ')', ','].includes(node.name))
     const names = []; let required = 0; let optional = false; let invalid = false
