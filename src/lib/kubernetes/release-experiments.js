@@ -4,6 +4,7 @@ import { getServiceBackends } from './services.js'
 import { getRolloutSummary } from './rollouts.js'
 import { getDeploymentPods } from './reconcile.js'
 import { refreshKubernetesDependencies } from './evidence.js'
+import { retainReleaseReceipt } from './release-receipts.js'
 
 const clone = value => structuredClone(value)
 const error = message => ({ code: 'INVALID_RELEASE_EXPERIMENT', message })
@@ -91,15 +92,6 @@ export function cancelReleaseExperiment(input, reason = 'learner-cancelled') {
   return { run, diagnostics: [] }
 }
 
-function retainReleaseReceipt(state, experiment) {
-  const receipts = [...state.rollouts.receipts, clone(experiment)]
-  const retiredRequestIds = new Set(receipts.slice(0, Math.max(0, receipts.length - 40)).flatMap(receipt => receipt.samples.map(sample => sample.requestId)))
-  state.rollouts.receipts = receipts.slice(-40)
-  // Raw request history has its own bound. Once a receipt retires, also retire
-  // dependent logs so old Pod cleanup cannot leave unverifiable provenance.
-  if (state.connectivity) state.connectivity.applicationLogs = state.connectivity.applicationLogs.filter(log => !retiredRequestIds.has(log.requestId))
-}
-
 export function cancelChangedReleaseExperiments(input) {
   const e = activeRelease(input); if (!e) return input
   const deployment = deploymentFor(input, e.target); const runtime = input.runtime.kubernetes
@@ -126,9 +118,9 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
     const current = run.evidence.experimentsById[run.evidence.currentEvidenceByTask[task.id]]
     const historicalPrefix = `aks-release:${e.target.clusterId}:${e.target.namespace}:${e.target.deploymentName}:history:${scenarioId}:`
     const historical = [e.incidentEpoch, null].some(epoch => Object.hasOwn(task.dependencies ?? {}, `${historicalPrefix}${epoch}`))
-    // A failed retry is retained as a receipt, not allowed to erase an already
-    // earned historical milestone. Live final verification remains separate.
-    if (!passed && historical && current?.outcome === 'passed' && current.completed
+    // Later success/failure receipts cannot replace half of an already earned
+    // historical identity. Preserve its evidence and dependency atomically.
+    if (historical && current?.outcome === 'passed' && current.completed
       && current.attemptId === e.attemptId && current.scenarioId === scenarioId && current.measurements?.deploymentUid === e.deploymentUid
       && current.measurements?.incidentEpoch === e.incidentEpoch) continue
     run = recordVerification(run, lab, task.id,

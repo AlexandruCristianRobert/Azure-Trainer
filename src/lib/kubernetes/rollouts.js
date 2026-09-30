@@ -1,6 +1,7 @@
 import { resolveRolloutBudget } from './rollout-schema.js'
 import { pruneRevisionHistory } from './rollout-history.js'
 import { createPod } from './reconcile.js'
+import { retainReleaseReceipt } from './release-receipts.js'
 
 const active = pod => pod.metadata.deletionTimestamp === undefined
 const ready = pod => active(pod) && pod.status?.phase === 'Running' && pod.status.conditions?.some(item => item.type === 'Ready' && item.status === 'True')
@@ -80,6 +81,7 @@ export function reconcileRollouts(input, clusterId, atMs, lab) {
     if (experiment?.deploymentUid === deployment.metadata.uid && experiment.status === 'active'
       && Number.isInteger(experiment.baselineReplicas) && experiment.baselineReplicas !== D) {
       experiment.status = 'cancelled'; experiment.cancellationReason = 'desired-replicas-changed'; experiment.endedAtMs = atMs
+      retainReleaseReceipt(view.state, experiment)
     }
     const stableScale = view.rollout.conditions.some(item => item.type === 'Progressing' && item.reason === 'NewReplicaSetAvailable')
       && view.pods.every(pod => owner(pod, view.current.metadata.uid) && active(pod))

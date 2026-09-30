@@ -404,3 +404,50 @@ test('a real healthy v2 rollout cannot finish recovery from incident flags witho
   expect(finishReleaseExperiment(forged, 'recover-v2', lab).run.runtime.kubernetes.clusters[target.clusterId].rollouts.receipts.at(-1).outcome).toBe('failed')
   expect(() => applyRunAction(forged, { type: 'aks-release-finish', scenarioId: 'recover-v2' }, lab)).toThrow(/missing or malformed/i)
 })
+
+test.each([undefined, 1])('two actual successes keep historical receipt identity current beyond eviction with epoch %s', incidentEpoch => {
+  const scopedLab = { ...lab, tasks: [...lab.tasks, { id: 'two-success-proof', verification: { scenarioId: 'release-v2', scenarioVersion: 1 },
+    dependencies: releaseDependencies(target, { historical: true, scenarioId: 'release-v2', incidentEpoch }), check: () => true }] }
+  const scopedAction = (run, value) => { const result = applyRunAction(run, value, scopedLab); expect(result.diagnostics).toEqual([]); return result.run }
+  let run = scopedAction(releaseTestRun({ graceSeconds: 1 }), { type: 'aks-release-start', scenarioId: 'release-v2' })
+  run = scopedAction(advanceKubernetesTime(applyReleaseTemplate(run), 45, scopedLab), { type: 'aks-release-finish', scenarioId: 'release-v2' })
+  const firstReceipt = state(run).rollouts.receipts.at(-1)
+  expect(firstReceipt.outcome).toBe('passed')
+  run = scopedAction(run, { type: 'aks-release-start', scenarioId: 'release-v2' })
+  run = scopedAction(run, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' })
+  run = scopedAction(advanceKubernetesTime(run, 45, scopedLab), { type: 'aks-release-finish', scenarioId: 'release-v2' })
+  const secondReceipt = state(run).rollouts.receipts.at(-1)
+  expect(secondReceipt.outcome).toBe('passed')
+  expect(secondReceipt.id).not.toBe(firstReceipt.id)
+  expect(secondReceipt.samples.at(-1).rollout.currentRevision).toBeGreaterThan(firstReceipt.samples.at(-1).rollout.currentRevision)
+  const evidenceId = run.evidence.currentEvidenceByTask['two-success-proof']
+  const record = run.evidence.experimentsById[evidenceId]
+  expect(Object.values(record.dependencyValues)[0][0].id).toBe(record.measurements.receiptId)
+  for (let index = 0; index < 40; index++) {
+    run = scopedAction(run, { type: 'aks-release-start', scenarioId: 'release-v2' })
+    run = scopedAction(run, { type: 'aks-release-finish', scenarioId: 'release-v2' })
+  }
+  expect(state(run).rollouts.receipts).toHaveLength(40)
+  expect(state(run).rollouts.receipts.every(receipt => receipt.outcome === 'failed')).toBe(true)
+  expect(run.evidence.currentEvidenceByTask['two-success-proof']).toBe(evidenceId)
+  expect(evaluateLab(scopedLab, run).tasks.find(task => task.id === 'two-success-proof').done).toBe(true)
+})
+
+test.each([1, 42])('replica-change cancellation retains bounded provenance for a valid new start after %i cancellations', count => {
+  let run = releaseTestRun({ graceSeconds: 1 })
+  for (let index = 0; index < count; index++) {
+    run = action(start(run), { type: 'command', line: 'kubectl scale deployment/assistant-api --replicas=3 -n assistant' })
+    expect(state(run).rollouts.experiment).toMatchObject({ status: 'cancelled', cancellationReason: 'desired-replicas-changed', baselineReplicas: 2 })
+    if (index < count - 1) run = action(run, { type: 'command', line: 'kubectl scale deployment/assistant-api --replicas=2 -n assistant' })
+  }
+  expect(state(run).rollouts.receipts.length).toBe(Math.min(count, 40))
+  expect(state(run).rollouts.receipts.at(-1)).toMatchObject({ status: 'cancelled', cancellationReason: 'desired-replicas-changed', baselineReplicas: 2 })
+  const sample = state(run).rollouts.experiment.samples[0]
+  run = advanceKubernetesTime(applyReleaseTemplate(run), 60, lab)
+  expect(state(run).podSnapshots[sample.podUid]).toBeUndefined()
+  run = JSON.parse(JSON.stringify(run))
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+  run = start(run)
+  expect(state(run).rollouts.experiment.status).toBe('active')
+  expect(validateKubernetesRuntime(run.runtime.kubernetes, run, lab)).toBe(true)
+})
