@@ -1,12 +1,16 @@
 import { createSandbox, isSandboxShape, normalizeSandbox, SUBSCRIPTION_ID } from '../sandbox/model.js'
 import { emptyBicepProvenance, validBicepProvenance } from '../bicep/provenance.js'
-import { emptyKubernetesRuntime, validateKubernetesRuntime } from '../kubernetes/state.js'
+import { emptyKubernetesRuntime, validateKubernetesRuntime, migrateMissingRolloutState } from '../kubernetes/state.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { fail } from './errors.js'
 import { capstoneStages, validateStageLab, validateStageState } from './stages.js'
 import { validateCapstoneIncident } from './incident.js'
 import { projectSourceHash } from '../project/build.js'
 import { sourceTextHash } from './sourceJournal.js'
+import { validDiagnosisEvidenceRecord } from '../kubernetes/diagnosis-incidents.js'
+import { isAksCapstone, initializeAksStages, validateAksStageLab, validateAksCapstoneState, isAksPinnedDiagnosisEvidence } from '../kubernetes/capstone/stages.js'
+import { createAksCapstoneSeed } from '../../data/labs/aks-journey/capstone-seed.js'
+import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/ownership.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -84,6 +88,7 @@ export function validateBehavioralLab(lab) {
     }
   }
   validateStageLab(lab)
+  validateAksStageLab(lab)
   if (lab.initialProjectFiles !== undefined && !validStringMap(lab.initialProjectFiles)) {
     fail('INVALID_LAB', 'Initial project files must be a string map.')
   }
@@ -120,6 +125,7 @@ function validArtifacts(artifacts) {
 }
 
 function validateCapstoneArtifacts(run, lab) {
+  if (isAksCapstone(lab)) return
   if (getProjectManifest(run.project.manifestId)?.capstone !== true) return
   const snapshots = run.artifacts.sourceSnapshotsByHash
   const expectedPaths = Object.keys(lab.initialProjectFiles ?? {}).sort()
@@ -210,9 +216,14 @@ export function validateBehavioralRun(run, lab = null) {
   }
   if (lab !== null) {
     validateBehavioralLab(lab)
-    if (lab.capabilities?.kubernetes === true && !validateKubernetesRuntime(run.runtime.kubernetes, run, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
     if (run.labId !== lab.id || run.contentVersion !== lab.contentVersion) {
       fail('INCOMPATIBLE_CONTENT', 'The run does not match this Lab content.', { labId: run.labId, contentVersion: run.contentVersion })
+    }
+    if (!evidenceRecords.every(record => validDiagnosisEvidenceRecord(record, run, lab) || isAksPinnedDiagnosisEvidence(record, run, lab))) fail('INVALID_RUN', 'Kubernetes diagnosis evidence provenance is missing or malformed.')
+    if (lab.capabilities?.kubernetes === true) {
+      const candidate = migrateMissingRolloutState(run, lab)
+      if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
+      if (candidate !== run) { run.runtime = candidate.runtime; run.nextSequence = candidate.nextSequence }
     }
     if (Array.isArray(lab.bicepTargets)) {
       const state = run.runtime.bicep
@@ -267,6 +278,8 @@ export function validateBehavioralRun(run, lab = null) {
       fail('INVALID_RUN', 'Evidence does not match a declared Task scenario.')
     }
     validateStageState(run, lab)
+    validateAksCapstoneState(run, lab)
+    if (isAksCapstone(lab)) validateAksOwnership(run)
     validateCapstoneArtifacts(run, lab)
     validateCapstoneIncident(run, lab)
   }
@@ -290,15 +303,16 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     nextSequence: 1,
     sandbox,
     project: { manifestId: lab.manifestId ?? null, savedFiles: files, draftFiles: cloneJson(files), fileVersions: {}, diagnostics: [],
-      ...(capstoneStages(lab) ? { sourceJournal: [] } : {}) },
+      ...(capstoneStages(lab) || isAksCapstone(lab) ? { sourceJournal: [] } : {}) },
     artifacts: { buildsById: {}, publishedTags: {}, sourceSnapshotsByHash: {} },
     runtime: { simTimeMs: 0, deploymentsByApp: {}, replicasByApp: {}, activeScenario: null, scheduledEvents: [],
       ...(lab.capabilities?.kubernetes === true ? { kubernetes: emptyKubernetesRuntime() } : {}),
       ...(lab.capabilities?.bicepDeployment === true ? { bicep: emptyBicepProvenance({
         trackIncident: lab.capabilities?.bicepIdentityFault === true }) } : {}) },
     evidence: { experimentsById: {}, currentEvidenceByTask: {}, milestoneRecords: [],
+      ...(isAksCapstone(lab) ? { aksCapstoneReceipts: {} } : {}),
       ...(capstoneStages(lab) ? { groupReceipts: [] } : {}) },
-    stages: { activeStageId: capstoneStages(lab) ? lab.stages[0].id : null, sealedStages: [], cleanupCheckpoint: null,
+    stages: isAksCapstone(lab) ? initializeAksStages(lab) : { activeStageId: capstoneStages(lab) ? lab.stages[0].id : null, sealedStages: [], cleanupCheckpoint: null,
       ...(capstoneStages(lab) ? { ownedGroups: [], groupCreations: [], deletedApps: [] } : {}) },
     dependencyGenerations: {},
     scrollback: [],
@@ -309,8 +323,8 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     completedAt: null,
     resultId: null,
   }
-  if (lab.initializeSimulation) {
-    const initialized = lab.initializeSimulation(cloneJson(run))
+  if (lab.initializeSimulation || isAksCapstone(lab)) {
+    const initialized = lab.initializeSimulation ? lab.initializeSimulation(cloneJson(run)) : createAksCapstoneSeed(lab)
     const allowed = ['sandbox', 'artifacts', 'runtime', 'nextSequence']
     if (!isPlainObject(initialized) || !isJsonValue(initialized)
       || Reflect.ownKeys(initialized).length !== allowed.length
@@ -319,6 +333,7 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     }
     Object.assign(run, cloneJson(initialized))
   }
+  if (isAksCapstone(lab)) run.stages.aks.protectedRefs = aksProtectedRefs()
   return validateBehavioralRun(run, lab)
 }
 

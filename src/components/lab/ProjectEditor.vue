@@ -13,7 +13,8 @@ const current = computed(() => run.behavioralRun?.project)
 const manifest = computed(() => getProjectManifest(current.value?.manifestId ?? run.lab?.manifestId))
 const files = computed(() => manifest.value.files)
 const fixed = computed(() => Object.hasOwn(manifest.value.fixedFiles ?? {}, path.value))
-const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
+const frozenCleanup = computed(() => run.lab?.capabilities?.aksCapstone === true && !!run.behavioralRun?.stages?.cleanupCheckpoint)
+const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy || frozenCleanup.value)
 const saved = computed(() => current.value?.savedFiles?.[path.value] ?? '')
 const dirty = computed(() => text.value !== saved.value)
 const version = computed(() => current.value?.fileVersions?.[path.value] ?? 0)
@@ -74,7 +75,7 @@ async function save() {
 
 <template>
   <section class="project-tool" aria-label="Project files">
-    <header class="project-tool__head"><div><h2>Project files</h2><p v-if="run.lab?.capabilities?.bicepDeployment">Edit the modular Bicep project and save each file. Validate, preview, and deploy saved versions in Cloud Shell.</p><p v-else-if="isKubernetes">Python source and ordinary YAML are editable. Save source before building an image; save YAML before applying it to the simulated cluster.</p><p v-else>Simulated .NET 10 project. Builds capture saved C# files.</p><p v-if="run.lab?.capabilities?.healthProbes">Use supported health expressions in Program.cs: HealthState.StartupComplete, HealthState.Ready, and HealthState.Responsive. The helper is fixed and read-only. Edit containerapp.yaml in JSON form; general block YAML is outside this trainer's supported format. Save C# → build image → deploy. Save probe YAML → deploy; no image build is needed.</p></div><span class="project-tool__build">{{ isKubernetes ? (published ? `Built ${published.id}` : 'No image built') : (published ? `Published ${published.id}` : 'No image published') }}</span></header>
+    <header class="project-tool__head"><div><h2>Project files</h2><p v-if="frozenCleanup">Cleanup checkpoint frozen. Project files are read-only; only reads, deletes, and cleanup verification are permitted.</p><p v-else-if="run.lab?.capabilities?.bicepDeployment">Edit the modular Bicep project and save each file. Validate, preview, and deploy saved versions in Cloud Shell.</p><p v-else-if="isKubernetes">Python source and ordinary YAML are editable. Save source before building an image; save YAML before applying it to the simulated cluster.</p><p v-else>Simulated .NET 10 project. Builds capture saved C# files.</p><p v-if="run.lab?.capabilities?.healthProbes">Use supported health expressions in Program.cs: HealthState.StartupComplete, HealthState.Ready, and HealthState.Responsive. The helper is fixed and read-only. Edit containerapp.yaml in JSON form; general block YAML is outside this trainer's supported format. Save C# → build image → deploy. Save probe YAML → deploy; no image build is needed.</p></div><span class="project-tool__build">{{ isKubernetes ? (published ? `Built ${published.id}` : 'No image built') : (published ? `Published ${published.id}` : 'No image published') }}</span></header>
     <div class="project-tool__body">
       <nav class="project-tool__files" aria-label="Project file list">
         <button v-for="item in files" :key="item" type="button" :aria-current="path === item ? 'page' : undefined" @click="selectFile(item)">{{ item }}</button>

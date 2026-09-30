@@ -1,6 +1,35 @@
 import { applyRunAction } from '../../src/lib/labEngine/actions.js'
-import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
+import { createBehavioralRun, validateBehavioralRun } from '../../src/lib/labEngine/run.js'
+import { recordVerification } from '../../src/lib/labEngine/evidence.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
+
+// The small eight-stage fixture uses real engine verification records. Production
+// journey helpers execute the full Solutions once the Lab content is registered.
+export function verifyAksCapstoneFixture(run, lab, taskId = lab.stages.find(stage => stage.id === run.stages.activeStageId).taskIds[0]) {
+  const task = lab.tasks.find(item => item.id === taskId)
+  return recordVerification(run, lab, taskId, { ...task.verification, outcome: 'passed', completed: true,
+    startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs, measurements: {} })
+}
+
+export function seedAksCapstoneAt(stageId = 'source') {
+  const ids = ['source', 'deployment', 'configuration', 'behavior', 'resilience', 'release', 'incident', 'cleanup']
+  const lab = { id: 'aks-capstone-fixture', engineVersion: 2, contentVersion: 1,
+    manifestId: FOUNDATION_MANIFEST.id, initialProjectFiles: { ...FOUNDATION_FILES },
+    capabilities: { kubernetes: true, aksCapstone: true, acrBuild: true },
+    stages: ids.map(id => ({ id, taskIds: [`task-${id}`] })),
+    tasks: ids.map(id => ({ id: `task-${id}`, check: () => true,
+      dependencies: { source: ({ project }) => project.fileVersions },
+      verification: { scenarioId: `verify-${id}`, scenarioVersion: 1 } })) }
+  let run = createBehavioralRun(lab, { attemptId: 'aks-capstone-test-attempt' })
+  if (!ids.includes(stageId)) throw new Error('Unknown fixture stage')
+  while (run.stages.activeStageId !== stageId) {
+    run = verifyAksCapstoneFixture(run, lab)
+    const result = applyRunAction(run, { type: 'aks-advance-stage' }, lab)
+    if (result.diagnostics.length) throw new Error(JSON.stringify(result.diagnostics))
+    run = result.run
+  }
+  return { lab, run }
+}
 import { CONFIG_FILES, CONFIG_MANIFEST, CONFIG_SOLUTION_FILES } from '../../src/data/templates/aks-python/configuration.js'
 import { kubernetesDependencies } from '../../src/lib/kubernetes/evidence.js'
 import { initializeConnectivity, reconcileServices } from '../../src/lib/kubernetes/services.js'
@@ -13,6 +42,258 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { getDeploymentPods } from '../../src/lib/kubernetes/reconcile.js'
 import { RESOURCE_MANIFEST, RESOURCE_SOLUTION_FILES } from '../../src/data/templates/aks-python/resources.js'
 import { inspectResources } from '../../src/lib/kubernetes/resource-inspection.js'
+import { RELEASE_FILES, RELEASE_MANIFEST, RELEASE_SOLUTION_FILES } from '../../src/data/templates/aks-python/releases.js'
+import { SUBSCRIPTION_ID } from '../../src/lib/sandbox/model.js'
+import { advanceKubernetesTime } from '../../src/lib/kubernetes/time.js'
+import { evaluateLab } from '../../src/lib/labEngine/evaluate.js'
+import { DIAGNOSIS_MANIFEST, DIAGNOSIS_SOLUTION_FILES } from '../../src/data/templates/aks-python/diagnosis.js'
+import { parsePythonProject } from '../../src/lib/project/python.js'
+import { INTEGRATION_FIXTURES } from '../../src/data/fixtures/aks/integration.js'
+import { aksCapstoneLab } from '../../src/data/labs/aks-journey/capstone.lab.js'
+import { CAPSTONE_TARGET } from '../../src/data/labs/aks-journey/capstone-helpers.js'
+
+export function seedAksProductionAt(stageId = 'source') {
+  let run = createBehavioralRun(aksCapstoneLab, { attemptId: 'aks-production-test-attempt' })
+  for (const stage of aksCapstoneLab.stages) {
+    if (stage.id === stageId) return { lab: aksCapstoneLab, run }
+    if (stage.id === 'final-cleanup') throw new Error('Later capstone stage is not implemented.')
+    for (const taskId of stage.taskIds) {
+      const task = aksCapstoneLab.tasks.find(item => item.id === taskId)
+      for (const step of task.solution.steps) {
+        const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+          : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+        let result
+        try { result = applyRunAction(run, action, aksCapstoneLab) }
+        catch (error) { throw new Error(`${stage.id}/${taskId} ${JSON.stringify(action)}: ${error.message}`) }
+        if (result.diagnostics.length) throw new Error(`${stage.id}/${taskId}: ${JSON.stringify(result.diagnostics)}`)
+        run = result.run
+      }
+    }
+    for (const taskId of stage.taskIds) {
+      const result = applyRunAction(run, { type: 'aks-request', scenarioId: `capstone-${taskId}` }, aksCapstoneLab)
+      if (result.diagnostics.length) throw new Error(`${stage.id}/${taskId} final Verify: ${JSON.stringify(result.diagnostics)}`)
+      run = result.run
+    }
+    const advanced = applyRunAction(run, { type: 'aks-advance-stage' }, aksCapstoneLab)
+    if (advanced.diagnostics.length) throw new Error(`${stage.id} seal: ${JSON.stringify(advanced.diagnostics)} ${JSON.stringify(evaluateLab(aksCapstoneLab, run).tasks.filter(task => stage.taskIds.includes(task.id)).map(task => [task.id, task.status, task.reason]))}`)
+    run = advanced.run
+    validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)
+  }
+  throw new Error(`Unknown capstone stage ${stageId}`)
+}
+
+/** Final proof and ordinary cleanup actions; modes also expose real intermediate states. */
+export function executeCapstoneCleanup(run, lab, { mode = 'explicit-deletes', onBeforeSeal = () => {}, onSeal = () => {} } = {}) {
+  const action = payload => {
+    const result = applyRunAction(run, payload, lab)
+    if (result.diagnostics.length || result.lines.some(item => item.kind === 'err'))
+      throw new Error(`Cleanup ${JSON.stringify(payload)}: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(result.lines.filter(item => item.kind === 'err'))}`)
+    run = result.run
+  }
+  if (!run.stages.cleanupCheckpoint) {
+    for (const id of ['final-internal', 'final-external', 'final-invalid', 'final-no-match', 'final-timeout']) {
+      for (const step of lab.tasks.find(item => item.id === id).solution.steps)
+        action(step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+          : step.kind === 'command' ? { type: 'command', line: step.line } : step.action)
+    }
+    if (mode === 'verify-only') return run
+    action({ type: 'aks-freeze-cleanup' })
+  }
+  if (mode === 'freeze-only') return run
+  if (run.runtime.kubernetes.clusters[CAPSTONE_TARGET.clusterId]?.resources['Namespace//assistant'])
+    action({ type: 'command', line: 'kubectl delete namespace assistant' })
+  if (mode === 'explicit-deletes') {
+    action({ type: 'command', line: 'az aks delete -g rg-aks-capstone -n aks-capstone --yes' })
+    action({ type: 'command', line: 'az acr delete -n acrakscapstone --yes' })
+  }
+  action({ type: 'command', line: 'az group delete -n rg-aks-capstone --yes' })
+  for (const id of ['cleanup-app', 'cleanup-cloud']) action({ type: 'aks-request', scenarioId: `capstone-${id}` })
+  onBeforeSeal(run, 'final-cleanup')
+  action({ type: 'aks-advance-stage' })
+  onSeal(run, 'final-cleanup')
+  return run
+}
+
+export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks = [], onAction = () => {}, onTask = () => {}, onBeforeSeal = () => {}, onSeal = () => {}, reverifyAtSeal = false } = {}) {
+  const stage = lab.stages.find(item => item.id === stageId)
+  for (const id of stage.taskIds) {
+    if (skipTasks.includes(id)) continue
+    for (const step of lab.tasks.find(item => item.id === id).solution.steps) {
+      const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+        : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+      let result
+      try { result = applyRunAction(run, action, lab) }
+      catch (error) { throw new Error(`${stageId}/${id} ${JSON.stringify(action)}: ${error.message}`, { cause: error }) }
+      if (result.diagnostics.length || result.lines.some(item => item.kind === 'err')) throw new Error(`${stageId}/${id} ${JSON.stringify(action)}: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(result.lines.filter(item => item.kind === 'err'))}`)
+      run = result.run; onAction(run, action, id)
+    }
+    onTask(run, id)
+  }
+  if (seal) {
+    if (reverifyAtSeal) for (const id of stage.taskIds) {
+      const result = applyRunAction(run, { type: 'aks-request', scenarioId: `capstone-${id}` }, lab)
+      if (result.diagnostics.length) throw new Error(`${stageId}/${id} final Verify: ${JSON.stringify(result.diagnostics)}`)
+      run = result.run
+    }
+    onBeforeSeal(run, stageId)
+    const result = applyRunAction(run, { type: 'aks-advance-stage' }, lab)
+    if (result.diagnostics.length) throw new Error(`${stageId} seal: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(evaluateLab(lab, run).tasks.filter(item => stage.taskIds.includes(item.id)))}`)
+    run = result.run
+    onSeal(run, stageId)
+  }
+  return run
+}
+
+/** Runs published Solutions through the normal action dispatcher, never fabricating proof. */
+export function executeAksCapstoneSolution(run, lab, { onBeforeSeal = () => {}, onSeal = () => {}, onExperiment = () => {}, cleanupMode = 'explicit-deletes' } = {}) {
+  for (const stage of lab.stages) {
+    if (stage.id === 'final-cleanup') {
+      run = executeCapstoneCleanup(run, lab, { mode: cleanupMode, onBeforeSeal, onSeal })
+      continue
+    }
+    run = executeCapstoneStage(run, lab, stage.id, { onBeforeSeal, onSeal, reverifyAtSeal: true,
+      onAction(current, action, taskId) {
+        if (['aks-probe-start', 'aks-resource-start', 'aks-release-start', 'aks-release-finish', 'aks-capstone-incident'].includes(action.type))
+          onExperiment(current, action, taskId)
+      } })
+  }
+  return run
+}
+
+export function executeCapstoneResilience(run, lab, { finishHandoff = true, onAction = () => {}, onTask = () => {} } = {}) {
+  for (const id of lab.stages.find(stage => stage.id === 'resilience').taskIds) {
+    if (!finishHandoff && id === 'release-baseline') break
+    for (const step of lab.tasks.find(task => task.id === id).solution.steps) {
+      const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+        : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+      try { run = act(run, lab, action).run }
+      catch (error) { throw new Error(`${id} ${JSON.stringify(action)}: ${error.message}`) }
+      onAction(run, action, id)
+    }
+    onTask(run, id)
+  }
+  return run
+}
+
+export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, question = 'How long are backups kept?', requestId = 'request-test-1',
+  requestIdExpression = 'current_request_id()', environment = {}, profile = 'healthy' } = {}) {
+  const source = files['app.py'].replace('current_request_id()', requestIdExpression)
+  const parsed = parsePythonProject({ ...files, 'app.py': source }, DIAGNOSIS_MANIFEST)
+  if (parsed.diagnostics.length) throw new Error(parsed.diagnostics.map(item => `${item.path}:${item.line}:${item.column} ${item.message}`).join('\n'))
+  const snapshot = makeTrainingSnapshot()
+  snapshot.environment = { ...snapshot.environment, AUDIENCE: 'employee', ...environment }
+  return [parsed.appSpec, snapshot, { method: 'POST', path: '/api/ask', body: { question }, requestId }, INTEGRATION_FIXTURES, profile]
+}
+
+export function seedDiagnosisTest({ fault = 'none', profile = 'training' } = {}) {
+  const files = structuredClone(DIAGNOSIS_SOLUTION_FILES)
+  if (fault === 'review-audience') profile = 'review'
+  files['k8s/configmap.yaml'] = files['k8s/configmap.yaml'].replaceAll('training', profile)
+  if (profile === 'review') {
+    files['k8s/configmap.yaml'] = files['k8s/configmap.yaml'].replace('employee', 'partner')
+    files['k8s/secret.yaml'] = files['k8s/secret.yaml'].replaceAll('training-only-password', 'review-only-password')
+  }
+  if (fault === 'review-audience') files['app.py'] = files['app.py'].replace('"audience": cfg["audience"]', '"audience": "employee"')
+  if (fault === 'target-port') for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml'])
+    files[path] = files[path].replace('targetPort: http', 'targetPort: 8081')
+  if (!['none', 'target-port', 'review-audience'].includes(fault)) throw new Error(`Unknown diagnosis fault: ${fault}`)
+  const lab = makeAksLab({ manifestId: DIAGNOSIS_MANIFEST.id, initialProjectFiles: files,
+    capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true,
+      kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true,
+      kubernetesDiagnostics: true }, healthFixture: { initializationSeconds: 6 } })
+  let run = createBehavioralRun(lab, { attemptId: 'diagnosis-test' })
+  for (const line of ['az group create -n rgdiagnosis -l eastus', 'az acr create -g rgdiagnosis -n acraksreleasesguided --sku Basic',
+    'az acr build --registry acraksreleasesguided -t assistant:release-v2 .',
+    'az aks create -g rgdiagnosis -n aksdiagnosis --enable-managed-identity --generate-ssh-keys --attach-acr acraksreleasesguided',
+    'az aks get-credentials -g rgdiagnosis -n aksdiagnosis', ...DIAGNOSIS_MANIFEST.kubernetesFiles.map(path => `kubectl apply -f ${path}`)])
+    run = act(run, lab, { type: 'command', line }).run
+  run = advanceHealth(run, lab, 15)
+  const clusterId = run.sandbox.aksClusters[0].id, state = run.runtime.kubernetes.clusters[clusterId]
+  const diagnosticUid = `diagnostic/${clusterId}`
+  state.resources['Namespace//diagnostics'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'diagnostics', uid: `fixture-${clusterId}-diagnostics-namespace`, resourceVersion: '1' } }
+  state.resources['Pod/diagnostics/diagnostics'] = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'diagnostics', namespace: 'diagnostics', uid: diagnosticUid, resourceVersion: '1', labels: { app: 'diagnostics' } },
+    spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
+  state.connectivity.diagnosticPodUids = [diagnosticUid]
+  run = reconcileServices(run, clusterId)
+  const target = { clusterId, namespace: 'assistant', deploymentName: 'assistant-api',
+    deploymentUid: state.resources['Deployment/assistant/assistant-api'].metadata.uid,
+    serviceName: 'assistant-internal', serviceUid: state.resources['Service/assistant/assistant-internal'].metadata.uid,
+    externalServiceName: 'assistant-public', externalServiceUid: state.resources['Service/assistant/assistant-public'].metadata.uid }
+  return { run, lab, clusterId, target }
+}
+
+/** A Task-local immutable diagnosis fixture; no journey Lab content. */
+export function seedDiagnosisIncidentTest({ multiCause = false } = {}) {
+  const fixture = seedDiagnosisTest(), { run, target } = fixture
+  const requestTarget = { clusterId: target.clusterId, namespace: target.namespace,
+    deploymentName: target.deploymentName, serviceName: target.serviceName }
+  const request = { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }
+  const healthy = { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training', release: '2.0' } }
+  const connection = { status: null, body: null, transport: { ok: false, reason: 'CONNECTION_REFUSED' } }
+  const scenario = expected => ({ kind: 'aks-request', version: 1, target: requestTarget, request,
+    connectivity: { origin: { kind: 'diagnostic', name: 'diagnostics', namespace: 'diagnostics' }, hostname: 'assistant-internal.assistant', port: 80 }, expected })
+  const portPath = 'k8s/service-internal.yaml', configPath = 'k8s/configmap.yaml'
+  const port = { path: portPath, before: run.project.savedFiles[portPath], after: run.project.savedFiles[portPath].replace('targetPort: http', 'targetPort: 8081') }
+  const config = { path: configPath, before: run.project.savedFiles[configPath], after: run.project.savedFiles[configPath].replace('pg-training.example', 'pg-missing.example') }
+  const phases = [{ id: 'port', edits: multiCause ? [port, config] : [port],
+    commands: multiCause ? [`kubectl apply -f ${portPath}`, `kubectl apply -f ${configPath}`, 'kubectl rollout restart deployment/assistant-api -n assistant'] : [`kubectl apply -f ${portPath}`], observationScenarioId: 'observe-port', recoveryScenarioId: 'recover' }]
+  if (!multiCause) phases.push({ id: 'dependency', edits: [config], commands: [`kubectl apply -f ${configPath}`, 'kubectl rollout restart deployment/assistant-api -n assistant'], observationScenarioId: 'observe-dependency', recoveryScenarioId: 'recover' })
+  const diagnosis = { kind: 'aks-diagnosis', version: 1, target: requestTarget, investigationArea: 'Service routing and captured dependency configuration', phases,
+    ...(multiCause ? { controlledProbe: { kind: 'isolated-port-repair', labId: 'aks-diagnosis-troubleshooting', phaseId: 'port', servicePort: 'http' } } : {}) }
+  const lab = { ...fixture.lab, ...(multiCause ? { id: 'aks-diagnosis-troubleshooting' } : {}), scenarios: { incident: diagnosis,
+    'observe-port': scenario(connection), 'observe-dependency': scenario({ status: 503, body: { error: 'The configured PostgreSQL host is not available in this trainer.', code: 'POSTGRES_CONNECTION' } }), recover: scenario(healthy) },
+  tasks: ['observe-port', 'observe-dependency', 'recover'].map(id => ({ id, check: () => false, dependencies: {}, verification: { scenarioId: id, scenarioVersion: 1 } })) }
+  if (multiCause) run.labId = lab.id
+  return { ...fixture, lab }
+}
+
+export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
+export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
+  capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true },
+  healthFixture: { initializationSeconds: 6 }, initialProjectFiles: { ...RELEASE_FILES } })
+
+export function releaseTestRun({ replicas = 2, minReadySeconds = 5, progressDeadlineSeconds = 60, maxSurge = 1, maxUnavailable = 0, graceSeconds = 30, resources = null, revisionHistoryLimit = 3 } = {}) {
+  let run = createBehavioralRun(RELEASE_TEST_LAB, { attemptId: 'release-test' })
+  const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+  Object.assign(deployment.spec, { replicas, minReadySeconds, progressDeadlineSeconds, revisionHistoryLimit })
+  deployment.spec.strategy.rollingUpdate = { maxSurge, maxUnavailable }
+  deployment.spec.template.spec.terminationGracePeriodSeconds = graceSeconds
+  if (resources) deployment.spec.template.spec.containers[0].resources = resources
+  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  for (const line of ['az group create -n rgaksreleases -l eastus', 'az acr create -g rgaksreleases -n acraksreleasesguided --sku Basic', 'az acr build --registry acraksreleasesguided -t assistant:release-v1 .', 'az aks create -g rgaksreleases -n aksreleases --enable-managed-identity --generate-ssh-keys --attach-acr acraksreleasesguided', 'az aks get-credentials -g rgaksreleases -n aksreleases', ...RELEASE_MANIFEST.kubernetesFiles.map(path => `kubectl apply -f ${path}`)]) run = act(run, RELEASE_TEST_LAB, { type: 'command', line }).run
+  return advanceKubernetesTime(run, 15, RELEASE_TEST_LAB)
+}
+
+export function applyReleaseTemplate(input, { version = '2.0', readinessPath = '/health/ready' } = {}, scenarioLab = RELEASE_TEST_LAB) {
+  let run = input
+  const app = version === '1.0' ? RELEASE_FILES['app.py'] : RELEASE_SOLUTION_FILES['app.py']
+  run = act(run, scenarioLab, { type: 'save-file', path: 'app.py', text: app }).run
+  const tag = version === '1.0' ? 'release-v1' : 'release-v2'
+  run = act(run, scenarioLab, { type: 'command', line: `az acr build --registry acraksreleasesguided -t assistant:${tag} .` }).run
+  const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
+  deployment.spec.template.spec.containers[0].image = `acraksreleasesguided.azurecr.io/assistant:${tag}`
+  deployment.spec.template.spec.containers[0].readinessProbe.httpGet.path = readinessPath
+  run = act(run, scenarioLab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  return act(run, scenarioLab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+}
+
+export function releaseUndoFixture() {
+  let run = advanceKubernetesTime(applyReleaseTemplate(releaseTestRun()), 90, RELEASE_TEST_LAB)
+  const configMap = parseYaml(run.project.savedFiles['k8s/configmap.yaml'])
+  configMap.data.APP_ENV = 'recovery-current'
+  const secret = parseYaml(run.project.savedFiles['k8s/secret.yaml'])
+  secret.stringData.PGPASSWORD = 'current-secret-after-v1'
+  for (const [path, object] of [['k8s/configmap.yaml', configMap], ['k8s/secret.yaml', secret]]) {
+    run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path, text: stringifyYaml(object) }).run
+    run = act(run, RELEASE_TEST_LAB, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  }
+  return run
+}
+
+export function getReleaseConfigSnapshot(run) {
+  const resources = run.runtime.kubernetes.clusters[RELEASE_TARGET.clusterId].resources
+  return structuredClone({ configMap: resources['ConfigMap/assistant/assistant-config'], secret: resources['Secret/assistant/assistant-credentials'] })
+}
 
 export function makeTrainingSnapshot() {
   return {
@@ -45,6 +326,38 @@ export function act(run, lab, action) {
   return result
 }
 
+/** Traverse learner actions only and fail at the exact Task boundary. */
+export function executeReleaseRecovery(run, lab, path) {
+  if (!['repair-reference', 'supply-key', 'undo-then-repair'].includes(path)) throw new Error(`Unknown release recovery path: ${path}`)
+  for (const [index, task] of lab.tasks.entries()) {
+    if (index === 2 && path === 'undo-then-repair') {
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout history deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout undo deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout status deployment/assistant-api -n assistant --watch=false' }).run
+    }
+    const selected = index === 2 && path === 'supply-key' ? { ...task, solution: task.solution.alternatives[0] } : task
+    run = executeAksSolution(run, lab, selected)
+    if (!evaluateLab(lab, run).tasks[index].done) throw new Error(`Recovery ${path} failed Task ${task.id}: ${evaluateLab(lab, run).tasks[index].reason}`)
+  }
+  return run
+}
+
+/** Use saved files, build/apply, observed missing-image incident, undo and final restart. */
+export function executeIndependentRelease(run, lab, strategy) {
+  for (const [index, task] of lab.tasks.entries()) {
+    const selected = { ...task, solution: { ...task.solution, steps: task.solution.steps.map(step => {
+      if (step.kind !== 'file' || step.path !== 'k8s/deployment.yaml') return step
+      const object = parseYaml(step.content)
+      object.spec.strategy.rollingUpdate = { ...strategy }
+      return { ...step, content: stringifyYaml(object) }
+    }) } }
+    run = executeAksSolution(run, lab, selected)
+    if (!evaluateLab(lab, run).tasks[index].done) throw new Error(`Independent release failed Task ${task.id}: ${evaluateLab(lab, run).tasks[index].reason}`)
+  }
+  return run
+}
+
 export function executeAksSolution(run, lab, task) {
   for (const step of task.solution?.steps ?? []) {
     if (step.kind === 'file') {
@@ -55,9 +368,19 @@ export function executeAksSolution(run, lab, task) {
         ? lab.solutionActionResolvers?.[step.resolver]?.(run, lab, task, step.resolver)
         : { type: 'command', line: step.line }
       if (!action) throw new Error(`Unknown AKS solution command resolver: ${step.resolver ?? '(missing)'}`)
-      run = act(run, lab, action).run
+      if (step.expectedFailure) {
+        const result = applyRunAction(run, action, lab)
+        if (result.diagnostics.length || !result.lines.some(line => line.kind === 'err' && line.text.includes(step.expectedFailure)))
+          throw new Error(`Expected observed command failure: ${step.expectedFailure}`)
+        run = result.run
+      } else run = act(run, lab, action).run
     } else if (step.kind === 'scenario') {
-      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
+      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-diagnosis') {
+        run = act(run, lab, { type: step.control === 'next' ? 'aks-diagnosis-next' : 'aks-diagnosis-start', scenarioId: step.scenarioId }).run
+      } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-release') {
+        run = act(run, lab, { type: step.control === 'finish' ? 'aks-release-finish' : 'aks-release-start', scenarioId: step.scenarioId }).run
+        for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
+      } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
         run = act(run, lab, { type: 'aks-probe-start', scenarioId: step.scenarioId }).run
         for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
       } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-resource-profile') {
@@ -72,6 +395,92 @@ export function executeAksSolution(run, lab, task) {
       throw new Error(`Unsupported AKS solution step: ${step.kind}`)
     }
   }
+  return run
+}
+
+/** Exercise Lab23 through ordinary learner edits, applies, restart and Verify actions. */
+export function executeDiagnosisRepair(run, lab, { targetPort = 'http', repairTogether = false, configFirst = false } = {}) {
+  const saveApply = (path, content) => {
+    run = act(run, lab, { type: 'save-file', path, text: content }).run
+    run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  }
+  const repairedService = path => lab.solutionFiles[path].replace('targetPort: http', `targetPort: ${targetPort}`)
+  if (repairTogether || configFirst) {
+    saveApply('k8s/configmap.yaml', lab.solutionFiles['k8s/configmap.yaml'])
+    if (configFirst) {
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+    }
+  }
+  for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml']) saveApply(path, repairedService(path))
+  if (repairTogether) {
+    run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'dependency-observed' }).run
+  if (!repairTogether && !configFirst) {
+    saveApply('k8s/configmap.yaml', lab.solutionFiles['k8s/configmap.yaml'])
+    run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'internal-recovered' }).run
+  run = act(run, lab, { type: 'aks-diagnosis-next', scenarioId: 'incident' }).run
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'external-recovered' }).run
+  for (const path of ['k8s/namespace.yaml', 'k8s/configmap.yaml', 'k8s/secret.yaml', 'k8s/deployment.yaml', 'k8s/service-internal.yaml', 'k8s/service-external.yaml'])
+    run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  for (const scenarioId of ['internal-recovered', 'external-recovered', 'repeatable-repair']) run = act(run, lab, { type: 'aks-request', scenarioId }).run
+  return run
+}
+
+/** Traverse Lab24 with saved source, a distinct build, live apply and real request Verifies. */
+export function executeIndependentDiagnosis(run, lab, { sourceRepair = 'config-binding', repairOrder = 'readiness-first' } = {}) {
+  if (!['config-binding', 'equivalent-parameter-name'].includes(sourceRepair) || !['readiness-first', 'source-first'].includes(repairOrder))
+    throw new Error('Unknown independent diagnosis repair path.')
+  const save = (path, text) => { run = act(run, lab, { type: 'save-file', path, text }).run }
+  const command = line => { run = act(run, lab, { type: 'command', line }).run }
+  const verify = scenarioId => { run = act(run, lab, { type: 'aks-request', scenarioId }).run }
+  if (!run.runtime.kubernetes.clusters[lab.scenarios.incident.target.clusterId]?.diagnosis?.incident) {
+    run = act(run, lab, { type: 'aks-diagnosis-start', scenarioId: 'incident' }).run
+    verify('inspect-incident')
+  }
+  const deploymentPath = 'k8s/deployment.yaml'
+  const readiness = () => {
+    save(deploymentPath, run.project.savedFiles[deploymentPath].replace('/health/readyz', '/health/ready'))
+    command(`kubectl apply -f ${deploymentPath}`)
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  const source = () => {
+    let app = lab.solutionFiles['app.py']
+    if (sourceRepair === 'equivalent-parameter-name') {
+      app = app.replace('"audience": cfg["audience"]', '"person_scope": cfg["audience"]')
+      save('retrieval.sql', lab.solutionFiles['retrieval.sql'].replace('%(audience)s', '%(person_scope)s'))
+    }
+    save('app.py', app)
+    command('az acr build --registry acraksdiagnosisindependent --image assistant:review-v2 .')
+    save(deploymentPath, repairOrder === 'source-first'
+      ? lab.solutionFiles[deploymentPath].replace('/health/ready', '/health/readyz')
+      : lab.solutionFiles[deploymentPath])
+    command(`kubectl apply -f ${deploymentPath}`)
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  if (repairOrder === 'readiness-first') {
+    readiness()
+    run = applyRunAction(run, { type: 'aks-request', scenarioId: 'restore-backup' }, lab).run
+    source()
+  } else {
+    source()
+    readiness()
+  }
+  verify('restore-backup')
+  verify('restore-support')
+  verify('validate-empty')
+  verify('validate-no-match')
+  for (const path of DIAGNOSIS_MANIFEST.kubernetesFiles) command(`kubectl apply -f ${path}`)
+  command('kubectl rollout restart deployment/assistant-api -n assistant')
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  for (const scenarioId of ['restore-backup', 'restore-support', 'validate-empty', 'validate-no-match', 'repeatable-recovery', 'restore-backup']) verify(scenarioId)
   return run
 }
 

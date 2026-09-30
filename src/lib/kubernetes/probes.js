@@ -1,4 +1,5 @@
 import { scheduleProbeRestart } from './container-lifecycle.js'
+import { serverStartupLogs } from './diagnosis-lifecycle.js'
 const clone = value => structuredClone(value)
 
 function evaluate(expression, signals) {
@@ -106,6 +107,7 @@ export function reconcileHealth(input, lab) {
         restartAtMs: null, terminatedAtMs: null, initializedAtMs: startedAtMs + duration,
         checks: { startup: check(probes.startup, startedAtMs + (probes.startup?.initialDelaySeconds ?? 0) * 1000), readiness: check(probes.readiness, null), liveness: check(probes.liveness, null) },
         localFaults: { admissionClosed: false, hung: false }, currentLogs: [], previous: null,
+        ...(serverStartupLogs(run, state.podSnapshots[pod.metadata.uid].artifactId).length ? { serverLogs: serverStartupLogs(run, state.podSnapshots[pod.metadata.uid].artifactId) } : {}),
       }
       if (container.startupPassed) readyChecks(container, pod, startedAtMs)
       syncPodReadiness(pod, container)

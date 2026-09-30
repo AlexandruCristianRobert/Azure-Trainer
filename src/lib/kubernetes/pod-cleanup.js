@@ -26,6 +26,10 @@ export function deleteCascade(state, roots, namespace = null) {
   }
   for (const candidate of Object.values(state.resources)) if (ids.has(candidate.metadata.uid)) {
     if (candidate.kind === 'Pod') clearPodState(state, candidate.metadata.uid)
+    if (candidate.kind === 'Deployment') {
+      delete state.rollouts?.deployments?.[candidate.metadata.uid]
+      delete state.rollouts?.proofs?.[candidate.metadata.uid]
+    }
     delete state.resources[`${candidate.kind}/${candidate.metadata.namespace ?? ''}/${candidate.metadata.name}`]
   }
 }

@@ -2,6 +2,7 @@ import { parser } from '@lezer/python'
 import { parsePythonIntegration } from './python-integration.js'
 import { parsePythonHealth } from './python-health.js'
 import { parsePythonWorkload } from './python-workload.js'
+import { parsePythonDiagnostics, diagnosticsCoreFiles } from './python-diagnostics.js'
 
 const diag = (code, message, path = 'app.py', text = '', from = 0) => {
   const prefix = text.slice(0, from)
@@ -137,7 +138,10 @@ function parseAssistantProject(files, manifest, text, tree) {
 }
 export function parsePythonProject(files, manifest = {}) {
   if (manifest.integration) {
-    const integration = parsePythonIntegration(files, manifest)
+    const logging = parsePythonDiagnostics(files, manifest)
+    if (logging.diagnostics.length) return { appSpec: null, diagnostics: logging.diagnostics }
+    const integration = parsePythonIntegration(manifest.diagnosticsVersion === 1 ? diagnosticsCoreFiles(files) : files, manifest)
+    if (logging.diagnosticsSpec && integration.appSpec) integration.appSpec = { ...integration.appSpec, diagnostics: logging.diagnosticsSpec }
     if (!manifest.healthVersion || integration.diagnostics.length) return integration
     const health = parsePythonHealth(files, manifest)
     if (health.diagnostics.length) return { appSpec: null, diagnostics: [...integration.diagnostics, ...health.diagnostics] }

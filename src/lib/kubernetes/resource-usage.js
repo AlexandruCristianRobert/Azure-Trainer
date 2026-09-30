@@ -122,10 +122,10 @@ export function accountResourceSecond(input, atMs, lab) {
     for (const pod of Object.values(cluster.resources).filter(item => item.kind === 'Pod' && item.status?.phase === 'Running'
       && runtime.assignments[item.metadata.uid])) {
       const health = containerFor(cluster, pod); const workload = workloadFor(run, cluster, pod)
-      if (!workload || !isAliveForAccounting(health, atMs)) continue
+      if ((!workload && lab?.capabilities?.kubernetesRollouts !== true) || !isAliveForAccounting(health, atMs)) continue
       const uid = pod.metadata.uid
       const cpuLimitM = normalizeContainerResources(pod.spec.containers[0].resources ?? {}).effective.cpuLimitM ?? Infinity
-      const usage = runtime.usage[uid] ??= { containerId: health.containerId, workloadDigest: workload.helperDigest,
+      const usage = runtime.usage[uid] ??= { containerId: health.containerId, workloadDigest: workload?.helperDigest ?? null,
         cpuDemandM: 0, cpuDeliveredM: 0, cpuThrottledM: 0, memoryBytes: RESOURCE_FIXTURES.baseMemoryMiB * MiB,
         cpuDemandTotalM: 0, cpuDeliveredTotalM: 0, cpuThrottledTotalM: 0,
         backlog: 0, lastAccountedAtMs: atMs - 1000, readySinceMs: health.ready ? health.startedAtMs : null, window: null }
@@ -136,10 +136,10 @@ export function accountResourceSecond(input, atMs, lab) {
       }
       const assignedWork = workByPod.get(uid) ?? 0
       const profile = experiment ? PROFILES[experiment.profileId] : null
-      const unitCost = profile?.kind === 'ai-wait' ? 1 : workload.units
+      const unitCost = profile?.kind === 'ai-wait' ? 1 : workload?.units ?? 1
       const isProfileWork = profilePodIds.has(uid) && profile?.kind === 'workload' && experiment?.phase === 'running'
         && (assignedWork > 0 || rate > 0)
-      const scratch = isProfileWork ? workload.scratchMiB * MiB : 0
+      const scratch = isProfileWork && workload ? workload.scratchMiB * MiB : 0
       const memoryBytes = RESOURCE_FIXTURES.baseMemoryMiB * MiB + scratch
       const workDemandM = assignedWork * unitCost
       const demand = 10 + workDemandM

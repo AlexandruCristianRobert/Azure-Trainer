@@ -1,5 +1,9 @@
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { validateKubernetesObject } from './schema.js'
+import { normalizeRolloutSpec } from './rollout-schema.js'
+import { rolloutTemplate, rolloutTemplateHash, registerRevision } from './rollout-history.js'
+import { validRolloutRedactionPaths } from './rollout-redaction.js'
+import { validReleaseExperiment, validReleaseProofs } from './release-schema.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -11,6 +15,9 @@ const RESOURCES_TROUBLESHOOTING_LAB_ID = 'aks-resources-troubleshooting'
 const RESOURCES_TROUBLESHOOTING_CLUSTER_ID = '/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourceGroups/rg-aks-resources-troubleshooting/providers/Microsoft.ContainerService/managedClusters/aks-resources-troubleshooting'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
+import { requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs } from './request-records.js'
+import { validDiagnosisState } from './diagnosis-incidents.js'
+import { validSealedLifecycleReceipt } from './diagnosis-lifecycle.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -26,7 +33,8 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
     || !isPlainObject(runtime.contexts) || !isPlainObject(runtime.clusters) || !Array.isArray(runtime.requests) || runtime.requests.length > 100
     || !runtime.requests.every(item => isPlainObject(item) && typeof item.id === 'string'
       && Number.isSafeInteger(item.sequence) && item.sequence >= 1 && item.sequence < run.nextSequence
-      && item.id === `aks-request-${item.sequence}` && typeof item.namespace === 'string'
+      && item.id === `${item.diagnosticsVersion === 1 ? 'request' : 'aks-request'}-${item.sequence}` && typeof item.namespace === 'string'
+      && validRequestDiagnostics(item, run)
       && (item.connectivity === true
         ? (item.scenarioId === null || typeof item.scenarioId === 'string') && (item.status === null || Number.isInteger(item.status) && item.status >= 100 && item.status <= 599)
           && isPlainObject(item.transport) && typeof item.transport.ok === 'boolean'
@@ -39,6 +47,7 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
       && (item.dependencyTrace === undefined || Array.isArray(item.dependencyTrace))
       && (item.integrationTrace === undefined || item.integrationTrace === null || validIntegrationTrace(item.integrationTrace))
       && (item.workload === undefined || validWorkloadRequest(item, run)))
+    || (runtime.requestsTruncated !== undefined && (!requestDiagnosticsEnabled(run) || !Number.isSafeInteger(runtime.requestsTruncated) || runtime.requestsTruncated < 0))
     || new Set(runtime.requests.map(item => item.id)).size !== runtime.requests.length
     || new Set(runtime.requests.map(item => item.sequence)).size !== runtime.requests.length || !isJsonValue(runtime)) return false
   if (!validConfigIncident(runtime, run)) return false
@@ -47,7 +56,28 @@ export function validateKubernetesRuntime(runtime, run, lab = null) {
   if (Object.values(runtime.contexts).some(context => !isPlainObject(context) || !clusterIds.has(context.clusterId) || !validNamespace(context.namespace))) return false
   if (runtime.currentContext !== null && !Object.hasOwn(runtime.contexts, runtime.currentContext)) return false
   return Object.keys(runtime.clusters).length === clusterIds.size
-    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id))
+    && Object.entries(runtime.clusters).every(([id, state]) => clusterIds.has(id) && validClusterState(state, run, lab, id)
+      && Object.entries(state.health?.containers ?? {}).every(([uid, container]) => validContainerRequestLogs(container, uid, state, run, id)))
+}
+
+export function migrateMissingRolloutState(input, lab) {
+  if (lab?.capabilities?.kubernetesRollouts !== true || !isPlainObject(input.runtime?.kubernetes?.clusters)) return input
+  let run = input
+  for (const [clusterId, state] of Object.entries(input.runtime.kubernetes.clusters)) {
+    if (!isPlainObject(state) || state.rollouts !== undefined) continue
+    // Only adopt a valid pre-rollout cluster. Never repair corrupt or explicit
+    // malformed rollout state during saved-run acceptance.
+    const empty = { version: 1, deployments: {}, experiment: null, receipts: [] }
+    if (!validClusterState({ ...state, rollouts: empty }, input, lab, clusterId)) return input
+    if (run === input) run = structuredClone(input)
+    run.runtime.kubernetes.clusters[clusterId].rollouts = empty
+    for (const deployment of Object.values(state.resources).filter(item => item.kind === 'Deployment')) {
+      const adopted = registerRevision(run, { clusterId, deploymentUid: deployment.metadata.uid }, deployment.spec.template)
+      if (adopted.diagnostics.length) return input
+      run = adopted.run
+    }
+  }
+  return run
 }
 
 function validIntegrationIncident(runtime, run) {
@@ -67,7 +97,7 @@ function validIntegrationIncident(runtime, run) {
   return true
 }
 
-function validIntegrationTrace(trace) {
+export function validIntegrationTrace(trace) {
   const safeBindingKeys = new Set(['collection', 'audience', 'published', 'vector', 'cutoff', 'limit'])
   const profileIds = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'answer-wait-150ms', 'embedding-timeout-always', 'retry-after-too-long'])
   const validAttempt = attempt => isPlainObject(attempt) && Object.keys(attempt).every(key => ['operation', 'attemptNumber', 'startMs', 'durationMs', 'timeoutMs', 'errorCode', 'delayBeforeNextMs'].includes(key))
@@ -142,14 +172,21 @@ function validClusterState(state, run, lab, clusterId) {
   const connectivityEnabled = lab?.capabilities?.kubernetesConnectivity === true
   const probesEnabled = lab?.capabilities?.kubernetesProbes === true
   const resourcesEnabled = lab?.capabilities?.kubernetesResources === true
+  const rolloutsEnabled = lab?.capabilities?.kubernetesRollouts === true
   if (!isPlainObject(state) || !isPlainObject(state.resources) || !isPlainObject(state.podSnapshots)
     || !Array.isArray(state.events) || state.events.length > 300 || !Array.isArray(state.receipts)
     || state.receipts.length > 100 || !isPlainObject(state.projectionDue) || !isJsonValue(state)) return false
+  if (!validDiagnosisState(state.diagnosis, run, lab, clusterId)) return false
   if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
+  if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 40)) return false
+  if (rolloutsEnabled && (state.rollouts.experiment !== null && !validReleaseExperiment(state.rollouts.experiment, state, clusterId, run, lab)
+    || !state.rollouts.receipts.every(receipt => validReleaseExperiment(receipt, state, clusterId, run, lab, true)) || !validReleaseProofs(state.rollouts.proofs, state, run))) return false
+  if (!rolloutsEnabled && state.rollouts !== undefined) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
     || !Array.isArray(state.health.events) || state.health.events.length > 1000)) return false
+  if (probesEnabled && !state.health.receipts.every(receipt => validSealedLifecycleReceipt(receipt, run))) return false
   if (!probesEnabled && state.health !== undefined) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()
@@ -177,9 +214,36 @@ function validClusterState(state, run, lab, clusterId) {
       ...(resource.type === undefined ? {} : { type: resource.type }),
       ...(resource.data === undefined ? {} : { data: resource.data }),
     }
-    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { deployments: [...deployments, ...declaredObjects.filter(([, item]) => item.kind === 'HorizontalPodAutoscaler').map(([, item]) => item)], kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}) } }).diagnostics.length) return false
+    if (validateKubernetesObject(desired, { namespace: resource.metadata.namespace, capabilities: { aksCapstoneHpa: lab?.capabilities?.aksCapstone === true && run.stages?.activeStageId === 'resilience', deployments: [...deployments, ...declaredObjects.filter(([, item]) => item.kind === 'HorizontalPodAutoscaler').map(([, item]) => item)], kubernetesConfiguration: true, ...(probesEnabled ? { kubernetesProbes: true } : {}), ...(resourcesEnabled ? { kubernetesResources: true } : {}), ...(rolloutsEnabled ? { kubernetesRollouts: true } : {}) } }).diagnostics.length) return false
+    if (rolloutsEnabled && resource.kind === 'Deployment' && normalizeRolloutSpec({ ...(resource.spec.strategy ?? {}), minReadySeconds: resource.spec.minReadySeconds, progressDeadlineSeconds: resource.spec.progressDeadlineSeconds, revisionHistoryLimit: resource.spec.revisionHistoryLimit }).diagnostics.length) return false
   }
   const byUid = new Map(resources.map(([, resource]) => [resource.metadata.uid, resource]))
+  if (rolloutsEnabled) for (const [uid, rollout] of Object.entries(state.rollouts.deployments)) {
+    const deploy = byUid.get(uid)
+    if (deploy?.kind !== 'Deployment' || !isPlainObject(rollout) || !Number.isInteger(rollout.nextRevision) || rollout.nextRevision < 2
+      || !Number.isInteger(rollout.currentRevision) || rollout.currentRevision < 1 || rollout.nextRevision !== rollout.currentRevision + 1
+      || typeof rollout.currentRsUid !== 'string' || !Number.isInteger(rollout.observedGeneration) || rollout.observedGeneration < 1 || rollout.observedGeneration > deploy.metadata.generation || !Array.isArray(rollout.revisions) || rollout.revisions.length < 1 || rollout.revisions.length > 20
+      || !isPlainObject(rollout.availableSinceByPod) || !isPlainObject(rollout.progressSnapshot) || !Array.isArray(rollout.conditions) || rollout.conditions.length > 20
+      || !Number.isSafeInteger(rollout.lastProgressAtMs) || rollout.lastProgressAtMs < 0 || rollout.lastProgressAtMs > run.runtime.simTimeMs
+      || ['updated', 'ready', 'available', 'oldActive'].some(key => !Number.isInteger(rollout.progressSnapshot[key]) || rollout.progressSnapshot[key] < 0)
+      || Object.entries(rollout.availableSinceByPod).some(([podUid, atMs]) => {
+        const pod = byUid.get(podUid); const rs = byUid.get(pod?.metadata?.ownerReferences?.[0]?.uid)
+        return pod?.kind !== 'Pod' || !rs?.metadata.ownerReferences?.some(ref => ref.uid === uid) || !Number.isSafeInteger(atMs) || atMs < 0 || atMs > run.runtime.simTimeMs
+      })) return false
+    const revisions = new Set(); const rsUids = new Set()
+    for (const revision of rollout.revisions) {
+      const rs = byUid.get(revision?.rsUid)
+      if (!isPlainObject(revision) || !Number.isInteger(revision.revision) || revision.revision < 1 || revision.revision >= rollout.nextRevision || revisions.has(revision.revision) || rsUids.has(revision.rsUid)
+        || typeof revision.templateHash !== 'string' || !isPlainObject(revision.template) || typeof revision.imageRef !== 'string'
+        || !validRolloutRedactionPaths(revision.redactedPaths, revision.template)
+        || revision.templateHash !== rolloutTemplateHash(revision.template)
+        || JSON.stringify(rolloutTemplate(rs?.spec?.template ?? {})) !== JSON.stringify(revision.template)
+        || rs?.kind !== 'ReplicaSet' || !rs.metadata.ownerReferences?.some(ref => ref.uid === uid) || rs.spec?.template?.spec?.containers?.[0]?.image !== revision.imageRef) return false
+      revisions.add(revision.revision); rsUids.add(revision.rsUid)
+    }
+    if (rollout.currentRevision !== Math.max(...revisions) || !rollout.revisions.some(item => item.rsUid === rollout.currentRsUid && item.revision === rollout.currentRevision
+      && JSON.stringify(item.template) === JSON.stringify(rolloutTemplate(deploy.spec.template)))) return false
+  }
   if (resourcesEnabled && !validResourceAssignments(state.resourcesRuntime, byUid)) return false
   if (probesEnabled && !validHealthState(state.health, byUid, run.runtime.simTimeMs, lab, clusterId)) return false
   if (!validConnectivity(state, resources, byUid, run, connectivityEnabled, clusterId, lab)) return false
@@ -193,8 +257,9 @@ function validClusterState(state, run, lab, clusterId) {
       if (!parent || parent.kind !== expectedKind || owner.kind !== expectedKind || owner.name !== parent.metadata.name
         || parent.metadata.namespace !== resource.metadata.namespace) return false
       if (resource.kind === 'ReplicaSet') {
+        const recorded = rolloutsEnabled && state.rollouts.deployments[parent.metadata.uid]?.revisions?.find(item => item.rsUid === resource.metadata.uid)
         if (!isPlainObject(resource.spec) || !isPlainObject(parent.spec) || JSON.stringify(resource.spec.selector) !== JSON.stringify(parent.spec.selector)
-          || JSON.stringify(resource.spec.template) !== JSON.stringify(parent.spec.template)) return false
+          || (recorded ? JSON.stringify(rolloutTemplate(resource.spec.template)) !== JSON.stringify(recorded.template) : JSON.stringify(resource.spec.template) !== JSON.stringify(parent.spec.template))) return false
       } else if (!isPlainObject(parent.spec?.template) || JSON.stringify((({ nodeName, ...spec }) => spec)(resource.spec)) !== JSON.stringify(parent.spec.template.spec)
         || JSON.stringify(resource.metadata.labels) !== JSON.stringify(parent.spec.template.metadata.labels)) return false
     }
@@ -416,7 +481,8 @@ function validResourceUsage(uid, usage, state, run) {
   const artifact = run.artifacts.buildsById?.[state.podSnapshots?.[uid]?.artifactId]
   const window = usage?.window
   return !!pod && !!container && !!state.resourcesRuntime.assignments[uid] && isPlainObject(usage)
-    && usage.containerId === container.containerId && usage.workloadDigest === artifact?.appSpec?.workload?.helperDigest
+    && usage.containerId === container.containerId && (usage.workloadDigest === artifact?.appSpec?.workload?.helperDigest
+      || state.rollouts?.version === 1 && !artifact?.appSpec?.workload && usage.workloadDigest === null)
     && ['cpuDemandM', 'cpuDeliveredM', 'cpuThrottledM', 'memoryBytes', 'backlog'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e9)
     && usage.memoryBytes <= 16 * 1024 * 1024 * 1024
     && ['cpuDemandTotalM', 'cpuDeliveredTotalM', 'cpuThrottledTotalM'].every(key => Number.isFinite(usage[key]) && usage[key] >= 0 && usage[key] <= 1e12)
@@ -502,10 +568,10 @@ function validHealthState(health, byUid, nowMs, lab, clusterId) {
       || (value.restartAtMs !== null && value.terminatedAtMs !== null && value.restartAtMs <= value.terminatedAtMs)
       || !isPlainObject(value.localFaults) || typeof value.localFaults.admissionClosed !== 'boolean' || typeof value.localFaults.hung !== 'boolean'
       || !isPlainObject(value.checks) || !Array.isArray(value.currentLogs) || value.currentLogs.length > 100
-      || !value.currentLogs.every(line => typeof line === 'string' && line.length <= 4096)
+      || !value.currentLogs.every(line => typeof line === 'string' && line.length <= 4096 || isPlainObject(line))
       || (value.previous !== null && (!isPlainObject(value.previous) || typeof value.previous.containerId !== 'string'
         || !Array.isArray(value.previous.logs) || value.previous.logs.length > 100
-        || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096)
+        || !value.previous.logs.every(line => typeof line === 'string' && line.length <= 4096 || isPlainObject(line))
         || !['StartupProbeFailed', 'LivenessProbeFailed', 'OOMKilled'].includes(value.previous.reason)
         || value.previous.reason === 'OOMKilled' && value.previous.exitCode !== 137))) return false
     ids.add(value.containerId)
@@ -660,7 +726,16 @@ function validHistoricalConnectivityLog(log, request, run, state, lab, clusterId
         || Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence.completed === true
           && ['passed', 'failed'].includes(evidence.outcome) && evidence.measurements?.clusterId === clusterId
           && evidence.measurements?.samples?.some(matchesHistoricalResourceSample)))
-    return probeReceipt || resourceReceipt
+    const releaseReceipt = lab?.capabilities?.kubernetesRollouts === true && origin?.kind === 'external' && origin.clusterId === clusterId
+      && [...(state.rollouts?.receipts ?? []), state.rollouts?.experiment].filter(Boolean).some(receipt => receipt.target.clusterId === clusterId
+        && receipt.samples?.some(sample => sample.requestId === request.id && sample.status === log.status && sample.podUid === log.podUid && sample.artifactId === log.artifactId))
+    const milestoneReceipt = lab?.capabilities?.kubernetesRollouts === true && origin?.kind === 'external' && origin.clusterId === clusterId
+      && Object.values(run.evidence?.experimentsById ?? {}).some(record => record.attemptId === run.attemptId
+        && lab.scenarios?.[record.scenarioId]?.kind === 'aks-release-milestone'
+        && record.measurements?.clusterId === clusterId && record.measurements?.namespace === log.namespace
+        && [record.measurements?.proof?.sample, record.measurements?.proof?.info].some(sample => sample?.requestId === request.id
+          && sample.status === log.status && sample.podUid === log.podUid && sample.artifactId === log.artifactId))
+    return probeReceipt || resourceReceipt || releaseReceipt || milestoneReceipt
   }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence

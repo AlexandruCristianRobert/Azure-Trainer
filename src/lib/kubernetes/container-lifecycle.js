@@ -1,6 +1,7 @@
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
 import { appendHealthReceipt } from './health-history.js'
+import { serverStartupLogs } from './diagnosis-lifecycle.js'
 
 function canPull(run, cluster, image) {
   const host = image?.split('/')[0]?.toLowerCase()
@@ -72,14 +73,24 @@ export function processContainerLifecycle(run, atMs, lab) {
     if (!pod) continue
     if (container.terminatedAtMs !== null && container.terminatedAtMs <= atMs) {
       container.previous = { containerId: container.containerId, logs: container.currentLogs, reason: container.restartReason,
+        ...(container.serverLogs === undefined ? {} : { serverLogs: container.serverLogs }),
+        ...(container.logsTruncated === undefined ? {} : { logsTruncated: container.logsTruncated }),
         ...(container.restartReason === 'OOMKilled' ? { exitCode: 137 } : {}) }
       container.currentLogs = []
+      if (container.serverLogs !== undefined) container.serverLogs = []
+      if (container.logsTruncated !== undefined) container.logsTruncated = 0
       container.terminatedAtMs = null
       const usage = state.resourcesRuntime?.usage?.[uid]
       if (usage) {
         usage.cpuDemandM = 0; usage.cpuDeliveredM = 0; usage.cpuThrottledM = 0
         usage.readySinceMs = null; usage.window = null
       }
+    }
+    // Finish a termination already scheduled before Pod deletion, while
+    // retaining the restart marker as a stopped-process accounting boundary.
+    if (pod.metadata.deletionTimestamp !== undefined) {
+      if (container.restartAtMs !== null) container.restartBlockReason = 'PodTerminating'
+      continue
     }
     if (container.restartAtMs === null || container.restartAtMs > atMs) continue
     if (!pod || pod.status?.phase !== 'Running') continue
@@ -113,6 +124,7 @@ export function processContainerLifecycle(run, atMs, lab) {
         readiness: probes.readinessProbe ? { nextAtMs: null, pending: null, successes: 0, failures: 0 } : null,
         liveness: probes.livenessProbe ? { nextAtMs: null, pending: null, successes: 0, failures: 0 } : null,
       }, currentLogs: [], previous: container.previous, restartReason: null, restartDelayMs: null,
+      ...(serverStartupLogs(run, snapshot.artifactId).length ? { serverLogs: serverStartupLogs(run, snapshot.artifactId) } : {}),
       restartBlockReason: null, localFaults: { ...container.localFaults, hung: false },
     }
     if (state.resourcesRuntime?.usage?.[uid]) {
@@ -123,7 +135,15 @@ export function processContainerLifecycle(run, atMs, lab) {
     }
     appendHealthReceipt(state, { cause: container.restartReason === 'OOMKilled' ? 'oom' : 'probe', probeType: container.restartReason, podUid: uid,
       oldContainerId: container.containerId, newContainerId: state.health.containers[uid].containerId,
-      atMs, restartCount })
+      atMs, restartCount,
+      ...(container.previous?.serverLogs?.length && container.restartReason === 'LivenessProbeFailed' ? { diagnosisLifecycle: {
+        artifactId: prior.artifactId,
+        deploymentUid: Object.values(state.resources).find(object => object.kind === 'ReplicaSet' && pod.metadata.ownerReferences?.some(ref => ref.uid === object.metadata.uid))?.metadata.ownerReferences?.[0]?.uid ?? null,
+        previousServerLogs: [...container.previous.serverLogs],
+        events: state.health.events.filter(event => event.podUid === uid && event.type === 'probe-result' && event.probeType === 'liveness'
+          && !event.success && event.atMs >= container.startedAtMs && event.atMs <= atMs).slice(-4),
+      } } : {}),
+    })
   }
   return run
 }

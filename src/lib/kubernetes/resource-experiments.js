@@ -9,6 +9,7 @@ import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
 import { RESOURCE_MANIFEST, RESOURCE_SOLUTION_FILES } from '../../data/templates/aks-python/resources.js'
 import { projectSourceHash, selectBuildFiles } from '../project/build.js'
+import { validateAksExperimentStart } from './capstone/resilience.js'
 
 const clone = value => structuredClone(value)
 const PROFILES = RESOURCE_FIXTURES.profiles
@@ -117,6 +118,9 @@ export function resourceExperimentActive(run) {
 function digest(value) { let hash = 2166136261; for (const c of JSON.stringify(canonicalize(value))) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619); return (hash >>> 0).toString(16) }
 
 export function startResourceExperiment(input, scenarioId, lab) {
+  const capstoneIssues = validateAksExperimentStart(input, lab, scenarioId)
+  if (capstoneIssues.length) return { run: input, diagnostics: capstoneIssues }
+  if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => state.rollouts?.experiment?.status === 'active')) return { run: input, diagnostics: [invalid('A release experiment is already active. Finish or cancel it first.', 'RESOURCE_EXPERIMENT_ACTIVE')] }
   if (lab?.capabilities?.kubernetesResources !== true || !validScenario(lab, scenarioId))
     return { run: input, diagnostics: [invalid('Resource experiment starts accept only a declared immutable profile ID.')] }
   if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase) || state.health?.experiment?.status === 'active'))
@@ -323,11 +327,23 @@ function persistExperimentResult(input, clusterId, experiment, lab) {
   let run = input
   const task = lab.tasks.find(item => item.verification?.scenarioId === experiment.scenarioId && item.verification?.scenarioVersion === 1)
   if (task) {
+    const capstone = lab?.capabilities?.aksCapstone === true
+    const samples = capstone ? experiment.routeSamples.map(sample => ({ atMs: sample.atMs, offsetSeconds: sample.offsetSeconds,
+      requestId: sample.requestId, status: sample.status, body: sample.body, podUid: sample.route?.podUid ?? null,
+      workload: sample.workload, profileId: sample.integrationTrace?.profileId ?? null, final: sample.final })) : experiment.routeSamples
+    const observations = capstone ? experiment.observations.map(row => ({ atMs: row.atMs, second: row.second,
+      desiredReplicas: row.desiredReplicas ?? null, readyReplicas: row.readyReplicas ?? null,
+      podUids: row.pods.map(pod => pod.uid) })) : experiment.observations
     run = recordVerification(run, lab, task.id, { scenarioId: experiment.scenarioId, scenarioVersion: 1,
       outcome: experiment.outcome, completed: experiment.outcome === 'passed', startedAtMs: experiment.phaseZeroAtMs ?? experiment.startedAtMs,
       endedAtMs: experiment.endedAtMs,
       measurements: { clusterId, scenarioId: experiment.scenarioId, profileId: experiment.profileId, totals: experiment.totals,
-        samples: experiment.routeSamples, observations: experiment.observations, scaleReceipts: experiment.scaleReceipts ?? [],
+        ...(capstone ? { nativeExperiment: { scenarioId: experiment.scenarioId, startedAtMs: experiment.startedAtMs,
+          phaseZeroAtMs: experiment.phaseZeroAtMs, endedAtMs: experiment.endedAtMs,
+          deploymentUid: experiment.deploymentUid, hpaUid: experiment.hpaUid, fingerprintHash: digest(experiment.fingerprint),
+          hpaPolicy: experiment.hpaPolicy, baselineReplicas: experiment.baselineReplicas, workloadSpec: experiment.workloadSpec,
+          pendingObserved: experiment.pendingObserved, oomObserved: experiment.oomObserved } } : {}),
+        samples, observations, scaleReceipts: experiment.scaleReceipts ?? [],
         fingerprint: experiment.historicalFingerprint } })
     resourceRuntime(run, clusterId).experiment.evidenceId = run.evidence.currentEvidenceByTask[task.id]
     const incident = resourceRuntime(run, clusterId).incident

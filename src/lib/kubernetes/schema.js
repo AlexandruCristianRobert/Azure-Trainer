@@ -1,6 +1,7 @@
 import { parseHttpProbe } from './probe-schema.js'
 import { normalizeContainerResources } from './resource-schema.js'
 import { validateHpa } from './hpa.js'
+import { normalizeRolloutSpec } from './rollout-schema.js'
 
 const allowedKinds = new Set(['Namespace', 'Deployment', 'Service', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler'])
 const namePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
@@ -117,8 +118,8 @@ function validateContainer(container, root, configuration, probes, resources) {
   return null
 }
 
-function validateDeployment(value, root, configuration, probes, resources) {
-  let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template']), root)
+function validateDeployment(value, root, configuration, probes, resources, rollouts) {
+  let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template', ...(rollouts ? ['strategy', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit'] : [])]), root)
   if (issue) return issue
   if ((!resources && value.spec?.replicas === undefined) || (value.spec?.replicas !== undefined && (!Number.isInteger(value.spec.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)))) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
   issue = allowed(value.spec.selector, new Set(['matchLabels']), root)
@@ -137,6 +138,12 @@ function validateDeployment(value, root, configuration, probes, resources) {
   if (probes && value.spec.template.spec.restartPolicy !== undefined && value.spec.template.spec.restartPolicy !== 'Always') return diag('INVALID_RESTART_POLICY', value.spec.template.spec.restartPolicy, root, 'Deployment restartPolicy must be Always.')
   issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes, resources)
   if (issue) return issue
+  if (rollouts) {
+    const strategy = Object.hasOwn(value.spec, 'strategy') ? value.spec.strategy : {}
+    if (!object(strategy) || Array.isArray(strategy) || Object.keys(strategy).some(key => !['type', 'rollingUpdate'].includes(key))) return diag('INVALID_ROLLOUT_STRATEGY', undefined, root, 'Deployment strategy must contain only type and rollingUpdate.')
+    const parsed = normalizeRolloutSpec({ ...strategy, ...(value.spec.minReadySeconds === undefined ? {} : { minReadySeconds: value.spec.minReadySeconds }), ...(value.spec.progressDeadlineSeconds === undefined ? {} : { progressDeadlineSeconds: value.spec.progressDeadlineSeconds }), ...(value.spec.revisionHistoryLimit === undefined ? {} : { revisionHistoryLimit: value.spec.revisionHistoryLimit }) })
+    if (parsed.diagnostics.length) return diag(parsed.diagnostics[0].code, undefined, root, parsed.diagnostics[0].message)
+  }
   if (value.spec.template.spec.volumes !== undefined) {
     if (!Array.isArray(value.spec.template.spec.volumes)) return diag('INVALID_VOLUMES', 'volumes', root)
     const names = new Set(); const mountNames = new Set(value.spec.template.spec.containers[0].volumeMounts?.map(item => item.name) ?? [])
@@ -201,6 +208,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   const configuration = capabilities.kubernetesConfiguration === true
   const probes = capabilities.kubernetesProbes === true
   const resources = capabilities.kubernetesResources === true
+  const rollouts = capabilities.kubernetesRollouts === true
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
@@ -217,8 +225,9 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   } else if (input.kind === 'ConfigMap') { if (input.spec !== undefined || input.type !== undefined || input.stringData !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateConfigMap(input, root) }
   else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
-  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources)
+  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts)
   else if (input.kind === 'HorizontalPodAutoscaler') {
+    if (rollouts && capabilities.aksCapstoneHpa !== true) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root, 'HPA creation requires the active capstone resilience checkpoint and a settled deployment; release Labs use fixed replicas.')] }
     if (!resources) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
     const result = validateHpa(input, { namespace: resolvedNamespace, deployments: capabilities.deployments ?? [] })
     return result.diagnostics.length ? result : { object: result.object, diagnostics: [] }
@@ -234,6 +243,13 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
     }
   }
   if (output.kind === 'Deployment' && resources && output.spec.replicas === undefined) output.spec.replicas = 1
+  if (output.kind === 'Deployment' && rollouts) {
+    const parsed = normalizeRolloutSpec({ ...(output.spec.strategy ?? {}), ...(output.spec.minReadySeconds === undefined ? {} : { minReadySeconds: output.spec.minReadySeconds }), ...(output.spec.progressDeadlineSeconds === undefined ? {} : { progressDeadlineSeconds: output.spec.progressDeadlineSeconds }), ...(output.spec.revisionHistoryLimit === undefined ? {} : { revisionHistoryLimit: output.spec.revisionHistoryLimit }) })
+    output.spec.strategy = { type: parsed.value.type, rollingUpdate: parsed.value.rollingUpdate }
+    output.spec.minReadySeconds = parsed.value.minReadySeconds
+    output.spec.progressDeadlineSeconds = parsed.value.progressDeadlineSeconds
+    output.spec.revisionHistoryLimit = parsed.value.revisionHistoryLimit
+  }
   if (output.kind === 'Service') {
     output.spec.type ??= 'ClusterIP'
     output.spec.ports[0].targetPort ??= output.spec.ports[0].port

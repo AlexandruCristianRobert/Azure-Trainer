@@ -4,6 +4,8 @@ import { act, advanceResources, resourceView, seedResourceTest, startHealthFault
 import { startResourceProfileFixture } from '../src/lib/kubernetes/resource-usage.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { clearPodState } from '../src/lib/kubernetes/pod-cleanup.js'
+import { setDeploymentReplicas } from '../src/lib/kubernetes/scheduling.js'
+import { reconcileKubernetes } from '../src/lib/kubernetes/reconcile.js'
 
 function runResourceProfile(run, lab, profileId, seconds) {
   const started = startResourceProfileFixture(run, profileId, lab)

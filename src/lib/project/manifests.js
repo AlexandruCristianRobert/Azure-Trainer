@@ -16,6 +16,9 @@ import { CONNECTIVITY_INDEPENDENT_MANIFEST } from '../../data/templates/aks-pyth
 import { INTEGRATION_MANIFEST } from '../../data/templates/aks-python/integration.js'
 import { HEALTH_MANIFEST } from '../../data/templates/aks-python/health.js'
 import { RESOURCE_MANIFEST } from '../../data/templates/aks-python/resources.js'
+import { RELEASE_MANIFEST } from '../../data/templates/aks-python/releases.js'
+import { DIAGNOSIS_MANIFEST } from '../../data/templates/aks-python/diagnosis.js'
+import { CAPSTONE_MANIFEST as AKS_CAPSTONE_MANIFEST } from '../../data/templates/aks-python/capstone.js'
 
 const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROBE_MANIFEST.id]: PROBE_MANIFEST,
   [INDEPENDENT_PROBE_MANIFEST.id]: INDEPENDENT_PROBE_MANIFEST, [FOUNDRY_MANIFEST.id]: FOUNDRY_MANIFEST,
@@ -27,6 +30,7 @@ const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROB
   [INDEPENDENT_FOUNDATION_MANIFEST.id]: INDEPENDENT_FOUNDATION_MANIFEST,
   [CONFIG_INDEPENDENT_MANIFEST.id]: CONFIG_INDEPENDENT_MANIFEST, [CONNECTIVITY_MANIFEST.id]: CONNECTIVITY_MANIFEST,
   [CONNECTIVITY_INDEPENDENT_MANIFEST.id]: CONNECTIVITY_INDEPENDENT_MANIFEST, [INTEGRATION_MANIFEST.id]: INTEGRATION_MANIFEST,
-  [HEALTH_MANIFEST.id]: HEALTH_MANIFEST, [RESOURCE_MANIFEST.id]: RESOURCE_MANIFEST })
+  [HEALTH_MANIFEST.id]: HEALTH_MANIFEST, [RESOURCE_MANIFEST.id]: RESOURCE_MANIFEST, [RELEASE_MANIFEST.id]: RELEASE_MANIFEST,
+  [DIAGNOSIS_MANIFEST.id]: DIAGNOSIS_MANIFEST, [AKS_CAPSTONE_MANIFEST.id]: AKS_CAPSTONE_MANIFEST })
 
 export function getProjectManifest(manifestId) { return manifests[manifestId] ?? PROJECT_MANIFEST }

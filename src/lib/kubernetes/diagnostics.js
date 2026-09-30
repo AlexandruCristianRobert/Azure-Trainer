@@ -1,7 +1,43 @@
 import { routeServiceRequest, resolveServiceDns } from './connectivity.js'
+import { currentRolloutSecrets, retainedRolloutRedactions } from './rollout-redaction.js'
 
 const error = (code, message) => ({ code, message, path: null, line: null, column: null })
 const clean = value => JSON.stringify(value)
+
+export function rolloutDeadlineGuidance(name, namespace) {
+  return `ProgressDeadlineExceeded: the new revision has stopped making progress. Live Pods are preserved. Inspect with kubectl describe deployment ${name} -n ${namespace} and kubectl get pods -n ${namespace}; then inspect Pod events and logs.`
+}
+
+// Include historical captured configuration: a Secret may have changed since
+// an old container started, but its captured credential remains sensitive.
+export function redactRolloutOutput(text, state) {
+  // Match marked fields against the original output. Replacing a current
+  // credential first can alter a mixed old/current field and hide its match,
+  // leaving the old credential visible after its captured Pod has disappeared.
+  // Fields can also overlap each other, so collect and merge their original
+  // ranges before making any substitution.
+  const ranges = []
+  for (const field of retainedRolloutRedactions(state)) {
+    if (!field) continue
+    for (let start = text.indexOf(field); start !== -1; start = text.indexOf(field, start + 1)) {
+      ranges.push([start, start + field.length])
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1])
+  const merged = []
+  for (const range of ranges) {
+    const previous = merged.at(-1)
+    if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1])
+    else merged.push(range)
+  }
+  let retained = '', cursor = 0
+  for (const [start, end] of merged) {
+    retained += `${text.slice(cursor, start)}[REDACTED]`
+    cursor = end
+  }
+  retained += text.slice(cursor)
+  return currentRolloutSecrets(state).reduce((value, secret) => value.split(secret).join('[REDACTED]'), retained)
+}
 
 export function runDiagnosticCommand(input, rawTokens, lab) {
   const tokens = rawTokens[0] === 'kubectl' ? rawTokens.slice(1) : rawTokens
@@ -65,6 +101,7 @@ export function runDiagnosticCommand(input, rawTokens, lab) {
   if (!['/api/info', '/api/ask'].includes(path)) return fail('curl path is not supported.')
   if (method === 'POST' && (!seenData || !seenHeader || path !== '/api/ask')) return fail('POST requires the JSON header, a question body and /api/ask.')
   if (seenData && (method !== 'POST' || path !== '/api/ask' || typeof body?.question !== 'string')) return fail('curl JSON body is supported only for a question sent to /api/ask.')
+  if (seenData && Object.keys(body).join(',') !== 'question') return fail('curl JSON body accepts only a question field.')
   if (method === 'GET' && (seenData || seenHeader)) return fail('GET does not accept a request body or JSON header.')
   const pod = Object.values(cluster.resources).find(item => item.kind === 'Pod' && item.metadata.uid === diagnosticUid)
   if (!pod) return fail('The supplied diagnostic Pod is unavailable.', 'DIAGNOSTIC_ORIGIN')

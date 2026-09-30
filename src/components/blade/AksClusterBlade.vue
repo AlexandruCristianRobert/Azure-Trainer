@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, toRaw, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
@@ -8,12 +8,26 @@ import { inspectIntegrationRequests } from '../../lib/kubernetes/integration-ins
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
+import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
+import { inspectDiagnosis } from '../../lib/kubernetes/diagnosis-inspection.js'
+import { inspectAksCapstone } from '../../lib/kubernetes/capstone/inspection.js'
+import AksDiagnosisInspection from '../lab/AksDiagnosisInspection.vue'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
 
 const props = defineProps({ resourceGroup: String, name: String })
 const run = useLabRunStore(); const portal = usePortalStore(); const namespace = ref(''); const bladeTab = ref('overview')
+const capstoneInspection = computed(() => run.lab?.capabilities?.aksCapstone === true && run.behavioralRun
+  ? inspectAksCapstone(toRaw(run.behavioralRun), run.lab) : null)
+const historicalReceipts = computed(() => capstoneInspection.value?.stages
+  .filter(stage => ['release', 'incident'].includes(stage.id)).flatMap(stage => stage.proofs.map(proof => ({ stageId: stage.id, proof }))) ?? [])
+const diagnosisRequestId = ref('')
+const diagnosisInspection = computed(() => {
+  if (!run.lab?.capabilities?.kubernetesDiagnostics || !cluster.value) return null
+  const deployment = view.value.deployments.find(item => item.metadata.namespace === namespace.value)
+  return inspectDiagnosis(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: deployment?.metadata.name, serviceName: 'assistant-internal', requestId: diagnosisRequestId.value || undefined }, run.lab)
+})
 const cluster = computed(() => run.sandbox.aksClusters?.find(item => item.resourceGroup.toLowerCase() === props.resourceGroup.toLowerCase() && item.name.toLowerCase() === props.name.toLowerCase()) ?? null)
 const view = computed(() => projectKubernetesInspection(run.behavioralRun, cluster.value?.id))
 const namespaces = computed(() => view.value.namespaces.map(item => item.metadata.name))
@@ -51,6 +65,8 @@ const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === tru
     deploymentName: 'assistant', serviceName: 'assistant-internal' }) : null)
 const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources === true && cluster.value
   ? inspectResources(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: 'assistant' }) : null)
+const releaseViews = computed(() => run.lab?.capabilities?.kubernetesRollouts && cluster.value
+  ? view.value.deployments.filter(deployment => deployment.metadata.namespace === namespace.value).map(deployment => ({ name: deployment.metadata.name, view: inspectRelease(run.behavioralRun, { clusterId: cluster.value.id, namespace: deployment.metadata.namespace, deploymentName: deployment.metadata.name, serviceName: 'assistant-public' }, run.lab) })).filter(item => item.view) : [])
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -62,9 +78,18 @@ const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources =
       <button id="aks-services-tab" role="tab" type="button" :tabindex="bladeTab === 'services' ? 0 : -1" :aria-selected="bladeTab === 'services'" aria-controls="aks-services-panel" @click="bladeTab = 'services'" @keydown.right.prevent="selectBladeTab('overview')" @keydown.left.prevent="selectBladeTab('overview')">Services</button>
     </div>
     <div v-if="bladeTab === 'overview'" id="aks-overview-panel" role="tabpanel" aria-labelledby="aks-overview-tab">
+    <AksDiagnosisInspection v-if="diagnosisInspection" :inspection="diagnosisInspection" :selected-id="diagnosisRequestId" @select="diagnosisRequestId = $event" />
     <h3 class="blade__section-title">Nodes</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'vmSize', label: 'VM size' }]" :rows="view.nodes" empty-text="No nodes are modeled" />
     <h3 class="blade__section-title">Deployments</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Replicas' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="deploymentRows" empty-text="No deployments in this namespace" />
     <h3 class="blade__section-title">Pods</h3><EntityTable :columns="[{ key: 'name', label: 'Name', grow: 1.5 }, { key: 'status', label: 'Status' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="podRows" empty-text="No Pods in this namespace" />
+    <section v-if="releaseViews.length" class="aks-probe-inspection" aria-label="Read-only release inspection">
+      <h3 class="blade__section-title">Release revisions and artifacts</h3>
+      <article v-for="item in releaseViews" :key="item.name"><h4>{{ item.name }}</h4><p>Revision {{ item.view.summary.currentRevision }}: updated {{ item.view.summary.updated }}, ready {{ item.view.summary.ready }}, available {{ item.view.summary.available }}, unavailable {{ item.view.summary.unavailable }}, terminating {{ item.view.summary.terminating }}. {{ item.view.summary.complete ? 'Complete' : 'Incomplete' }}. Saved/live {{ item.view.savedLiveMismatch ? 'mismatch' : 'match' }}.</p>
+        <p>Conditions: {{ item.view.summary.conditions.map(condition => `${condition.type} ${condition.status} (${condition.reason})`).join('; ') }}</p>
+        <ul><li v-for="revision in item.view.revisions" :key="revision.revision">Revision {{ revision.revision }} {{ revision.current ? '(current)' : '' }} · {{ revision.rsUid }} · {{ revision.image }}</li></ul>
+        <div class="aks-probe-inspection__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Revision</th><th scope="col">Status</th><th scope="col">Artifact</th><th scope="col">Digest</th><th scope="col">Source hash</th></tr></thead><tbody><tr v-for="pod in item.view.pods" :key="pod.uid"><th scope="row">{{ pod.name }}</th><td>{{ pod.revision }}</td><td>{{ pod.status }}</td><td>{{ pod.artifactId ?? 'not captured' }}</td><td>{{ pod.digest ?? 'none' }}</td><td>{{ pod.sourceHash ?? 'none' }}</td></tr></tbody></table></div>
+      </article>
+    </section>
     <section v-if="configCapable" class="aks-config-inspection" aria-labelledby="aks-config-inspection-title">
       <header><h3 id="aks-config-inspection-title" class="blade__section-title">Pod configuration snapshot</h3><p>Environment and mounted settings are captured when each Pod starts. This view is read-only.</p></header>
       <label>Pod <select v-model="selectedPodUid" aria-label="Select Pod configuration to inspect"><option v-for="pod in namespacePods" :key="pod.metadata.uid" :value="pod.metadata.uid">{{ pod.metadata.name }}</option></select></label>
@@ -127,6 +152,18 @@ const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources =
       </template>
     </div>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
+  <section v-if="historicalReceipts.length" class="aks-probe-inspection" aria-label="Historical capstone receipts">
+    <h3 class="blade__section-title">Historical capstone receipts</h3><p>Sealed release and incident observations remain available after the cluster is removed.</p>
+    <ol><li v-for="item in historicalReceipts" :key="item.proof.id">
+      <details><summary>{{ item.stageId }} · {{ item.proof.evidenceId }} · {{ item.proof.observation.outcome }}</summary>
+        <p>Measured from {{ item.proof.observation.startedAtMs / 1000 }}s to {{ item.proof.observation.endedAtMs / 1000 }}s.</p>
+        <h4>Selected artifacts</h4><ul><li v-for="artifact in item.proof.artifacts" :key="artifact.buildId"><code>{{ artifact.buildId }}</code> · digest <code>{{ artifact.digest }}</code> · source hash <code>{{ artifact.sourceHash }}</code></li></ul><p v-if="!item.proof.artifacts.length">None captured.</p>
+        <h4>Captured targets</h4><ul><li v-for="target in item.proof.targets" :key="`${target.clusterId}/${target.key}`"><code>{{ target.clusterId }}</code> · <code>{{ target.key }}</code> · UID <code>{{ target.uid }}</code> · hash <code>{{ target.hash }}</code></li></ul><p v-if="!item.proof.targets.length">None captured.</p>
+        <h4>Measured outcomes and diagnostic records</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(item.proof.observation.measurements, null, 2) }}</pre>
+        <template v-if="item.proof.observation.owner"><h4>Measured experiment receipt</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(item.proof.observation.owner, null, 2) }}</pre></template>
+      </details>
+    </li></ol>
+  </section>
 </div></section></template>
 
 <style scoped>

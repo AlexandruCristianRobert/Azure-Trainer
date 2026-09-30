@@ -17,6 +17,7 @@ const emit = defineEmits(['toggle-exam-note', 'reveal-hint', 'reveal-solution'])
 const copied = ref(false)
 const nextHint = computed(() => props.hintsRevealed + 1)
 const steps = computed(() => typeof props.task.solution === 'string' ? null : props.task.solution?.steps ?? [])
+const alternatives = computed(() => props.task.solution?.alternatives ?? [])
 const stepText = (step) => {
   if (step.kind === 'command') return step.resolver && step.instruction ? `${step.instruction}\n${step.line ?? ''}`.trim() : step.line ?? step.instruction ?? ''
   if (step.kind === 'file') return `${step.path}\n${step.content}`
@@ -30,7 +31,8 @@ const stepLabel = (step) => step.kind === 'command' ? 'Cloud Shell' : step.kind 
   : step.kind === 'inspect' ? 'Inspect' : step.kind === 'scenario' ? 'Experiments' : 'Experiments'
 const stepCode = (step) => step.kind === 'file' ? step.content : step.kind === 'command' ? step.line ?? null : null
 async function copySolution() {
-  const value = typeof props.task.solution === 'string' ? props.task.solution : steps.value.map(stepText).join('\n')
+  const value = typeof props.task.solution === 'string' ? props.task.solution
+    : [steps.value.map(stepText).join('\n'), ...alternatives.value.map(alternative => `${alternative.title}\n${alternative.steps.map(stepText).join('\n')}`)].join('\n\n')
   try { await navigator.clipboard.writeText(value); copied.value = true; setTimeout(() => { copied.value = false }, 1500) } catch { /* clipboard unavailable */ }
 }
 </script>
@@ -55,6 +57,10 @@ async function copySolution() {
         <div class="solution__head"><span class="solution__label">SOLUTION</span><button type="button" class="solution__copy" @click="copySolution">{{ copied ? 'Copied' : 'Copy' }}</button></div>
         <pre v-if="!steps" class="solution__code">{{ task.solution }}</pre>
         <ol v-else class="solution__steps"><li v-for="(step, i) in steps" :key="i"><strong>{{ stepLabel(step) }}</strong><p v-if="step.kind === 'command' && step.resolver && step.instruction" class="solution__instruction">{{ step.instruction }}</p><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
+        <section v-for="(alternative, index) in alternatives" :key="index" :aria-label="alternative.title">
+          <h4>{{ alternative.title }}</h4>
+          <ol class="solution__steps"><li v-for="(step, i) in alternative.steps" :key="i"><strong>{{ stepLabel(step) }}</strong><p v-if="step.kind === 'command' && step.resolver && step.instruction" class="solution__instruction">{{ step.instruction }}</p><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre><p v-else>{{ stepText(step) }}</p></li></ol>
+        </section>
       </div>
       <div class="task__actions task__indent">
         <button v-if="hintsRevealed < task.hints.length" type="button" class="task__hint-link" :disabled="helpDisabled" @click="emit('reveal-hint')">Show hint {{ nextHint }}</button>
