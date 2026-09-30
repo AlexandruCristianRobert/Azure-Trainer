@@ -40,7 +40,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
   const text = files?.['app.py']
   if (typeof text !== 'string') return { diagnosticsSpec: null, diagnostics: [diagnostic(null, '', 'A required Python source file is missing.', 'MISSING_FILE')] }
   const tree = parser.parse(text); const diagnostics = []; let count = 0; let syntaxError = null
-  tree.iterate({ enter(node) { count++; if (node.type.isError) syntaxError ??= node } })
+  tree.iterate({ enter(node) { count++; if (node.type.isError) syntaxError ??= { from: node.from, to: node.to } } })
   if (count > (manifest.maxTokens ?? 20_000)) diagnostics.push(diagnostic(null, text, 'Python source exceeds the supported syntax node limit.', 'TOKEN_LIMIT'))
   if (syntaxError) diagnostics.push(diagnostic(syntaxError, text, 'Python source contains a syntax error.', 'PYTHON_SYNTAX'))
   if (manifest.fixedFiles?.['training_diagnostics.py'] !== undefined && files?.['training_diagnostics.py'] !== manifest.fixedFiles['training_diagnostics.py'])
@@ -52,15 +52,31 @@ export function parsePythonDiagnostics(files, manifest = {}) {
   const wrapper = find('answer'); const core = find('answer_core')
   if (wrapper.length !== 1 || core.length !== 1) diagnostics.push(diagnostic(wrapper[0], text, 'Define one answer(question) wrapper and one answer_core(question).'))
   const imports = new Set(top.filter(node => node.name === 'ImportStatement').map(node => raw(node, text).trim().replace(/\s+/g, ' ')))
+  const importNames = statement => {
+    const children = kids(statement); const index = children.findIndex(node => node.name === 'import')
+    return children.slice(index + 1).filter(node => node.name === 'VariableName').map(node => raw(node, text))
+  }
+  // Reserve module identities across both orders: an import must not replace a
+  // logging binding, nor may a logging declaration replace a runtime binding.
+  const importedNames = top.filter(node => node.name === 'ImportStatement').flatMap(importNames)
+  const declaredNames = top.filter(node => node.name === 'AssignStatement' && call(parts(node).at(-1), text)?.name !== 'logging.getLogger')
+    .flatMap(node => parts(node).slice(0, -1).filter(node => node.name === 'VariableName').map(node => raw(node, text)))
+  const functionNames = new Set(functions.map(node => functionName(node, text)))
   const loggerNames = new Set(); const helpers = new Map(); let configured = false
   const fail = (node, message) => { diagnostics.push(diagnostic(node, text, message)); return null }
-  const reserved = new Set(['logging', 'json', 'current_request_id', 'answer_core', 'question'])
+  const reserved = new Set(['logging', 'json', 'current_request_id', 'answer_core', 'question', ...importedNames, ...declaredNames])
   const shadowsHelper = name => reserved.has(name) || loggerNames.has(name) || helpers.has(name)
+  const shadowsLocal = name => shadowsHelper(name) || functionNames.has(name)
   const parameters = node => parts(kids(node).find(child => child.name === 'ParamList'))
   const questionParameters = node => parameters(node).map(child => raw(child, text)).join(',') === 'question'
   if (wrapper[0] && !questionParameters(wrapper[0])) fail(wrapper[0], 'answer() must accept only question.')
   if (core[0] && !questionParameters(core[0])) fail(core[0], 'answer_core() must accept only question.')
+  for (const declaration of functions) {
+    const unsupported = kids(declaration).find(node => !['def', 'VariableName', 'ParamList', 'Body'].includes(node.name))
+    if (unsupported) fail(unsupported, 'Only synchronous function declarations without return annotations are supported.')
+  }
 
+  const availableImports = new Set()
   for (const statement of top) {
     if (statement.name === 'ImportStatement') {
       const imported = raw(statement, text).trim().replace(/\s+/g, ' ')
@@ -68,20 +84,23 @@ export function parsePythonDiagnostics(files, manifest = {}) {
         && !/^from training_clients import \(\s*EmbeddingClient, AnswerClient, PgClient, RetryPolicy, RequestBudget, DependencyError, as_vector,?\s*\)$/.test(imported)
         && imported !== 'from training_health import initialized, accepting_requests, postgres_available, ai_available')
         fail(statement, 'This import is outside the declared diagnosis teaching subset.')
+      for (const name of importNames(statement)) availableImports.add(name)
     }
     if (statement.name === 'AssignStatement') {
       const values = parts(statement); const rhs = call(values.at(-1), text)
       if (rhs?.name === 'logging.getLogger') {
         const name = literal(rhs.args[0], text)
+        if (!availableImports.has('logging')) fail(statement, 'Import logging before creating a module logger.')
         if (values.length !== 2 || values[0].name !== 'VariableName' || rhs.args.length !== 1 || typeof name?.value !== 'string' || name.value.length > 64)
           fail(statement, 'getLogger() must bind a local logger using one bounded literal name.')
-        else if (shadowsHelper(raw(values[0], text)) || functions.some(node => functionName(node, text) === raw(values[0], text))) fail(statement, 'Logger bindings must not shadow imports, functions, or another logger.')
+        else if (shadowsLocal(raw(values[0], text))) fail(statement, 'Logger bindings must not shadow imports, declarations, or another logger.')
         else loggerNames.add(raw(values[0], text))
       } else if (values.length !== 2 || values[0].name !== 'VariableName' || !['SERVICE_NAME', 'SERVICE_VERSION', 'PORT', 'SQL', 'QUERY_SOURCE'].includes(raw(values[0], text)))
         fail(statement, 'Only service constants, retrieval source, and declared loggers may be bound at module scope.')
     }
     if (statement.name === 'ExpressionStatement') {
       const expression = parts(statement)[0]; const configuredCall = call(expression, text)
+      if (!availableImports.has('logging')) fail(statement, 'Import logging before configuring module logging.')
       const args = configuredCall?.args ?? []; const options = {}
       let invalid = args.length !== 6
       for (let index = 0; index < args.length; index += 3) {
@@ -105,8 +124,10 @@ export function parsePythonDiagnostics(files, manifest = {}) {
     const invoke = call(node, text)
     if (invoke?.name === 'current_request_id' && invoke.args.length === 0 && imports.has('from training_diagnostics import current_request_id')) return { kind: 'request-id' }
     if (node?.name === 'MemberExpression') {
-      const members = kids(node); const base = members.find(child => child.name === 'VariableName'); const key = members.find(child => child.name === 'String')
-      if (resultBindings.has(raw(base, text)) && literal(key, text)?.value === 'status') return { kind: 'result-status', binding: raw(base, text) }
+      const members = kids(node).filter(child => child.name !== 'Comment')
+      const [base, open, key, close] = members
+      if (members.length === 4 && base.name === 'VariableName' && open.name === '[' && key.name === 'String' && close.name === ']'
+        && resultBindings.has(raw(base, text)) && literal(key, text)?.value === 'status') return { kind: 'result-status', binding: raw(base, text) }
     }
     return fail(node, 'Log fields must use declared literals, current_request_id(), or the actual returned status binding.')
   }
@@ -142,7 +163,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
       else if (optional) invalid = true
       else required++
     }
-    if (invalid || shadowsHelper(name) || names.some(shadowsHelper) || new Set(names).size !== names.length || names.length < 1 || names.length > 3) {
+    if (invalid || shadowsHelper(name) || names.some(shadowsLocal) || new Set(names).size !== names.length || names.length < 1 || names.length > 3) {
       fail(helper, 'Log helpers accept up to three named fields with optional None defaults.'); continue
     }
     const bindings = new Map(names.map(name => [name, { kind: 'parameter', name }]))
@@ -150,7 +171,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
     for (const statement of parts(body(helper))) {
       const entries = parts(statement)
       if (statement.name === 'AssignStatement' && entries.length === 2 && entries[0].name === 'VariableName') {
-        if (shadowsHelper(raw(entries[0], text))) { fail(statement, 'Helper locals must not shadow declared loggers or imports.'); continue }
+        if (shadowsLocal(raw(entries[0], text))) { fail(statement, 'Helper locals must not shadow module declarations or imports.'); continue }
         const projected = dictionary(entries[1], bindings, new Set())
         bindings.set(raw(entries[0], text), { kind: 'record', fields: projected })
       } else if (statement.name === 'ExpressionStatement' && !fields) fields = log(entries[0], bindings, new Set())
@@ -174,7 +195,7 @@ export function parsePythonDiagnostics(files, manifest = {}) {
     if (statement.name === 'AssignStatement' && entries.length === 2 && entries[0].name === 'VariableName') {
       const invoked = call(entries[1], text)
       const binding = raw(entries[0], text)
-      if (shadowsHelper(binding) || resultBindings.has(binding)) {
+      if (shadowsLocal(binding) || resultBindings.has(binding)) {
         fail(statement, 'The result binding must not shadow a declared logging or integration helper.'); continue
       }
       if (invoked?.name !== 'answer_core') {

@@ -4,6 +4,7 @@ import { RELEASE_MANIFEST, RELEASE_SOLUTION_FILES } from '../src/data/templates/
 import { INTEGRATION_FIXTURES } from '../src/data/fixtures/aks/integration.js'
 import { simulateIntegration } from '../src/lib/kubernetes/integration.js'
 import * as aks from './helpers/aks.js'
+import { DIAGNOSIS_SOLUTION_FILES } from '../src/data/templates/aks-python/diagnosis.js'
 
 const setup = `import json
 import logging
@@ -179,6 +180,49 @@ def answer(question):
 
   it('rejects unknown module effects in the logging project', () => {
     expect(compile(source + '\nimport subprocess\n')).toMatchObject({ appSpec: null, diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'PYTHON_UNSUPPORTED' })]) })
+  })
+
+  it.each([
+    ['logger', 'os'], ['logger', 'Path'], ['logger', 'EmbeddingClient'], ['logger', 'initialized'], ['logger', 'SERVICE_NAME'],
+    ['log_event', 'os'], ['log_event', 'Path'], ['log_event', 'EmbeddingClient'], ['log_event', 'initialized'], ['log_event', 'SERVICE_NAME'],
+  ])('rejects %s colliding with imported or declared %s in either module order', (loggingBinding, importedBinding) => {
+    const integrationSource = RELEASE_SOLUTION_FILES['app.py'].replace('def answer(question):', 'def answer_core(question):')
+    for (const text of [setup + integrationSource + wrapper, integrationSource + setup + wrapper]) {
+      const parsed = compile(text.replaceAll(loggingBinding, importedBinding))
+      expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py', line: expect.any(Number), column: expect.any(Number) }))
+      expect(parsed.appSpec).toBeNull()
+    }
+  })
+
+  it.each(['response["status":]', 'response["status", "body"]', 'response["status",]', 'response["status"::]'])('rejects unsupported returned-status subscript %s', expression => {
+    const parsed = compile(source.replace('response["status"]', expression))
+    expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py' }))
+    expect(parsed.appSpec).toBeNull()
+  })
+
+  it('requires logging to be imported before module-scope configuration and logger creation', () => {
+    const parsed = compile(source.replace('import logging\n', '') + '\nimport logging\n')
+    expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py' }))
+    expect(parsed.appSpec).toBeNull()
+  })
+
+  it.each(['log_event', 'answer', 'answer_core'])('rejects async %s instead of synchronously projecting it', name => {
+    const parsed = compile(source.replace(`def ${name}(`, `async def ${name}(`))
+    expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py' }))
+    expect(parsed.appSpec).toBeNull()
+  })
+
+  it.each(['log_event(event, status=None)', 'answer(question)', 'answer_core(question)'])('rejects unsupported return annotations on %s', declaration => {
+    const parsed = compile(source.replace(`def ${declaration}:`, `def ${declaration} -> arbitrary_call():`))
+    expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: 'PYTHON_UNSUPPORTED', path: 'app.py' }))
+    expect(parsed.appSpec).toBeNull()
+  })
+
+  it('reports the stable first syntax-error location for a missing core-call parenthesis', () => {
+    const edited = { ...DIAGNOSIS_SOLUTION_FILES, 'app.py': DIAGNOSIS_SOLUTION_FILES['app.py'].replace('response = answer_core(question)', 'response = answer_core(question') }
+    const parsed = parsePythonProject(edited, { ...manifest, fixedFiles: { ...manifest.fixedFiles, 'server.py': edited['server.py'] } })
+    expect(parsed.diagnostics).toContainEqual({ code: 'PYTHON_SYNTAX', message: 'Python source contains a syntax error.', path: 'app.py', line: 107, column: 5 })
+    expect(parsed.appSpec).toBeNull()
   })
 
   it('enforces the syntax-node cap before lowering the core', () => {
