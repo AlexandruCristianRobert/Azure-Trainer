@@ -47,3 +47,9 @@ Task 6: dispatched (base ec469be). Ruling 6: change feed via injectable hook {re
 Ruling 7: delete_item runtime left DATA_UNSUPPORTED — no Lab 1-4 uses it — cost if wrong: add store delete later
 Task 6: complete (commits ec469be..253395b, review clean)
 Task 6: minor (deferred): findAccountByName duplicated inline; change feed charge assumes partitionsTouched 1
+Task 7: dispatched (base 49713e3). Ruling 8: lab.dataTarget supplies account/db; data-request has multi-step steps sharing scenarioState; data-worker steps post/batch/restart/redeliver; incremental commits for deadline — cost if wrong: Lab wiring adjustments
+Ruling 9: Task 7 extended kubernetes/schema.js with dataCosmos-gated container 'command' field — needed for worker Deployment — cost if wrong: schema change affects other Labs (gated, reviewer to check)
+Task 7: complete (commits 49713e3..764035c, review clean)
+Task 7: minor (deferred): AksExperimentPanel dataEvidence optional-chaining style; dataDependencies() unused until Task 8 (signature may need adjustment)
+Task 7: note for Task 8: data-worker step contract (post = raw container write, redeliver re-sends previous batch) is implementer-designed — confirm fits Labs
+STOPPED at 02:12 (Task 8 would not finish + review before the 2:30 deadline). Next: Task 8 (Lab 1). Tasks 1-7 complete.
