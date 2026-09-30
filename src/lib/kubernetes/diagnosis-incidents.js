@@ -156,7 +156,7 @@ function validScenario(scenario, lab) {
   }
   const probe = scenario.controlledProbe
   return probe === undefined || exact(probe, ['kind', 'labId', 'phaseId', 'servicePort']) && probe.kind === 'isolated-port-repair'
-    && probe.labId === 'aks-diagnosis-troubleshooting' && lab?.id === probe.labId
+    && (probe.labId === 'aks-diagnosis-troubleshooting' || lab?.capabilities?.aksCapstone === true && probe.labId === 'aks-knowledge-assistant-capstone') && lab?.id === probe.labId
     && scenario.phases.some(phase => phase.id === probe.phaseId) && (probe.servicePort === 'http' || Number.isInteger(probe.servicePort) && probe.servicePort >= 1 && probe.servicePort <= 65535)
 }
 function scenarioFor(run, id, lab) {
@@ -190,6 +190,7 @@ function filesApplied(run, target, lab) {
   const state = stateFor(run, target), deployments = Object.values(state.resources).filter(object => ['Deployment', 'HorizontalPodAutoscaler'].includes(object.kind))
   for (const [path, content] of Object.entries(run.project.savedFiles)) {
     if (!/^k8s\/.*\.ya?ml$/.test(path)) continue
+    if (lab.capabilities?.aksCapstone === true && path === 'k8s/hpa.yaml' && content === lab.aksCapstone.incidentFiles[path]) continue
     const parsed = parseKubernetesYaml(content, path)
     if (parsed.diagnostics.length) return false
     for (const document of parsed.documents) {
@@ -260,10 +261,22 @@ export function startDiagnosisIncident(run, scenarioId, lab) {
   if (!capturedBaselineReady(run, scenario, lab)) return reject(run, 'Capture authentic working baseline logs on the current saved source and deployed containers before diagnosis.')
   const baselineObjects = baselineObjectCoordinates(run, lab, scenario)
   if (!baselineObjects) return reject(run, 'The stable applied baseline must match the immutable healthy phase preconditions.')
-  const baselineHashes = fingerprints(run, target), applied = scenario.initialFaults
+  const baselineHashes = fingerprints(run, target)
+  // Capstone injection is one atomic transaction. Allocate its identity and
+  // immutable baseline before any save/apply/restart candidate is executed.
+  const prepared = lab.capabilities?.aksCapstone === true ? clone(run) : run
+  if (prepared !== run) {
+    const epoch = prepared.nextSequence++, state = stateFor(prepared, target)
+    state.diagnosis ??= { version: 1, incident: null, receipts: [] }
+    state.diagnosis.incident = { id: `diagnosis-${scenarioId}-${epoch}`, epoch, labId: run.labId, attemptId: run.attemptId, target,
+      phaseId: scenario.phases[0].id, startedAtMs: run.runtime.simTimeMs, baselineHashes, baselineObjects, observations: [], recoveries: [], active: true }
+    receipt(prepared, state.diagnosis.incident, 'started')
+  }
+  const applied = scenario.initialFaults
     ? { run: clone(run), lines: [{ kind: 'out', text: `Diagnosis investigation: ${scenario.investigationArea}. Initial faults were already saved and applied.` }], diagnostics: [] }
-    : stage(run, scenario, scenario.phases[0], lab)
-  if (applied.diagnostics.length) return applied
+    : stage(prepared, scenario, scenario.phases[0], lab)
+  if (applied.diagnostics.length) return { ...applied, run }
+  if (prepared !== run) return applied
   const candidate = applied.run, state = stateFor(candidate, target), epoch = candidate.nextSequence++
   state.diagnosis ??= { version: 1, incident: null, receipts: [] }
   state.diagnosis.incident = { id: `diagnosis-${scenarioId}-${epoch}`, epoch, labId: run.labId, attemptId: run.attemptId, target,
@@ -347,10 +360,11 @@ function capsuleFor(run, target, request) {
 // state. Decoded Secret values exist only in this temporary reconstruction.
 const declarationCache = new WeakMap()
 function fixtureObjects(lab, scenario) {
-  const signature = canonicalize({ files: lab.initialProjectFiles ?? {}, phases: scenario.phases })
+  const initialFiles = lab.capabilities?.aksCapstone === true ? lab.aksCapstone.incidentFiles : lab.initialProjectFiles
+  const signature = canonicalize({ files: initialFiles ?? {}, phases: scenario.phases })
   const cached = declarationCache.get(lab)
   if (cached?.signature === signature) return cached.objects
-  const files = Object.entries(lab.initialProjectFiles ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  const files = Object.entries(initialFiles ?? {}).sort(([a], [b]) => a.localeCompare(b))
   for (const phase of scenario.phases) for (const edit of phase.edits) files.push([edit.path, edit.before], [edit.path, edit.after])
   const objects = files.flatMap(([path, source]) => /^k8s\/.*\.ya?ml$/.test(path) ? parseKubernetesYaml(source, path).documents : [])
     .filter(object => object && ['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object.kind)).map(object => {
@@ -366,7 +380,7 @@ function historicalContext(objects) {
   return { resources: Object.fromEntries(objects.filter(object => object.kind === 'Secret').map((object, index) => [`retained-${index}`, object])), podSnapshots: {} }
 }
 function healthyBaselineObjects(lab, scenario) {
-  const files = { ...lab.initialProjectFiles }
+  const files = { ...(lab.capabilities?.aksCapstone === true ? lab.aksCapstone.incidentFiles : lab.initialProjectFiles) }
   // A Guided learner may first publish and deploy logging. Every phase's
   // immutable before value describes that working incident baseline.
   for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = scenario.initialFaults ? edit.after : edit.before
@@ -390,7 +404,7 @@ function declaredCaptureObjects(lab, scenario, snapshot, incident) {
   fixtureObjects(lab, scenario)
   const cached = declarationCache.get(lab), key = `${snapshot.phaseId}/${snapshot.kind}/${diagnosisDigest(incident.baselineObjects ?? null)}`
   if (cached.captures.has(key)) return cached.captures.get(key)
-  const files = { ...lab.initialProjectFiles }
+  const files = { ...(lab.capabilities?.aksCapstone === true ? lab.aksCapstone.incidentFiles : lab.initialProjectFiles) }
   if (incident.baselineObjects) for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = edit.before
   const phase = scenario.phases.find(item => item.id === snapshot.phaseId)
   for (const edit of phase.edits) files[edit.path] = snapshot.kind === 'failure' ? edit.after : edit.before
@@ -550,6 +564,11 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   if (snapshot.capsule && !coordinates) return run
   if (!coordinates) snapshot.capsule = null
   candidate.evidence.experimentsById[evidence.id].measurements.diagnosisCapture = captureAnchor(snapshot, coordinates, candidate)
+  if (lab.capabilities?.aksCapstone === true) candidate.evidence.experimentsById[evidence.id].measurements.diagnosisProvenance = {
+    version: 1, declarationHash: diagnosisDigest({ scenario: lab.scenarios[scenarioId], incident: found.scenario, files: lab.aksCapstone.incidentFiles }),
+    incidentStartedAtMs: incident.startedAtMs, kind, applicationCount: records.application.length,
+    capturedEndpoint: snapshot.capsule?.environment?.AI_ENDPOINT ?? null,
+  }
   snapshot.hash = diagnosisDigest(snapshot)
   // Keep the first observation of each phase; repeated investigation cannot
   // evict a required earlier phase when ordinary histories rotate.
@@ -562,13 +581,70 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   next[list] = [...primary, ...(slots > 0 ? rest.slice(-slots) : [])].sort((a, b) => Number(a.id.slice(22)) - Number(b.id.slice(22)))
   const retainedIds = new Set([...next.observations, ...next.recoveries].map(item => item.id))
   for (const record of Object.values(candidate.evidence.experimentsById)) if (record.measurements.diagnosisCapture?.incidentId === incident.id
-    && !retainedIds.has(record.measurements.diagnosisCapture.observationId)) delete record.measurements.diagnosisCapture
+    && !retainedIds.has(record.measurements.diagnosisCapture.observationId) && lab.capabilities?.aksCapstone !== true) delete record.measurements.diagnosisCapture
   for (const item of stateFor(candidate, incident.target).diagnosis.receipts) if (item.observationId !== null && !retainedIds.has(item.observationId)) item.observationId = null
   const nativeLifecycle = lifecycle ? stateFor(candidate, incident.target).health.receipts.find(item => item.newContainerId === records.lifecycle.containerId
     && item.oldContainerId === records.lifecycle.previousContainerId && item.podUid === records.lifecycle.podUid) : null
   receipt(candidate, next, kind, next[list].some(item => item.id === snapshot.id) ? snapshot.id : null, nativeLifecycle ? clone(nativeLifecycle) : null)
   if (!validDiagnosisEvidenceRecord(candidate.evidence.experimentsById[evidence.id], candidate, lab)) return run
   return candidate
+}
+
+/** Compact native-capture provenance, anchored by the capstone owner/proof hashes.
+ * This validator deliberately needs neither a live cluster nor a retained ring
+ * entry. It also authenticates superseded, unsealed successful observations. */
+export function validDurableDiagnosisEvidence(evidence, proof, run, lab) {
+  const anchor = evidence.measurements?.diagnosisCapture, provenance = evidence.measurements?.diagnosisProvenance
+  if (lab?.capabilities?.aksCapstone !== true || !anchor || !provenance || !proof?.observation?.measurements || !Array.isArray(proof.targets) || evidence.outcome !== 'passed' || !evidence.completed
+    || evidence.labId !== lab.id || evidence.labId !== run.labId || evidence.attemptId !== run.attemptId
+    || evidence.contentVersion !== run.contentVersion || evidence.scenarioVersion !== 1
+    || !exact(anchor, ['version', 'observationId', 'incidentId', 'epoch', 'target', 'phaseId', 'requestId', 'evidenceId', 'coordinates', 'geometry', 'sourceHash', 'capsuleDigest', 'recordsDigest'])
+    || anchor.version !== 1 || anchor.evidenceId !== evidence.id || !exact(anchor.target, stableKeys)
+    || !exact(provenance, ['version', 'declarationHash', 'incidentStartedAtMs', 'kind', 'applicationCount', 'capturedEndpoint'])
+    || provenance.version !== 1 || !clock(provenance.incidentStartedAtMs) || evidence.startedAtMs < provenance.incidentStartedAtMs
+    || !Number.isSafeInteger(anchor.epoch) || anchor.epoch < 1 || anchor.epoch >= evidence.sequence - 1
+    || anchor.requestId !== `request-${evidence.sequence - 1}` || evidence.measurements.requestSequence !== evidence.sequence - 1
+    || anchor.observationId !== `diagnosis-observation-${evidence.sequence + 1}` || evidence.endedAtMs !== evidence.startedAtMs
+    || !/^[a-f0-9]{8}$/.test(anchor.recordsDigest) || !same(proof.observation.measurements.diagnosisCapture, anchor)
+    || !same(proof.observation.measurements.diagnosisProvenance, provenance)) return false
+  const entry = Object.entries(lab.scenarios).find(([id, item]) => item.kind === 'aks-diagnosis' && anchor.incidentId === `diagnosis-${id}-${anchor.epoch}`)
+  const scenario = entry?.[1], request = lab.scenarios[evidence.scenarioId], phase = scenario?.phases.find(item => item.id === anchor.phaseId)
+  if (!scenario || !phase || !same(scenario.target, Object.fromEntries(targetKeys.map(key => [key, anchor.target[key]])))
+    || ![['Deployment', anchor.target.deploymentName, anchor.target.deploymentUid], ['Service', anchor.target.serviceName, anchor.target.serviceUid]].every(([kind, name, uid]) =>
+      /^kube-[1-9]\d*$/.test(uid) && Number(uid.slice(5)) < anchor.epoch
+      && proof.targets.some(target => target.clusterId === anchor.target.clusterId && target.key === `${kind}/${anchor.target.namespace}/${name}` && target.uid === uid))
+    || evidence.scenarioId !== (provenance.kind === 'failure' ? phase.observationScenarioId : provenance.kind === 'recovery' ? phase.recoveryScenarioId : null)
+    || provenance.declarationHash !== diagnosisDigest({ scenario: request, incident: scenario, files: lab.aksCapstone.incidentFiles })
+    || !lab.tasks.some(task => task.stageId === 'incident' && task.id === evidence.taskId && task.verification.scenarioId === evidence.scenarioId)) return false
+  const measurements = evidence.measurements, artifact = run.artifacts.buildsById[anchor.geometry?.artifactId]
+  if (!artifact || artifact.appSpec?.version !== '2.0' || artifact.sourceHash !== anchor.sourceHash || !run.artifacts.sourceSnapshotsByHash[anchor.sourceHash]
+    || !exact(anchor.geometry, ['podUid', 'containerId', 'artifactId']) || !/^kube-[1-9]\d*$/.test(anchor.geometry.podUid)
+    || !/^container-[1-9]\d*$/.test(anchor.geometry.containerId) || Number(anchor.geometry.podUid.slice(5)) >= evidence.sequence - 1
+    || Number(anchor.geometry.containerId.slice(10)) >= evidence.sequence - 1 || !measurements.selectedPods?.some(pod => pod.uid === anchor.geometry.podUid)
+    || measurements.deploymentUid !== anchor.target.deploymentUid || measurements.serviceUid !== anchor.target.serviceUid
+    || measurements.requestId !== anchor.requestId || measurements.provenanceValid !== true
+    || !same(measurements.status, request.expected.status) || !same(measurements.body, request.expected.body)
+    || !same(measurements.transport, request.expected.transport ?? { ok: true, reason: null })) return false
+  const objects = fixtureObjects(lab, scenario), capsule = reconstructedCapsule(anchor.geometry, anchor.coordinates, objects)
+  const declared = declaredCaptureObjects(lab, scenario, { phaseId: anchor.phaseId, kind: provenance.kind, scenarioId: evidence.scenarioId }, { baselineObjects: [] })
+  if (!capsule || anchor.capsuleDigest !== diagnosisDigest(capsule) || provenance.capturedEndpoint !== capsule.environment.AI_ENDPOINT
+    || ![anchor.coordinates.deployment, ...anchor.coordinates.configs].every(index => declared.some(object => same(object, objects[index])))) return false
+  if (provenance.kind === 'failure') return measurements.transport.reason === 'CONNECTION_REFUSED' && measurements.status === null
+    && measurements.podUid === null && measurements.dependencyTrace.length === 0 && measurements.integrationTrace === null && provenance.applicationCount === 0
+    && provenance.capturedEndpoint === 'https://ai-missing.example'
+  const internal = measurements.internalRecovery
+  if (internal?.kind !== 'internal-service-request' || internal.requestSequence !== evidence.sequence - 2 || internal.status !== 200
+    || internal.artifactId !== anchor.geometry.artifactId || !measurements.selectedPods.some(pod => pod.uid === internal.podUid)
+    || internal.dns?.ok !== true || internal.dns.serviceKey !== 'Service/assistant/assistant-internal'
+    || !proof.targets.some(target => target.key === 'Service/assistant/assistant-internal' && target.uid === internal.serviceUid)
+    || !same(internal.sources, request.expected.body.sources)) return false
+  const environment = { ...capsule.environment, PGPASSWORD: capsule.authProfile ? INTEGRATION_FIXTURES.profiles[capsule.authProfile].PGPASSWORD : '[UNAVAILABLE]' }
+  const executed = simulateIntegration(artifact.appSpec, { environment, files: capsule.files }, { ...request.request, requestId: anchor.requestId }, INTEGRATION_FIXTURES, request.integrationProfile ?? 'healthy')
+  return provenance.capturedEndpoint === 'https://ai-training.example' && Number.isInteger(provenance.applicationCount) && provenance.applicationCount >= 2 && provenance.applicationCount <= 100
+    && same(executed.body, measurements.body) && executed.status === measurements.status
+    && same(executed.dependencyTrace, measurements.dependencyTrace) && same(executed.integrationTrace, measurements.integrationTrace)
+    && same(measurements.dependencyTrace.map(item => [item.operation, item.status]), [['embedding', 'succeeded'], ['postgres-query', 'succeeded'], ['answer', 'succeeded']])
+    && measurements.integrationTrace?.vectorProvenance === 'embedding' && measurements.integrationTrace?.sourceProvenance === 'rows'
 }
 
 /** Only the existing explicit AKS clock invokes this lifecycle transition. */

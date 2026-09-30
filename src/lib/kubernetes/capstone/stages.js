@@ -35,7 +35,7 @@ export function initializeAksStages(lab) {
 export function activeAksExperiment(run) {
   return !!run.runtime.activeScenario || Object.values(run.runtime.kubernetes?.clusters ?? {}).some(state =>
     state.health?.experiment?.status === 'active' || ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase)
-    || state.rollouts?.experiment?.status === 'active' || state.diagnosis?.activeExperiment)
+    || state.rollouts?.experiment?.status === 'active' || state.diagnosis?.activeExperiment || state.diagnosis?.incident?.active)
 }
 
 function selectedIdentity(run, record) {
@@ -72,7 +72,20 @@ function measuredObservation(run, record) {
   const owner = record.measurements.receiptId && Object.values(run.runtime.kubernetes?.clusters ?? {})
     .flatMap(state => state.rollouts?.receipts ?? []).find(receipt => receipt.id === record.measurements.receiptId)
   return { outcome: record.outcome, startedAtMs: record.startedAtMs, endedAtMs: record.endedAtMs,
-    measurements: compactObservation(record.measurements), owner: owner ? compactObservation(owner) : null }
+    measurements: compactObservation(record.measurements), owner: owner ? compactObservation(record.measurements.nativeRelease ? {
+      id: owner.id, attemptId: owner.attemptId, scenarioId: owner.scenarioId, target: owner.target, deploymentUid: owner.deploymentUid,
+      nativeReceiptHash: hash(owner),
+      baselineRevision: owner.baselineRevision, incidentEpoch: owner.incidentEpoch, baseline: owner.baseline,
+      status: owner.status, outcome: owner.outcome, startedAtMs: owner.startedAtMs, endedAtMs: owner.endedAtMs,
+      changedTemplate: owner.changedTemplate, incidentSeen: owner.incidentSeen, deadlineSeen: owner.deadlineSeen,
+      terminalSinceMs: owner.terminalSinceMs, incident: owner.incident, sampleCount: owner.samples.length,
+      failedRequests: owner.samples.filter(item => !item.transport.ok || item.status !== 200).length,
+      minimumAvailable: Math.min(...owner.samples.map(item => item.rollout.available)),
+      samples: [owner.samples[0], owner.samples.at(-1)].filter(Boolean).map(item => ({ atMs: item.atMs, requestId: item.requestId,
+        status: item.status, transport: item.transport, release: item.release, artifactId: item.artifactId,
+        question: item.question, answer: item.answer, sources: item.sources, operations: item.operations,
+        backends: item.backends, currentRevision: item.rollout.currentRevision, available: item.rollout.available })),
+    } : owner) : null }
 }
 
 // Capture while the original verification and its runtime owner still exist.
@@ -133,7 +146,9 @@ export function isAksPinnedDiagnosisEvidence(record, run, lab) {
   return !!proof && proof.evidenceHash === hash(record) && proofHash(proof) === record.aksCapstoneReceiptHash
     && proof.attemptId === run.attemptId
     && (run.stages.sealedStages.some(seal => seal.evidenceIds.includes(record.id))
-      || run.stages.cleanupCheckpoint?.evidenceIds?.includes(record.id))
+      || run.stages.cleanupCheckpoint?.evidenceIds?.includes(record.id)
+      || record.outcome === 'passed' && record.completed === true && record.measurements?.diagnosisCapture !== undefined
+        && lab.tasks.some(task => task.id === record.taskId && task.stageId === 'incident' && task.verification?.scenarioId === record.scenarioId))
     && lab.aksCapstone.validatePinnedDiagnosisEvidence(record, proof, run) === true
 }
 

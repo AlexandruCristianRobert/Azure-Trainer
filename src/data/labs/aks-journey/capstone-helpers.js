@@ -10,6 +10,7 @@ export const CAPSTONE_REGISTRY = 'acrakscapstone'
 export const CAPSTONE_CLUSTER = 'aks-capstone'
 export const CAPSTONE_CLUSTER_ID = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${CAPSTONE_GROUP}/providers/Microsoft.ContainerService/managedClusters/${CAPSTONE_CLUSTER}`
 export const CAPSTONE_IMAGE = `${CAPSTONE_REGISTRY}.azurecr.io/assistant:capstone-v1`
+export const CAPSTONE_HPA_DISABLED = '# HPA exercise complete; final deployment uses two fixed replicas.\n'
 export const CAPSTONE_TARGET = Object.freeze({ clusterId: CAPSTONE_CLUSTER_ID, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' })
 export const CAPSTONE_EXTERNAL = Object.freeze({ ...CAPSTONE_TARGET, serviceName: 'assistant-external' })
 

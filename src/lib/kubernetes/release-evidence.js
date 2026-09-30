@@ -33,6 +33,8 @@ function desired(object) {
 export function releaseSavedObjects(run, target, lab) {
   const docs = []; const diagnostics = []
   for (const [path, text] of Object.entries(run.project.savedFiles)) {
+    if (lab.capabilities?.aksCapstone === true && path === 'k8s/hpa.yaml' && text.trim()
+      && text.split(/\r?\n/).every(line => !line.trim() || line.trim().startsWith('#'))) continue
     if (!/^k8s\/.*\.ya?ml$/i.test(path)) continue
     const parsed = parseKubernetesYaml(text, path)
     diagnostics.push(...parsed.diagnostics)
@@ -135,7 +137,7 @@ export function refreshReleaseProofs(run, lab, { restarted = false, previous = n
 }
 
 /** Pure shared saved/build/live alignment. Witnesses are written only by apply/restart boundaries. */
-export function inspectDeploymentConsistency(input, target, manifest = getProjectManifest(input.project.manifestId), lab = consistencyLab) {
+export function inspectDeploymentConsistency(input, target, manifest = getProjectManifest(input.project.manifestId), lab = consistencyLab, { requireRestart = true } = {}) {
   const run = JSON.parse(JSON.stringify(input))
   const state = run.runtime.kubernetes.clusters[target.clusterId]
   const deployment = resourcesFor(run, target)[`Deployment/${target.namespace}/${target.deploymentName}`]
@@ -161,11 +163,11 @@ export function inspectDeploymentConsistency(input, target, manifest = getProjec
   }))) reasons.push('Captured configuration is stale; restart Pods after applying the final configuration.')
   const fingerprint = releaseFingerprint(run, target, lab); const hash = releaseDigest(fingerprint)
   const proof = state.rollouts.proofs?.[deployment.metadata.uid]
-  if (!proof?.reapply || !proof.restart || proof.hash !== hash || proof.reapply.hash !== hash || proof.restart.generation !== proof.generation
+  if (requireRestart && (!proof?.reapply || !proof.restart || proof.hash !== hash || proof.reapply.hash !== hash || proof.restart.generation !== proof.generation
     || proof.reapply.objectGenerations !== undefined && canonicalize(proof.reapply.objectGenerations)
       !== canonicalize(Object.fromEntries(fingerprint.savedObjects.map(item => [item.key, proof.objectStates?.[item.key]?.generation ?? -1])))
     || proof.restart.atMs < proof.reapply.atMs || proof.restart.rsUid !== state.rollouts.deployments[deployment.metadata.uid]?.currentRsUid
-    || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid))) reasons.push('Reapply all final files, then rollout restart and wait for successful completion.')
+    || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid)))) reasons.push('Reapply all final files, then rollout restart and wait for successful completion.')
   return { consistent: reasons.length === 0, reasons, witness: proof ? clone(proof) : null }
 }
 

@@ -50,8 +50,8 @@ function retainedLiveFailure(run, lab, scenarioId, scenario, incident) {
   for (const record of records) {
     const measured = record?.measurements, request = run.runtime.kubernetes.requests.find(item => item.id === measured?.requestId)
     if (record.labId !== lab.id || record.attemptId !== run.attemptId || record.contentVersion !== run.contentVersion
-      || record.taskId !== scenarioId || record.scenarioId !== scenarioId || record.outcome !== 'passed' || record.completed !== true
-      || measured?.provenanceValid !== true || measured.origin?.kind !== 'pod' || measured.transport?.ok !== true
+      || record.taskId !== lab.tasks.find(task => task.verification?.scenarioId === scenarioId)?.id || record.scenarioId !== scenarioId || record.outcome !== 'passed' || record.completed !== true
+      || measured?.provenanceValid !== true || measured.origin?.kind !== 'pod' && !(lab.capabilities?.aksCapstone === true && measured.origin?.kind === 'external') || measured.transport?.ok !== true
       || measured.status !== scenario.expected.status || !same(measured.body, scenario.expected.body)
       || !/^request-[1-9]\d*$/.test(measured.requestId) || !Number.isSafeInteger(measured.requestSequence)
       || record.sequence !== measured.requestSequence + 1 || record.startedAtMs < incident.startedAtMs

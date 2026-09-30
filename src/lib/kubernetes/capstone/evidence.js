@@ -6,6 +6,7 @@ import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
 import { CAPSTONE_IMAGE, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, capstoneLive } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { RESILIENCE_MILESTONES, measuredMilestone, releaseBaselineReady } from './resilience.js'
+import { publishedAksCapstoneV2, capstoneReleaseProof, verifyAksCapstoneIncident, CAPSTONE_V2_IMAGE } from './incident.js'
 
 const checks = {
   'registry-created': live => !!live.group && !!live.registry,
@@ -31,6 +32,14 @@ export function verifyAksCapstone(run, lab, scenarioId) {
   if (lab.id !== run.labId || !task || lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id) !== true)
     return { run, result: result(false, { reason: 'stage-locked' }) }
   const id = scenarioId.slice('capstone-'.length)
+  if (task.stageId === 'incident') return verifyAksCapstoneIncident(run, lab, scenarioId)
+  if (id === 'published-v2') return { run, result: result(publishedAksCapstoneV2(run), { kind: 'capstone-publication',
+    artifactId: run.artifacts.publishedTags[CAPSTONE_V2_IMAGE] ?? null, reason: 'Publish a distinct v2 artifact from the complete saved source.' }) }
+  if (['release-v2', 'rollback-recovered'].includes(id)) {
+    const measured = capstoneReleaseProof(run, id)
+    return { run, result: result(!!measured, { kind: 'capstone-measured-release', receiptId: measured?.proof.id ?? null,
+      reason: measured ? 'Observed native release receipt retained.' : 'Complete the declared native release measurement first.' }) }
+  }
   if (RESILIENCE_MILESTONES.includes(id)) {
     const measured = measuredMilestone(run, id)
     return { run, result: result(!!measured, { kind: 'capstone-measured-milestone',

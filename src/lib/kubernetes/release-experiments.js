@@ -61,6 +61,10 @@ export function validReleaseScenario(scenario, final = false) {
 
 export function startReleaseExperiment(input, scenarioId, lab) {
   const scenario = lab.scenarios?.[scenarioId]
+  if (lab.capabilities?.aksCapstone === true && lab.aksCapstone?.validateReleaseStart) {
+    const diagnostics = lab.aksCapstone.validateReleaseStart(input, scenarioId)
+    if (diagnostics.length) return { run: input, diagnostics }
+  }
   if (!validReleaseScenario(scenario) || lab.capabilities?.kubernetesRollouts !== true || lab.capabilities?.kubernetesConnectivity !== true || lab.capabilities?.kubernetesAiIntegration !== true)
     return { run: input, diagnostics: [error('Select a declared release scenario with rollout, connectivity and integration support.')] }
   if (Object.values(input.runtime.kubernetes.clusters).some(state => state.health?.experiment?.status === 'active' || ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase) || state.rollouts?.experiment?.status === 'active'))
@@ -150,6 +154,7 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
   const correctAnswers = e.samples.filter(sample => sample.transport.ok && sample.status === 200).every(validReleaseFlow)
   const passed = !forcedReason && e.changedTemplate && (!e.expected.requireIncident || incidentObserved)
     && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability && policy && correctAnswers
+    && (lab.capabilities?.aksCapstone !== true || !lab.aksCapstone?.validateReleaseFinish || lab.aksCapstone.validateReleaseFinish(run, e) === true)
   Object.assign(e, { status: 'finished', phase: 'finished', outcome: passed ? 'passed' : 'failed', endedAtMs: run.runtime.simTimeMs,
     reason: forcedReason ?? (passed ? 'terminal-release-observed' : 'Observe the required revision/incident and ten stable terminal seconds while meeting the availability brief.') })
   retainReleaseReceipt(stateFor(run, e.target), e)
@@ -165,7 +170,8 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
       && current.measurements?.incidentEpoch === e.incidentEpoch) continue
     run = recordVerification(run, lab, task.id,
       { scenarioId, scenarioVersion: 1, outcome: e.outcome, completed: passed, startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs,
-        measurements: { receiptId: e.id, clusterId: e.target.clusterId, namespace: e.target.namespace, deploymentUid: e.deploymentUid, incidentEpoch: e.incidentEpoch, reason: e.reason } })
+        measurements: { receiptId: e.id, clusterId: e.target.clusterId, namespace: e.target.namespace, deploymentUid: e.deploymentUid, incidentEpoch: e.incidentEpoch, reason: e.reason,
+          ...(lab.capabilities?.aksCapstone === true ? { nativeRelease: true } : {}) } })
   }
   return { run, diagnostics: [] }
 }

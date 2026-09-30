@@ -1,4 +1,4 @@
-import { CAPSTONE_TARGET, capstoneLive } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_TARGET, capstoneLive, CAPSTONE_HPA_DISABLED } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { verifyCapstoneSource } from './scenarios.js'
@@ -8,7 +8,7 @@ import { parseKubernetesYaml } from '../yaml.js'
 import { validateKubernetesObject } from '../schema.js'
 
 export const RESILIENCE_MILESTONES = ['startup-proof', 'readiness-proof', 'liveness-proof', 'manual-capacity', 'hpa-cycle', 'ai-wait']
-export const CAPSTONE_HPA_DISABLED = '# HPA exercise complete; final deployment uses two fixed replicas.\n'
+export { CAPSTONE_HPA_DISABLED }
 
 // Select the original native measurement, never a later named Verify wrapper.
 // Its durable proof survives later Pod replacement, source edits and cleanup.

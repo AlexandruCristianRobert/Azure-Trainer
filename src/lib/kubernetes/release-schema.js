@@ -9,10 +9,10 @@ const keys = (value, allowed) => isPlainObject(value) && Object.keys(value).ever
 const timestamp = (value, limit) => counter(value) && value <= limit
 const targetValid = value => keys(value, ['clusterId', 'namespace', 'deploymentName', 'serviceName']) && Object.keys(value).length === 4 && Object.values(value).every(text)
 
-function sampleValid(sample, experiment, nowMs) {
+function sampleValid(sample, experiment, nowMs, capstone = false) {
   if (!keys(sample, ['atMs', 'requestId', 'question', 'transport', 'status', 'answer', 'sources', 'release', 'podUid', 'artifactId', 'operations', 'integrationTrace', 'rollout', 'rolloutPolicy', 'backends'])
     || !timestamp(sample.atMs, Math.min(nowMs, experiment.startedAtMs + 300000)) || sample.atMs < experiment.startedAtMs
-    || !/^aks-request-\d+$/.test(sample.requestId) || !['How long are backups kept?', 'Who provides support?'].includes(sample.question)
+    || !/^aks-request-\d+$/.test(sample.requestId) && !(capstone && /^request-[1-9]\d*$/.test(sample.requestId)) || !['How long are backups kept?', 'Who provides support?'].includes(sample.question)
     || !keys(sample.transport, ['ok', 'reason']) || typeof sample.transport.ok !== 'boolean' || !nullableText(sample.transport.reason)
     || !(sample.status === null || Number.isInteger(sample.status) && sample.status >= 100 && sample.status <= 599)
     || !nullableText(sample.answer) || !nullableText(sample.release) || !nullableText(sample.podUid) || !nullableText(sample.artifactId)
@@ -57,7 +57,7 @@ export function validReleaseExperiment(experiment, state, clusterId, run, lab, r
   const limit = experiment.endedAtMs ?? run.runtime.simTimeMs
   if (experiment.samples[0]?.atMs !== experiment.startedAtMs || experiment.samples[0]?.rollout?.desired !== experiment.baselineReplicas
     || experiment.samples[0]?.rollout?.currentRevision !== experiment.baselineRevision
-    || !experiment.samples.every((sample, index) => sampleValid(sample, experiment, limit) && (index === 0 || sample.atMs >= experiment.samples[index - 1].atMs))) return false
+    || !experiment.samples.every((sample, index) => sampleValid(sample, experiment, limit, lab.capabilities?.aksCapstone === true) && (index === 0 || sample.atMs >= experiment.samples[index - 1].atMs))) return false
   const observedLimit = experiment.samples.at(-1)?.atMs
   const incident = experiment.incident
   if (experiment.incidentSeen !== (incident !== null) || experiment.deadlineSeen !== (incident?.deadline === true)

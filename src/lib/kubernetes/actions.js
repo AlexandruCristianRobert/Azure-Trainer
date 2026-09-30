@@ -16,6 +16,7 @@ import { recordReleaseMilestone } from './release-milestones.js'
 import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive, recordDiagnosisVerification } from './diagnosis-incidents.js'
 import { verifyDiagnosis } from './diagnosis-evidence.js'
 import { verifyAksCapstone } from './capstone/evidence.js'
+import { startAksCapstoneIncident, CAPSTONE_INCIDENT_ID } from './capstone/incident.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -49,7 +50,8 @@ export function validAksRequestScenario(scenario, lab) {
     || ['expectedCurrentConfig', 'expectedCapturedConfig'].some(key => scenario[key] !== undefined && (!scenario[key] || typeof scenario[key] !== 'object'
       || Array.isArray(scenario[key]) || Object.values(scenario[key]).some(value => typeof value !== 'string')))
     || scenario.integrationProfile !== undefined && (lab?.capabilities?.kubernetesAiIntegration !== true || !integrationProfiles.has(scenario.integrationProfile))) return false
-  if (scenario.historicalProbeOf !== undefined && (lab?.id !== 'aks-diagnosis-troubleshooting' || scenario.historicalProbeOf !== 'route-observed')) return false
+  if (scenario.historicalProbeOf !== undefined && !(lab?.id === 'aks-diagnosis-troubleshooting' && scenario.historicalProbeOf === 'route-observed'
+    || lab?.capabilities?.aksCapstone === true && lab.id === 'aks-knowledge-assistant-capstone' && scenario.historicalProbeOf === 'capstone-fault-route')) return false
   const connectivity = scenario.connectivity
   if (connectivity === undefined) return true
   if (lab?.capabilities?.kubernetesConnectivity !== true || !connectivity || !Number.isInteger(connectivity.port) || connectivity.port < 1 || connectivity.port > 65535) return false
@@ -62,6 +64,11 @@ export function validAksRequestScenario(scenario, lab) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (action.type === 'aks-capstone-incident') {
+    if (lab?.capabilities?.aksCapstone !== true || Object.keys(action).join() !== 'type')
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Start incident accepts no caller overrides.' }] }
+    return { ...startAksCapstoneIncident(run, lab), portalEvents: [] }
+  }
   if (action.type === 'aks-request' && lab?.capabilities?.aksCapstone === true) {
     if (Object.keys(action).sort().join(',') !== 'scenarioId,type'
       || typeof action.scenarioId !== 'string')
@@ -70,10 +77,24 @@ export function applyAksAction(run, action, lab) {
     const task = lab.tasks.find(item => item.verification?.scenarioId === action.scenarioId)
     if (!task || verified.result.measurements.reason === 'stage-locked')
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_STAGE_INACTIVE', message: 'Only the active capstone Task can be verified.' }] }
-    const next = recordVerification(verified.run, lab, task.id, verified.result)
-    return { run: next, lines: [{ kind: verified.result.completed ? 'out' : 'err', text: `${task.id}: ${verified.result.measurements.reason ?? verified.result.outcome}`, measurements: verified.result.measurements }], portalEvents: [], diagnostics: [] }
+    let next = task.stageId === 'incident' ? recordDiagnosisVerification(verified.run, lab, task.id, verified.result)
+      : recordVerification(verified.run, lab, task.id, verified.result)
+    if (task.stageId === 'incident') {
+      next = captureDiagnosisObservation(next, action.scenarioId, { requestId: verified.result.measurements.requestId ?? '' }, lab)
+      next = refreshKubernetesDependencies(verified.run, next, lab)
+      if (task.id === 'incident-recovered' && verified.result.completed
+        && next.runtime.kubernetes.clusters[lab.scenarios[action.scenarioId].target.clusterId]?.diagnosis?.incident?.active) {
+        const completed = advanceDiagnosisIncident(next, CAPSTONE_INCIDENT_ID, lab)
+        if (!completed.diagnostics.length) next = completed.run
+      }
+    }
+    const historyLabel = verified.result.measurements.origin === 'incident-snapshot' ? 'Historical incident-snapshot probe: '
+      : verified.result.measurements.observationOrigin === 'observed-live-history' ? 'Historical observed-live request: ' : ''
+    return { run: next, lines: [{ kind: verified.result.completed ? 'out' : 'err', text: `${historyLabel}${task.id}: ${verified.result.measurements.reason ?? verified.result.outcome}`, measurements: verified.result.measurements }], portalEvents: [], diagnostics: [] }
   }
   if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay'].includes(action.type)) {
+    if (lab?.capabilities?.aksCapstone === true && action.type === 'aks-diagnosis-start')
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Use the declared capstone Start incident control.' }] }
     const replay = action.type === 'aks-diagnosis-replay'
     if (lab?.capabilities?.kubernetesDiagnostics !== true || Object.keys(action).sort().join(',') !== (replay ? 'observationId,type' : 'scenarioId,type'))
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Diagnosis controls accept only a declared scenario ID or retained observation ID.' }] }

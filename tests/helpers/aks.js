@@ -55,7 +55,7 @@ export function seedAksProductionAt(stageId = 'source') {
   let run = createBehavioralRun(aksCapstoneLab, { attemptId: 'aks-production-test-attempt' })
   for (const stage of aksCapstoneLab.stages) {
     if (stage.id === stageId) return { lab: aksCapstoneLab, run }
-    if (['release', 'incident', 'final-cleanup'].includes(stage.id)) throw new Error('Later capstone stage is not implemented.')
+    if (stage.id === 'final-cleanup') throw new Error('Later capstone stage is not implemented.')
     for (const taskId of stage.taskIds) {
       const task = aksCapstoneLab.tasks.find(item => item.id === taskId)
       for (const step of task.solution.steps) {
@@ -79,6 +79,29 @@ export function seedAksProductionAt(stageId = 'source') {
     validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)
   }
   throw new Error(`Unknown capstone stage ${stageId}`)
+}
+
+export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks = [], onAction = () => {}, onTask = () => {} } = {}) {
+  const stage = lab.stages.find(item => item.id === stageId)
+  for (const id of stage.taskIds) {
+    if (skipTasks.includes(id)) continue
+    for (const step of lab.tasks.find(item => item.id === id).solution.steps) {
+      const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+        : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+      let result
+      try { result = applyRunAction(run, action, lab) }
+      catch (error) { throw new Error(`${stageId}/${id} ${JSON.stringify(action)}: ${error.message}`, { cause: error }) }
+      if (result.diagnostics.length || result.lines.some(item => item.kind === 'err')) throw new Error(`${stageId}/${id} ${JSON.stringify(action)}: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(result.lines.filter(item => item.kind === 'err'))}`)
+      run = result.run; onAction(run, action, id)
+    }
+    onTask(run, id)
+  }
+  if (seal) {
+    const result = applyRunAction(run, { type: 'aks-advance-stage' }, lab)
+    if (result.diagnostics.length) throw new Error(`${stageId} seal: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(evaluateLab(lab, run).tasks.filter(item => stage.taskIds.includes(item.id)))}`)
+    run = result.run
+  }
+  return run
 }
 
 export function executeCapstoneResilience(run, lab, { finishHandoff = true, onAction = () => {}, onTask = () => {} } = {}) {

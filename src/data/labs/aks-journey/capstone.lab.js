@@ -5,6 +5,9 @@ import { CAPSTONE_CLUSTER_ID, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, CAPSTONE_IMAGE
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { HEALTH_FIXTURES } from '../../fixtures/aks/health.js'
 import { CAPSTONE_HPA_DISABLED, measuredMilestone, milestoneDependencies, releaseBaselineReady } from '../../../lib/kubernetes/capstone/resilience.js'
+import { CAPSTONE_INCIDENT_FILES, CAPSTONE_INCIDENT_ID, CAPSTONE_RELEASE_REQUIREMENTS, CAPSTONE_V2_IMAGE,
+  publishedAksCapstoneV2, stableAksCapstoneV2, stableAksCapstoneV2Dependencies, capstoneReleaseProof, capstoneReleaseDependencies,
+  capstoneIncidentIdentity, validateCapstoneReleaseStart, validateCapstoneReleaseFinish, validateAksCapstoneDiagnosis } from '../../../lib/kubernetes/capstone/incident.js'
 
 const stages = [
   ['source', 'Complete the application contract', ['source-contract']],
@@ -162,6 +165,63 @@ authored['release-baseline'] = {
   examNote: 'Release rollouts use fixed replicas in this trainer. Removing the saved HPA definition and deleting its live controller are distinct operations.',
 }
 
+const releaseControl = (type, id) => ({ kind: 'scenario', action: { type, scenarioId: `capstone-${id}` } })
+const incidentControl = { kind: 'scenario', action: { type: 'aks-capstone-incident' } }
+const badReadiness = CAPSTONE_SOLUTION_FILES.v2['k8s/deployment.yaml'].replace('path: /health/ready', 'path: /health/missing')
+const incidentPaths = ['k8s/service-internal.yaml', 'k8s/service-external.yaml', 'k8s/configmap.yaml']
+const currentTask = (run, id) => run.evidence.experimentsById[run.evidence.currentEvidenceByTask[id]]
+const incidentHistory = { 'capstone-incident': capstoneIncidentIdentity }
+authored['published-v2'] = {
+  text: 'Set SERVICE_VERSION to 2.0, include release from that binding in successful answers, and publish assistant:capstone-v2 from saved source.',
+  check: publishedAksCapstoneV2, aksHistorical: true, dependencies: { ...sourceVersions, 'capstone-v2-artifact': run => run.artifacts.publishedTags[CAPSTONE_V2_IMAGE] ?? null },
+  hints: ['Keep the complete AI, SQL, health, logging and work behavior while updating the successful answer formatter.', 'Save app.py and build a distinct capstone-v2 tag; publishing alone does not update Pods.'],
+  solution: solution(file('app.py', 'v2'), command('az acr build --registry acrakscapstone --image assistant:capstone-v2 .'), verify('published-v2')),
+  examNote: 'An image publication proves a source snapshot, not rollout completion or service availability.',
+}
+authored['release-v2'] = {
+  text: 'Start the release observation while v1 is healthy; save/apply the v2 Deployment and observe every desired Pod Available on v2 with zero failed observed requests and at least two Available Pods throughout.',
+  check: run => !!capstoneReleaseProof(run, 'release-v2'), aksHistorical: true, dependencies: capstoneReleaseDependencies('release-v2'),
+  hints: ['Start the measurement before applying the changed image.', 'Advance through the rollout and ten stable terminal seconds, then finish the measurement and Verify.'],
+  solution: solution(releaseControl('aks-release-start', 'release-v2'), file('k8s/deployment.yaml', 'v2'),
+    command('kubectl apply -f k8s/deployment.yaml'), advance(90), releaseControl('aks-release-finish', 'release-v2'), verify('release-v2')),
+  examNote: 'This bounded observation proves its sampled requests and availability window; it makes no production continuity guarantee.',
+}
+authored['rollback-recovered'] = {
+  text: 'Start recovery observation, save/apply readiness /health/missing, observe the stalled revision and ProgressDeadlineExceeded, then undo to the retained healthy v2 revision or forward-fix. Align saved YAML with recovered v2.',
+  check: run => !!capstoneReleaseProof(run, 'rollback-recovered'), aksHistorical: true, dependencies: capstoneReleaseDependencies('rollback-recovered'),
+  hints: ['A successful request from an old Pod does not prove the new revision is healthy; inspect rollout history and the failed readiness probe.', 'Undo restores the Pod template, not saved files or separate ConfigMaps/Secrets. Save the healthy v2 manifest and apply it.'],
+  solution: solution(releaseControl('aks-release-start', 'rollback-recovered'), { kind: 'file', path: 'k8s/deployment.yaml', content: badReadiness },
+    command('kubectl apply -f k8s/deployment.yaml'), advance(75), command('kubectl rollout history deployment/assistant-api -n assistant'),
+    command('kubectl rollout undo deployment/assistant-api -n assistant'), file('k8s/deployment.yaml', 'v2'), command('kubectl apply -f k8s/deployment.yaml'),
+    advance(90), releaseControl('aks-release-finish', 'rollback-recovered'), verify('rollback-recovered')),
+  examNote: 'Rollback needs an actual failed-revision receipt and completed recovery. Old-Pod success and an unaligned saved manifest are insufficient.',
+}
+authored['fault-route'] = {
+  text: 'Start the declared dual-fault incident. Wait for both faulty-config Pods, then observe the external Service and preserve CONNECTION_REFUSED with null HTTP status and no application or dependency work.',
+  check: run => Object.values(run.evidence.experimentsById).some(record => record.taskId === 'fault-route' && record.outcome === 'passed' && record.measurements.diagnosisCapture),
+  aksHistorical: true, dependencies: incidentHistory,
+  hints: ['Start incident visibly saves/applies targetPort 8081 in both Services and ai-missing.example in the ConfigMap, then restarts Pods.', 'Ready Pods do not imply the Service target port has a listener. Observe before repairing either cause.'],
+  solution: solution(incidentControl, advance(90), verify('fault-route')),
+  examNote: 'A refused connection occurs before Python; no handler or dependency logs can be attributed to that request.',
+}
+authored['fault-dependency'] = {
+  text: 'Repair both saved Service targetPorts and expose 502 AI_ENDPOINT at embedding. Preserve the second cause; when both causes were repaired together, inspect the explicitly historical isolated-snapshot result.',
+  check: run => { const record = currentTask(run, 'fault-dependency'); return record?.outcome === 'passed' && record.measurements.provenanceValid === true
+    && record.measurements.status === 502 && record.measurements.body?.code === 'AI_ENDPOINT' },
+  aksHistorical: true, dependencies: incidentHistory,
+  hints: ['Restore targetPort http in both Services and apply both files while Pods still have the unavailable endpoint.', 'The isolated snapshot changes only the old Service port and is labeled historical; it never proves live recovery.'],
+  solution: solution(...incidentPaths.slice(0, 2).flatMap(path => [file(path, 'v2'), command(`kubectl apply -f ${path}`)]), verify('fault-dependency')),
+  examNote: 'Transport failure can mask a dependency failure. Applying a ConfigMap does not update captured environment variables.',
+}
+authored['incident-recovered'] = {
+  text: 'Restore the saved AI endpoint, apply configuration and restart. Prove two current v2 Pods, both repaired Services, fresh environments and the complete embedding, PostgreSQL and answer flow.',
+  check: run => stableAksCapstoneV2(run, aksCapstoneLab), dependencies: { 'capstone-current-v2': stableAksCapstoneV2Dependencies, ...incidentHistory },
+  hints: ['Save/apply https://ai-training.example, then restart assistant-api and wait for every desired Pod.', 'Keep both historical observations. Verify recovery on the current source, image, manifests and captured environment.'],
+  solution: solution(file('k8s/configmap.yaml', 'v2'), command('kubectl apply -f k8s/configmap.yaml'),
+    command('kubectl rollout restart deployment/assistant-api -n assistant'), advance(90), verify('incident-recovered')),
+  examNote: 'A healthy live request must agree with repeatable saved configuration. Historical isolated results cannot satisfy recovery.',
+}
+
 const tasks = stages.flatMap(stage => stage.taskIds.map(id => capstoneTask(id, authored[id] ?? {
   text: `Complete the ${id} measured capstone milestone when this stage is available.`, check: () => false,
   hints: ['This stage requires its own measured simulator evidence.', 'Inspect the active experiment and saved deployment before verifying.'],
@@ -182,6 +242,23 @@ for (const [id, [question, expected]] of Object.entries(questions)) scenarios[`c
   integrationProfile: 'healthy',
   connectivity: { origin: { kind: 'external' }, service: { name: 'assistant-external', namespace: 'assistant' }, port: 80 },
 }
+scenarios['capstone-published-v2'] = { kind: 'aks-capstone-check', version: 1 }
+for (const id of ['release-v2', 'rollback-recovered']) scenarios[`capstone-${id}`] = { kind: 'aks-release', version: 1, target: CAPSTONE_EXTERNAL,
+  expectedRelease: '2.0', requiredAvailable: 2, zeroFailedRequests: true, requireIncident: id === 'rollback-recovered', requireDeadline: id === 'rollback-recovered', incidentEpoch: id === 'release-v2' ? 0 : 1 }
+const diagnosticRequest = (expected, extra = {}) => ({ kind: 'aks-request', version: 1, target: CAPSTONE_EXTERNAL,
+  request: { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, expected,
+  connectivity: { origin: { kind: 'external' }, service: { name: 'assistant-external', namespace: 'assistant' }, port: 80 }, ...extra })
+scenarios['capstone-fault-route'] = diagnosticRequest({ status: null, body: null, transport: { ok: false, reason: 'CONNECTION_REFUSED' }, route: { selectedCount: 2 } })
+scenarios['capstone-fault-dependency'] = diagnosticRequest({ status: 502, body: { error: 'The configured AI endpoint is not available in this trainer.', code: 'AI_ENDPOINT' } }, { historicalProbeOf: 'capstone-fault-route' })
+scenarios['capstone-incident-recovered'] = diagnosticRequest({ status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training', release: '2.0' } },
+  { requireCompleteRollout: true, expectedCapturedConfig: { AI_ENDPOINT: 'https://ai-training.example' }, expectedCurrentConfig: { AI_ENDPOINT: 'https://ai-training.example' } })
+scenarios[CAPSTONE_INCIDENT_ID] = { kind: 'aks-diagnosis', version: 1, target: CAPSTONE_EXTERNAL,
+  investigationArea: 'Declared Service targetPort and captured AI endpoint faults',
+  controlledProbe: { kind: 'isolated-port-repair', labId: 'aks-knowledge-assistant-capstone', phaseId: 'port-and-endpoint', servicePort: 'http' },
+  phases: [{ id: 'port-and-endpoint', edits: incidentPaths.map(path => ({ path, before: CAPSTONE_INCIDENT_FILES[path],
+    after: CAPSTONE_INCIDENT_FILES[path].replace(/targetPort: http/g, 'targetPort: 8081').replace('https://ai-training.example', 'https://ai-missing.example') })),
+    commands: [...incidentPaths.map(path => `kubectl apply -f ${path}`), 'kubectl rollout restart deployment/assistant-api -n assistant'],
+    observationScenarioId: 'capstone-fault-route', recoveryScenarioId: 'capstone-incident-recovered' }] }
 
 export const aksCapstoneLab = {
   id: 'aks-knowledge-assistant-capstone', title: 'Build and operate a knowledge assistant on AKS', status: 'unavailable',
@@ -193,8 +270,14 @@ export const aksCapstoneLab = {
   capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true,
     kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true,
     kubernetesRollouts: true, kubernetesDiagnostics: true, aksCapstone: true, acrBuild: true },
-  stages, tasks, scenarios,
-  aksCapstone: { stageExit(run, stage) {
+  stages, tasks, scenarios, releaseRequirements: CAPSTONE_RELEASE_REQUIREMENTS,
+  aksCapstone: { incidentFiles: CAPSTONE_INCIDENT_FILES,
+    validateReleaseStart: (run, scenarioId) => validateCapstoneReleaseStart(run, aksCapstoneLab, scenarioId),
+    validateReleaseFinish: (run, experiment) => validateCapstoneReleaseFinish(run, aksCapstoneLab, experiment),
+    validatePinnedDiagnosisEvidence: (record, proof, run) => validateAksCapstoneDiagnosis(record, proof, run, aksCapstoneLab),
+    stageExit(run, stage) {
+    if (['release', 'incident'].includes(stage.id) && !stableAksCapstoneV2(run, aksCapstoneLab))
+      return [{ code: 'AKS_CAPSTONE_V2_DRIFT', message: 'Restore current stable v2 source, manifests, two fixed Pods and fresh configuration.' }]
     if (stage.id === 'resilience' && !releaseBaselineReady(run))
       return [{ code: 'AKS_CAPSTONE_RELEASE_BASELINE', message: 'Restore two Available fixed replicas, current manifests and no HPA before releases.' }]
     if (stage.id === 'provision' && (!image(run) || !connected(run)))
