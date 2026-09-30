@@ -103,6 +103,12 @@ function apply(run, selection, options, lab) {
   if (source.error) return response(run.sandbox, [err(`Error: ${source.error}`)])
   if (options.dryRun) {
     if (options.dryRun !== 'client' || !['json', 'yaml'].includes(options.output)) return response(run.sandbox, [err('Only --dry-run=client with -o json or -o yaml is supported.')])
+    if (lab?.capabilities?.aksCapstone === true) {
+      const checked = applyKubernetesObjects(run, source.documents, { clusterId: selection.clusterId, namespace: options.namespace, locations: source.locations }, lab)
+      if (checked.diagnostics.length) return response(run.sandbox, [err(`Error: ${checked.diagnostics[0].message}`)])
+      const value = source.documents.length === 1 ? source.documents[0] : source.documents
+      return response(run.sandbox, [out(options.output === 'json' ? kubeJson(value) : kubeYaml(value))])
+    }
     for (let i = 0; i < source.documents.length; i++) {
       const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: source.locations[i] })
       if (checked.diagnostics.length) return response(run.sandbox, [err(`Error: ${checked.diagnostics[0].message}`)])

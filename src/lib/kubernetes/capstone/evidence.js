@@ -5,6 +5,7 @@ import { inspectRequestRecords } from '../request-records.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
 import { CAPSTONE_IMAGE, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, capstoneLive } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { RESILIENCE_MILESTONES, measuredMilestone, releaseBaselineReady } from './resilience.js'
 
 const checks = {
   'registry-created': live => !!live.group && !!live.registry,
@@ -30,6 +31,13 @@ export function verifyAksCapstone(run, lab, scenarioId) {
   if (lab.id !== run.labId || !task || lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id) !== true)
     return { run, result: result(false, { reason: 'stage-locked' }) }
   const id = scenarioId.slice('capstone-'.length)
+  if (RESILIENCE_MILESTONES.includes(id)) {
+    const measured = measuredMilestone(run, id)
+    return { run, result: result(!!measured, { kind: 'capstone-measured-milestone',
+      receiptId: measured?.proof.id ?? null, reason: measured ? 'observed-native-experiment' : 'completed-measurement-required' }) }
+  }
+  if (id === 'release-baseline') return { run, result: result(releaseBaselineReady(run), { kind: 'capstone-release-baseline',
+    clusterId: CAPSTONE_TARGET.clusterId, fixedReplicas: 2, noHpa: true }) }
   if (id === 'source-contract') {
     const preview = verifyCapstoneSource(run.project.savedFiles, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
     return { run, result: result(preview.passed, { kind: 'source-preview', artifactId: null, deploymentId: null,

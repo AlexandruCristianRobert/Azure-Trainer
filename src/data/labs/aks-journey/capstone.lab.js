@@ -1,8 +1,10 @@
 import { CAPSTONE_FILES, CAPSTONE_MANIFEST, CAPSTONE_SOLUTION_FILES } from '../../templates/aks-python/capstone.js'
 import { CAPSTONE_CLUSTER_ID, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, CAPSTONE_IMAGE,
   capstoneLive, capstoneCommand as command, capstoneFile as file, capstoneVerify as verify,
-  capstoneSolution as solution } from './capstone-helpers.js'
+  capstoneSolution as solution, capstoneAdvance as advance } from './capstone-helpers.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
+import { HEALTH_FIXTURES } from '../../fixtures/aks/health.js'
+import { CAPSTONE_HPA_DISABLED, measuredMilestone, milestoneDependencies, releaseBaselineReady } from '../../../lib/kubernetes/capstone/resilience.js'
 
 const stages = [
   ['source', 'Complete the application contract', ['source-contract']],
@@ -119,12 +121,60 @@ for (const [id, [, , text]] of Object.entries(questions)) authored[id] = {
   examNote: 'The request must traverse the deployed image and current service route; source preview cannot satisfy this check.',
 }
 
+const start = (type, id) => ({ kind: 'scenario', action: { type, scenarioId: `capstone-${id}` } })
+const probeSpecs = [
+  ['startup-proof', 'coldStartup', 30, 'Measure fresh containers starting at age zero: startup may succeed only after 6 seconds; readiness and liveness stay gated, with no cold-start restart.'],
+  ['readiness-proof', 'temporaryAdmissionClosure', 60, 'Close one Pod admission at baseline +5s, clear at +20s, and measure withdrawal within 4s and recovery within 5s without restarting. Sample at +9s and +25s; finish at +30s.'],
+  ['liveness-proof', 'processHang', 130, 'Hang one process at baseline +5s. Measure withdrawal within 4s, termination within 30s and same-Pod/new-container recovery within 90s; prove a healthy answer at +100s.'],
+]
+for (const [id, , seconds, text] of probeSpecs) authored[id] = {
+  text, check: run => !!measuredMilestone(run, id), dependencies: milestoneDependencies(id), aksHistorical: true,
+  hints: ['Begin with two settled v1 Pods and no HPA. Starting the experiment recreates this exact pair under the same template.', 'Advance the shared simulation clock, inspect measured probe timing, then run the named Verify.'],
+  solution: solution(start('aks-probe-start', id), advance(seconds), verify(id)),
+  examNote: 'Startup gates other probes; readiness removes a backend, while liveness restarts the container inside the same Pod.',
+}
+const measured = (id, text, steps, hints, examNote) => ({ text, check: run => !!measuredMilestone(run, id),
+  dependencies: milestoneDependencies(id), aksHistorical: true, hints, solution: solution(...steps, verify(id)), examNote })
+authored['manual-capacity'] = measured('manual-capacity',
+  'Save and apply three fixed replicas without an HPA; measure the 30-second local-work profile at 10 requests/second using the 20-unit, 96Mi scratch workload.',
+  [{ kind: 'file', path: 'k8s/deployment.yaml', content: CAPSTONE_SOLUTION_FILES.v1['k8s/deployment.yaml'].replace('  replicas: 2\n', '  replicas: 3\n') },
+    command('kubectl apply -f k8s/deployment.yaml'), advance(30), start('aks-resource-start', 'manual-capacity'), advance(60)],
+  ['Both saved and live Deployment must say replicas: 3.', 'Three Pods alone are not workload evidence: start the profile, advance time and verify its completed work.'],
+  'Manual scaling changes desired capacity; measured throughput and scheduling show whether that capacity can serve work.')
+authored['hpa-cycle'] = measured('hpa-cycle',
+  'Omit replicas from the saved Deployment and apply it before adopting assistant-cpu: target assistant-api, min 2/max 4, CPU utilization 60%, scale-down stabilization 60s. Measure 2 requests/s for 30s, 28 requests/s until 120s, then zero until 270s; observe genuine HPA 2→4→2 decisions and conserved work.',
+  [file('k8s/deployment.yaml', 'scale'), command('kubectl apply -f k8s/deployment.yaml'), advance(30),
+    file('k8s/hpa.yaml', 'scale'), command('kubectl apply -f k8s/hpa.yaml'), advance(30),
+    start('aks-resource-start', 'hpa-cycle'), advance(300)],
+  ['Remove explicit replicas ownership before applying the exact HPA policy shown in the Solution.', 'Warmup is bounded to 360s; use complete CPU windows and wait through the zero-load scale-in phase.'],
+  'CPU utilization is relative to CPU requests. Stabilization prevents immediate scale-in; manually setting four replicas is not an HPA decision.')
+authored['ai-wait'] = measured('ai-wait',
+  'After the measured CPU cycle returns to two, run 28 answer requests/second for 60s: 1ms local CPU/request and 150ms answer latency. Prove dependency waiting does not cause CPU scale-out.',
+  [start('aks-resource-start', 'ai-wait'), advance(90)],
+  ['Keep the HPA at its minimum of two before starting.', 'Observe answer latency separately from local CPU work and verify no scale-out decision occurred.'],
+  'Waiting on a remote AI service is not local CPU consumption; CPU HPA cannot directly measure dependency latency.')
+authored['release-baseline'] = {
+  text: 'Finish all experiments, explicitly delete assistant-cpu, save/apply replicas: 2, and replace saved hpa.yaml with “# HPA exercise complete; final deployment uses two fixed replicas.” Verify two Available current Pods with all six nonempty manifests aligned.',
+  check: releaseBaselineReady, dependencies: { ...sourceVersions, ...deployment, 'capstone-release-baseline': releaseBaselineReady },
+  hints: ['A comment-only manifest does not delete a live HPA: use kubectl delete hpa assistant-cpu -n assistant.', 'Restore explicit replicas: 2 and wait for two Available Pods; retain the six historical measurements.'],
+  solution: solution(command('kubectl delete hpa assistant-cpu -n assistant'), file('k8s/deployment.yaml'),
+    command('kubectl apply -f k8s/deployment.yaml'), { kind: 'file', path: 'k8s/hpa.yaml', content: CAPSTONE_HPA_DISABLED }, advance(30), verify('release-baseline')),
+  examNote: 'Release rollouts use fixed replicas in this trainer. Removing the saved HPA definition and deleting its live controller are distinct operations.',
+}
+
 const tasks = stages.flatMap(stage => stage.taskIds.map(id => capstoneTask(id, authored[id] ?? {
   text: `Complete the ${id} measured capstone milestone when this stage is available.`, check: () => false,
   hints: ['This stage requires its own measured simulator evidence.', 'Inspect the active experiment and saved deployment before verifying.'],
   solution: solution(verify(id)), examNote: 'This later milestone is unavailable until its measured scenario is implemented.',
 })))
 const scenarios = Object.fromEntries(tasks.map(task => [task.verification.scenarioId, { kind: 'aks-capstone-pending', version: 1 }]))
+for (const [id, script] of probeSpecs) scenarios[`capstone-${id}`] = { kind: 'aks-probe', version: 1,
+  target: { ...CAPSTONE_TARGET, externalServiceName: 'assistant-external' }, durationSeconds: 150,
+  script: script === 'coldStartup' ? { initializationSeconds: 6 } : { ...HEALTH_FIXTURES.scenarios[script] } }
+for (const [id, profileId, requiredReadyReplicas] of [['manual-capacity', 'manual-work', 3], ['hpa-cycle', 'guided-cycle', 2], ['ai-wait', 'ai-wait', 2]])
+  scenarios[`capstone-${id}`] = { kind: 'aks-resource-profile', version: 1, profileId, requiredReadyReplicas,
+    target: { clusterId: CAPSTONE_CLUSTER_ID, namespace: 'assistant', deploymentName: 'assistant-api' } }
+scenarios['capstone-release-baseline'] = { kind: 'aks-capstone-check', version: 1 }
 for (const id of stages.slice(0, 3).flatMap(stage => stage.taskIds)) scenarios[`capstone-${id}`] = { kind: 'aks-capstone-check', version: 1 }
 for (const [id, [question, expected]] of Object.entries(questions)) scenarios[`capstone-${id}`] = {
   kind: 'aks-request', version: 1, target: CAPSTONE_EXTERNAL,
@@ -139,12 +189,14 @@ export const aksCapstoneLab = {
   brief: 'Build a Python assistant, publish it to ACR, deploy it on AKS, verify behavior, then measure resilience and releases before cleanup.',
   engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 25, labMode: 'capstone',
   manifestId: CAPSTONE_MANIFEST.id, initialProjectFiles: CAPSTONE_FILES,
-  healthFixture: { initializationSeconds: 6 },
+  healthFixture: { initializationSeconds: 6, maximumWarmupSeconds: 60 },
   capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true,
     kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true,
     kubernetesRollouts: true, kubernetesDiagnostics: true, aksCapstone: true, acrBuild: true },
   stages, tasks, scenarios,
   aksCapstone: { stageExit(run, stage) {
+    if (stage.id === 'resilience' && !releaseBaselineReady(run))
+      return [{ code: 'AKS_CAPSTONE_RELEASE_BASELINE', message: 'Restore two Available fixed replicas, current manifests and no HPA before releases.' }]
     if (stage.id === 'provision' && (!image(run) || !connected(run)))
       return [{ code: 'AKS_CAPSTONE_PROVISION_DRIFT', message: 'Current image publication and cluster access must be valid.' }]
     if (['deploy', 'behavior'].includes(stage.id) && !routed(run))

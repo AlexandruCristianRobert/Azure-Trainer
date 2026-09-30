@@ -20,7 +20,7 @@ export const capstoneAdvance = seconds => ({ kind: 'scenario', action: { type: '
 export const capstoneSolution = (...steps) => ({ steps })
 
 /** Current source and the image captured by each desired Pod must agree. */
-export function capstoneLive(run) {
+export function capstoneLive(run, { replicas = 2 } = {}) {
   const cluster = run.sandbox.aksClusters.find(item => item.id === CAPSTONE_CLUSTER_ID)
   const registry = run.sandbox.containerRegistries.find(item => item.name === CAPSTONE_REGISTRY && item.resourceGroup === CAPSTONE_GROUP)
   const context = run.runtime.kubernetes.contexts[run.runtime.kubernetes.currentContext]
@@ -57,7 +57,8 @@ export function capstoneLive(run) {
     && deployment.spec.strategy.rollingUpdate?.maxUnavailable === 0
     && deployment.spec.minReadySeconds === 5 && deployment.spec.progressDeadlineSeconds === 60
     && deployment.spec.revisionHistoryLimit === 3
-  const currentPods = !!deployment && pods.length === 2 && deployment.spec.replicas === 2 && pods.every(pod => {
+  const expectedReplicas = replicas ?? deployment?.spec?.replicas
+  const currentPods = !!deployment && pods.length === expectedReplicas && deployment.spec.replicas === expectedReplicas && pods.every(pod => {
     const snapshot = state.podSnapshots[pod.metadata.uid]
     return pod.status?.phase === 'Running' && pod.status?.conditions?.some(item => item.type === 'Ready' && item.status === 'True')
       && snapshot?.artifactId === buildId && expectedRefs.every(key => snapshot.environment?.[key] === profile[key])

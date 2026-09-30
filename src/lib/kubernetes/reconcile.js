@@ -1,4 +1,5 @@
 import { kubeObjectKey } from './objects.js'
+import { capstoneTemplateDiagnostic } from './capstone/policy.js'
 import { reconcileServicesResult } from './services.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { ACR_PULL_ROLE_ID } from '../sandbox/roleAssignments.js'
@@ -206,6 +207,8 @@ export function restartDeployment(input, clusterId, namespace, name, lab) {
 }
 
 export function restartDeploymentResult(input, clusterId, namespace, name, lab) {
+  const issue = capstoneTemplateDiagnostic(input, lab)
+  if (issue) return { run: input, diagnostics: [issue] }
   const next = clone(input)
   const state = next.runtime.kubernetes.clusters[clusterId]
   const deployment = state?.resources[kubeObjectKey('Deployment', namespace, name)]

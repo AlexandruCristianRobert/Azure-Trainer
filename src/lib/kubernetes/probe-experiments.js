@@ -1,6 +1,8 @@
 import { recordVerification } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
-import { restartDeploymentResult } from './reconcile.js'
+import { restartDeploymentResult, getDeploymentPods, reconcileKubernetesResult } from './reconcile.js'
+import { deleteCascade } from './pod-cleanup.js'
+import { validateAksExperimentStart } from './capstone/resilience.js'
 import { routeServiceRequest } from './connectivity.js'
 import { appendHealthReceipt } from './health-history.js'
 const clone = value => structuredClone(value)
@@ -26,7 +28,7 @@ function desiredObject(value) {
 }
 
 function fingerprint(context, target) {
-  const { clusterId, namespace, deploymentName, serviceName } = target ?? {}
+  const { clusterId, namespace, deploymentName, serviceName, externalServiceName = 'assistant-public' } = target ?? {}
   const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
   const deployment = resources[`Deployment/${namespace}/${deploymentName}`] ?? null
   const image = deployment?.spec?.template?.spec?.containers?.[0]?.image ?? null
@@ -40,9 +42,10 @@ function fingerprint(context, target) {
   const configuration = Object.values(resources).filter(item => ['ConfigMap', 'Secret'].includes(item.kind) && item.metadata?.namespace === namespace)
     .map(desiredObject).sort((a, b) => `${a.kind}/${a.metadata.name}`.localeCompare(`${b.kind}/${b.metadata.name}`))
   return { version: 1, clusterId, namespace, deploymentName, serviceName,
+    ...(target.externalServiceName ? { externalServiceName } : {}),
     deploymentUid: deployment?.metadata?.uid ?? null, deployment: desiredObject(deployment),
     service: desiredObject(resources[`Service/${namespace}/${serviceName}`] ?? null), configuration,
-    publicService: desiredObject(resources[`Service/${namespace}/assistant-public`] ?? null),
+    publicService: desiredObject(resources[`Service/${namespace}/${externalServiceName}`] ?? null),
     image, artifact: artifact ? { id: artifact.id, sourceHash: artifact.sourceHash, digest: artifact.digest } : null,
     savedBuildFiles, savedKubernetesFiles }
 }
@@ -85,7 +88,7 @@ function captureSample(run, clusterId, experiment, nowMs, final = false) {
     restartCounts: Object.fromEntries(containers.map(item => [item.containerId, item.restartCount])),
     readyBackendCount: containers.filter(item => item.ready).length, readyEndpoints: containers.filter(item => item.ready).length }
   const request = final ? { method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } } : requestForSample(experiment, offset)
-  const service = state.resources[`Service/${experiment.target.namespace}/assistant-public`]
+  const service = state.resources[`Service/${experiment.target.namespace}/${experiment.target.externalServiceName ?? 'assistant-public'}`]
   if (service?.status?.loadBalancer?.ingress?.[0]?.ip) {
     const kind = faultType(experiment.script)
     const faultActive = offset >= (experiment.script.startAfterStartSeconds ?? Infinity)
@@ -228,6 +231,8 @@ function clearExperimentFaults(state, experiment) {
 }
 
 export function startProbeExperiment(input, scenarioId, lab) {
+  const capstoneIssues = validateAksExperimentStart(input, lab, scenarioId)
+  if (capstoneIssues.length) return { run: input, diagnostics: capstoneIssues }
   if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => state.rollouts?.experiment?.status === 'active')) return { run: input, ...invalid('A release experiment is already active. Finish or cancel it first.') }
   const scenario = lab?.scenarios?.[scenarioId]
   if (!scenario || typeof scenarioId !== 'string') return { run: input, ...invalid('The selected probe experiment is not declared by this Lab.') }
@@ -242,11 +247,17 @@ export function startProbeExperiment(input, scenarioId, lab) {
   if (!deployment) return { run: input, ...invalid('The declared probe experiment target Deployment is unavailable.') }
   // This is the same rollout path as kubectl rollout restart.  The server-managed
   // annotation is deliberately omitted from the experiment fingerprint.
-  const restarted = restartDeploymentResult(run, clusterId, scenario.target.namespace, scenario.target.deploymentName, lab)
+  // Capstone has rollout support: recreate only the settled target pair under
+  // its existing ReplicaSet, letting ordinary scheduling create age-zero containers.
+  const capstone = lab?.capabilities?.aksCapstone === true
+  if (capstone) deleteCascade(state, getDeploymentPods(run, clusterId, scenario.target.namespace, scenario.target.deploymentName))
+  const restarted = capstone ? reconcileKubernetesResult(run, lab)
+    : restartDeploymentResult(run, clusterId, scenario.target.namespace, scenario.target.deploymentName, lab)
   if (restarted.diagnostics.length) return { run: input, diagnostics: restarted.diagnostics }
   run = restarted.run; state = run.runtime.kubernetes.clusters[clusterId]
-  const podUids = Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === scenario.target.namespace
-    && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet')).map(item => item.metadata.uid).sort()
+  const podUids = (capstone ? getDeploymentPods(run, clusterId, scenario.target.namespace, scenario.target.deploymentName)
+    : Object.values(state.resources).filter(item => item.kind === 'Pod' && item.metadata.namespace === scenario.target.namespace
+    && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet'))).map(item => item.metadata.uid).sort()
   const diagnosticStartup = scenarioId.includes('short-start')
   const configuredWarmup = lab?.healthFixture?.maximumWarmupSeconds
   const warmupSeconds = diagnosticStartup ? 60 : Number.isInteger(configuredWarmup) ? configuredWarmup : durationSeconds
@@ -317,9 +328,20 @@ export function finishProbeExperiment(input, lab) {
       if (receipt.status !== 'completed' || receipt.evidenceId) continue
       const task = lab?.tasks?.find(item => item.verification?.scenarioId === receipt.scenarioId && item.verification?.scenarioVersion === 1)
       if (!task) continue
+      const measurements = lab?.capabilities?.aksCapstone === true ? {
+        clusterId: receipt.clusterId,
+        probeReceipt: { scenarioId: receipt.scenarioId, deploymentUid: receipt.deploymentUid, fingerprintHash: digest(receipt.fingerprint),
+          podUids: receipt.podUids, containerIds: receipt.containerIds, initializationSeconds: receipt.initializationSeconds,
+          startedAtMs: receipt.startedAtMs, baselineReadyAtMs: receipt.baselineReadyAtMs, endedAtMs: receipt.endedAtMs,
+          summary: receipt.summary },
+        samples: receipt.samples.map(sample => ({ second: sample.second, atMs: sample.atMs,
+          readyPodUids: sample.readyPodUids, restartCounts: sample.restartCounts,
+          status: sample.response?.status ?? null, podUid: sample.response?.route?.podUid ?? null,
+          sources: sample.response?.body?.sources ?? [], transport: sample.response?.transport ?? null })),
+      } : { clusterId: receipt.clusterId, samples: receipt.samples, summary: receipt.summary, probeReceipt: receipt }
       run = recordVerification(run, lab, task.id, { scenarioId: receipt.scenarioId, scenarioVersion: 1, outcome: receipt.outcome, completed: receipt.outcome === 'passed',
         startedAtMs: receipt.startedAtMs, endedAtMs: receipt.endedAtMs,
-        measurements: { clusterId: receipt.clusterId, samples: receipt.samples, summary: receipt.summary, probeReceipt: receipt } })
+        measurements })
       const current = run.runtime.kubernetes.clusters[clusterId].health.receipts.find(item => item.status === 'completed'
         && item.scenarioId === receipt.scenarioId && item.startedAtMs === receipt.startedAtMs && item.endedAtMs === receipt.endedAtMs)
       if (current) current.evidenceId = run.evidence.currentEvidenceByTask[task.id]
@@ -343,8 +365,10 @@ export function cancelChangedProbeExperiments(input) {
   let run = input
   for (const [clusterId, state] of Object.entries(run.runtime.kubernetes?.clusters ?? {})) {
     const experiment = state.health?.experiment
-    const podUids = Object.values(state.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === experiment?.target?.namespace
-      && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet')).map(item => item.metadata.uid).sort()
+    const podUids = (experiment?.target?.externalServiceName
+      ? getDeploymentPods(run, clusterId, experiment.target.namespace, experiment.target.deploymentName)
+      : Object.values(state.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === experiment?.target?.namespace
+      && item.metadata.ownerReferences?.some(ref => ref.kind === 'ReplicaSet'))).map(item => item.metadata.uid).sort()
     if (!experiment || JSON.stringify(experiment.fingerprint) === JSON.stringify(fingerprint(run, experiment.target))
       && JSON.stringify(podUids) === JSON.stringify(experiment.podUids)) continue
     run = cancelProbeExperiment(run, clusterId).run

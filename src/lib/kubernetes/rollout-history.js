@@ -1,4 +1,5 @@
 import { reconcileKubernetesResult } from './reconcile.js'
+import { capstoneTemplateDiagnostic } from './capstone/policy.js'
 import { currentRolloutSecrets, captureRolloutRedaction } from './rollout-redaction.js'
 
 const clone = value => structuredClone(value)
@@ -62,6 +63,8 @@ export function pruneRevisionHistory(input, target) {
 
 export function undoDeployment(input, target, { revision = null } = {}, lab) {
   const fail = (code, message) => ({ run: input, lines: [], diagnostics: [{ code, message }] })
+  const issue = capstoneTemplateDiagnostic(input, lab)
+  if (issue) return fail(issue.code, issue.message)
   if (lab?.capabilities?.kubernetesRollouts !== true) return fail('ROLLOUT_UNSUPPORTED', 'Deployment undo is available only in release Labs with rollout support.')
   const state = input.runtime?.kubernetes?.clusters?.[target.clusterId]
   const deploy = Object.values(state?.resources ?? {}).find(item => item.kind === 'Deployment'

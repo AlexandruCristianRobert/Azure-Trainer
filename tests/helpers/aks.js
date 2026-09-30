@@ -55,7 +55,7 @@ export function seedAksProductionAt(stageId = 'source') {
   let run = createBehavioralRun(aksCapstoneLab, { attemptId: 'aks-production-test-attempt' })
   for (const stage of aksCapstoneLab.stages) {
     if (stage.id === stageId) return { lab: aksCapstoneLab, run }
-    if (['resilience', 'release', 'incident', 'final-cleanup'].includes(stage.id)) throw new Error('Later capstone stage is not implemented.')
+    if (['release', 'incident', 'final-cleanup'].includes(stage.id)) throw new Error('Later capstone stage is not implemented.')
     for (const taskId of stage.taskIds) {
       const task = aksCapstoneLab.tasks.find(item => item.id === taskId)
       for (const step of task.solution.steps) {
@@ -79,6 +79,21 @@ export function seedAksProductionAt(stageId = 'source') {
     validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)
   }
   throw new Error(`Unknown capstone stage ${stageId}`)
+}
+
+export function executeCapstoneResilience(run, lab, { finishHandoff = true, onAction = () => {}, onTask = () => {} } = {}) {
+  for (const id of lab.stages.find(stage => stage.id === 'resilience').taskIds) {
+    if (!finishHandoff && id === 'release-baseline') break
+    for (const step of lab.tasks.find(task => task.id === id).solution.steps) {
+      const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+        : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+      try { run = act(run, lab, action).run }
+      catch (error) { throw new Error(`${id} ${JSON.stringify(action)}: ${error.message}`) }
+      onAction(run, action, id)
+    }
+    onTask(run, id)
+  }
+  return run
 }
 
 export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, question = 'How long are backups kept?', requestId = 'request-test-1',

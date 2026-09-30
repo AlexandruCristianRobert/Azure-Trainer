@@ -227,7 +227,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
   else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts)
   else if (input.kind === 'HorizontalPodAutoscaler') {
-    if (rollouts) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root, 'Release Labs use fixed desired replicas; HPA creation is outside this trainer scope.')] }
+    if (rollouts && capabilities.aksCapstoneHpa !== true) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root, 'HPA creation requires the active capstone resilience checkpoint and a settled deployment; release Labs use fixed replicas.')] }
     if (!resources) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
     const result = validateHpa(input, { namespace: resolvedNamespace, deployments: capabilities.deployments ?? [] })
     return result.diagnostics.length ? result : { object: result.object, diagnostics: [] }

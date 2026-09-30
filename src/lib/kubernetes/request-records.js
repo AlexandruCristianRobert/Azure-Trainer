@@ -14,7 +14,7 @@ const unsafeText = /(?:[a-z][a-z+.-]*:\/\/[^\s/]*@|\b(?:Bearer|Basic)\s+|\b(?:Pa
 // The captured project capability also covers scenario/probe callers which have
 // no Lab argument. Older manifests never acquire diagnosis state or new IDs.
 export function requestDiagnosticsEnabled(run) {
-  return getProjectManifest(run.project.manifestId)?.diagnosticsVersion === 1
+  return getProjectManifest(run.project?.manifestId)?.diagnosticsVersion === 1
 }
 
 export function allocateRequest(input) {
