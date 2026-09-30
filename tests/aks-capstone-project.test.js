@@ -44,6 +44,24 @@ describe('AKS capstone teaching project', () => {
     expect(result.measurements.workload).toMatchObject({ operation: 'process_batch', units: 20, checksum: 3230 })
   })
 
+  it('accepts reordered log fields while still requiring the expected records in order', () => {
+    const app = CAPSTONE_SOLUTION_FILES.v1['app.py']
+    const reordered = app.replace(
+      '{"event": event, "request_id": current_request_id(), "status": status}',
+      '{"request_id": current_request_id(), "event": event, "status": status}')
+    expect(reordered).not.toBe(app)
+    expect(verifyCapstoneSource({ ...CAPSTONE_SOLUTION_FILES.v1, 'app.py': reordered }, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).passed).toBe(true)
+
+    for (const invalidApp of [
+      reordered.replace('"request_id": current_request_id()', '"request_id": "wrong"'),
+      reordered.replace('log_event("request.started")', 'log_event("request.completed")'),
+    ]) {
+      const result = verifyCapstoneSource({ ...CAPSTONE_SOLUTION_FILES.v1, 'app.py': invalidApp }, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
+      expect(result.passed).toBe(false)
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_LOGS' }))
+    }
+  })
+
   it('requires a changed v2 answer release and rejects malformed or unsupported source', () => {
     expect(verifyCapstoneSource(CAPSTONE_SOLUTION_FILES.v2, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).measurements.cases.backups.body.release).toBe('2.0')
     for (const app of [CAPSTONE_SOLUTION_FILES.v1['app.py'] + '\nif (\n', CAPSTONE_SOLUTION_FILES.v1['app.py'] + '\nimport subprocess\n']) {

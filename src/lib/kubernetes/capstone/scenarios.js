@@ -2,6 +2,7 @@ import { parsePythonProject } from '../../project/python.js'
 import { parsePythonDockerfile } from '../../project/python-dockerfile.js'
 import { simulateIntegration } from '../integration.js'
 import { evaluateHealthEndpoint } from '../probes.js'
+import { canonicalize } from '../../labEngine/evidence.js'
 
 const issue = (code, message, path = 'app.py') => ({ code, message, path, line: 1, column: 1 })
 const profileEnvironment = catalog => ({ ...catalog?.profiles?.training, APP_ENV: 'training' })
@@ -71,7 +72,7 @@ export function verifyCapstoneSource(files, manifest, fixtureCatalog) {
   check(results.retryRecovery.status === 200 && results.retryRecovery.dependencyTrace[0]?.attempts?.length === 2,
     'CAPSTONE_RETRY', 'A transient embedding failure must recover on the second attempt.')
   for (const [name, result] of Object.entries(results))
-    check(JSON.stringify(result.appLogRecords) === JSON.stringify(expectedLog(`source-preview-${name}`, result.status)),
+    check(canonicalize(result.appLogRecords) === canonicalize(expectedLog(`source-preview-${name}`, result.status)),
       'CAPSTONE_LOGS', `The ${name} application logs must surround the actual response with a request ID.`)
   const version = app.version
   check((version === '1.0' && !Object.hasOwn(results.backups.body, 'release'))
