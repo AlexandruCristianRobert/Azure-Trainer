@@ -17,13 +17,75 @@ const record = (run, lab, id = 'current') => { const assessed = verify(run, lab,
 const done = (run, lab, id = 'current') => evaluateLab(lab, run).tasks.find(task => task.id === id).done
 const send = (run, lab, id) => applyRunAction(run, { type: 'aks-request', scenarioId: id }, lab).run
 
-function historicalFixture() {
+function historicalFixture({ missingLab = false, selectedScenario = 'observe-port' } = {}) {
   let { run, lab, clusterId } = seedDiagnosisIncidentTest()
   lab = { ...lab, tasks: lab.tasks.map(task => ({ ...task, check: () => true, dependencies: task.id === 'observe-port'
-    ? api.diagnosisDependencies(lab.scenarios[task.id].target, { historical: true, scenarioId: task.id, lab }) : {} })) }
+    ? api.diagnosisDependencies(lab.scenarios[task.id].target, { historical: true, scenarioId: selectedScenario, ...(missingLab ? {} : { lab }) }) : {} })) }
   run = applyRunAction(run, { type: 'aks-diagnosis-start', scenarioId: 'incident' }, lab).run
   return { run, lab, clusterId }
 }
+
+test.each(['missing Lab', 'another unrecorded scenario'])('historical selectors with %s cannot certify a normally recorded uncaptured request', mismatch => {
+  const { run, lab, clusterId } = historicalFixture({ missingLab: mismatch === 'missing Lab', selectedScenario: mismatch === 'missing Lab' ? 'observe-port' : 'observe-dependency' })
+  const assessed = verify(run, lab, 'observe-port')
+  expect(assessed.result.completed).toBe(true)
+  const recorded = recordVerification(assessed.run, lab, 'observe-port', assessed.result)
+  expect(recorded.runtime.kubernetes.clusters[clusterId].diagnosis.incident.observations).toHaveLength(0)
+  expect(done(recorded, lab, 'observe-port')).toBe(false)
+})
+
+test('a genuine foreign Task capture cannot certify a miswired historical selector', () => {
+  let { run, lab, clusterId } = historicalFixture()
+  run = send(run, lab, 'observe-port')
+  const path = 'k8s/service-internal.yaml', phase = lab.scenarios.incident.phases[0]
+  run = act(run, lab, { type: 'save-file', path, text: phase.edits[0].before }).run
+  run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = send(run, lab, 'recover')
+  run = applyRunAction(run, { type: 'aks-diagnosis-next', scenarioId: 'incident' }, lab).run
+  run = advanceHealth(run, lab, 90)
+  run = send(run, lab, 'observe-dependency')
+  expect(api.diagnosisHistoricalEvidence(run, lab, 'observe-dependency')).not.toBeNull()
+  run = act(run, lab, { type: 'save-file', path, text: phase.edits[0].after }).run
+  run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  lab = { ...lab, tasks: lab.tasks.map(task => task.id === 'observe-port' ? { ...task,
+    dependencies: api.diagnosisDependencies(lab.scenarios['observe-dependency'].target, { historical: true, scenarioId: 'observe-dependency', lab }) } : task) }
+  const assessed = verify(run, lab, 'observe-port')
+  expect(assessed.result.completed).toBe(true)
+  const recorded = recordVerification(assessed.run, lab, 'observe-port', assessed.result)
+  expect(recorded.evidence.experimentsById[recorded.evidence.currentEvidenceByTask['observe-port']].measurements.diagnosisCapture).toBeUndefined()
+  expect(recorded.runtime.kubernetes.clusters[clusterId].diagnosis.incident.observations).toHaveLength(2)
+  expect(done(recorded, lab, 'observe-port')).toBe(false)
+})
+
+test('ambiguous historical scenario ownership cannot reuse an existing genuine capture', () => {
+  let { run, lab } = historicalFixture(); run = send(run, lab, 'observe-port')
+  expect(done(run, lab, 'observe-port')).toBe(true)
+  const original = lab.tasks.find(task => task.id === 'observe-port')
+  lab = { ...lab, tasks: [...lab.tasks, { ...original, id: 'another-observer', dependencies: {} }] }
+  const dependencies = api.diagnosisDependencies(lab.scenarios['observe-port'].target, { historical: true, scenarioId: 'observe-port', lab })
+  lab = { ...lab, tasks: lab.tasks.map(task => task.id === original.id ? { ...task, dependencies } : task) }
+  expect(done(run, lab, 'observe-port')).toBe(false)
+})
+
+test('correct historical Tasks retain separate authenticated captures through native phase advancement', () => {
+  let { run, lab } = historicalFixture()
+  lab = { ...lab, tasks: lab.tasks.map(task => task.id === 'observe-dependency' ? { ...task,
+    dependencies: api.diagnosisDependencies(lab.scenarios[task.id].target, { historical: true, scenarioId: task.id, lab }) } : task) }
+  run = send(run, lab, 'observe-port')
+  const first = run.evidence.currentEvidenceByTask['observe-port'], phase = lab.scenarios.incident.phases[0], path = phase.edits[0].path
+  run = act(run, lab, { type: 'save-file', path, text: phase.edits[0].before }).run
+  run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = send(run, lab, 'recover')
+  run = applyRunAction(run, { type: 'aks-diagnosis-next', scenarioId: 'incident' }, lab).run
+  run = advanceHealth(run, lab, 90)
+  run = send(run, lab, 'observe-dependency')
+  expect(run.evidence.currentEvidenceByTask['observe-port']).toBe(first)
+  expect(run.evidence.currentEvidenceByTask['observe-dependency']).not.toBe(first)
+  for (const id of ['observe-port', 'observe-dependency']) {
+    expect(done(run, lab, id)).toBe(true)
+    expect(api.diagnosisHistoricalEvidence(run, lab, id)).toMatchObject({ evidenceId: run.evidence.currentEvidenceByTask[id] })
+  }
+})
 
 test('a passed historical request recorded without native capture cannot complete its Task', () => {
   const { run, lab, clusterId } = historicalFixture()
@@ -39,8 +101,10 @@ test('caller-supplied pending capture metadata cannot bypass historical authenti
   const { run, lab } = historicalFixture(), assessed = verify(run, lab, 'observe-port')
   const recorded = recordVerification(assessed.run, lab, 'observe-port', assessed.result)
   const select = Object.values(lab.tasks.find(task => task.id === 'observe-port').dependencies)[0]
+  const owner = lab.tasks.find(task => task.id === 'observe-port')
   const forged = { ...recorded, diagnosisCapturePendingEvidenceId: recorded.evidence.currentEvidenceByTask['observe-port'] }
-  expect(() => select(forged)).toThrow(/capture/i)
+  expect(select(forged, owner)).toMatchObject({ available: false, ownerTaskId: 'observe-port', scenarioId: 'observe-port' })
+  expect(done(forged, lab, 'observe-port')).toBe(false)
 })
 
 test('a historical request without an incident cannot certify a null dependency snapshot', () => {
@@ -57,14 +121,19 @@ test.each(['evidence', 'scenario', 'attempt', 'epoch', 'target'])('historical de
   let { run, lab } = historicalFixture(); run = send(run, lab, 'observe-port')
   expect(done(run, lab, 'observe-port')).toBe(true)
   const select = Object.values(lab.tasks.find(task => task.id === 'observe-port').dependencies)[0]
-  expect(select(contextFor(run))).toEqual(select(run))
+  const owner = lab.tasks.find(task => task.id === 'observe-port')
+  expect(select(contextFor(run), owner)).toEqual(select(run, owner))
   const wrong = structuredClone(run), record = wrong.evidence.experimentsById[wrong.evidence.currentEvidenceByTask['observe-port']]
   if (foreign === 'evidence') record.measurements.diagnosisCapture.evidenceId = 'evidence-1'
   if (foreign === 'scenario') record.scenarioId = 'recover-port'
   if (foreign === 'attempt') record.attemptId = 'another-attempt'
   if (foreign === 'epoch') record.measurements.diagnosisCapture.epoch++
   if (foreign === 'target') record.measurements.diagnosisCapture.target.serviceUid = 'kube-999'
-  for (const context of [wrong, contextFor(wrong)]) expect(() => select(context)).toThrow(/capture/i)
+  for (const context of [wrong, contextFor(wrong)]) {
+    expect(select(context, owner)).toMatchObject({ available: false, ownerTaskId: 'observe-port', scenarioId: 'observe-port' })
+    expect(select(context, owner)).not.toEqual(select(run, owner))
+  }
+  expect(done(wrong, lab, 'observe-port')).toBe(false)
 })
 
 test.each(['missing embedding', 'literal query', 'reordered embedding', 'later embedding'])('exhausted answer rejects %s despite the expected 503 body', mutation => {

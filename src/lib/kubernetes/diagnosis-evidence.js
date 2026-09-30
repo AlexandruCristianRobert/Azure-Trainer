@@ -5,7 +5,7 @@ import { inspectDeploymentConsistency, releaseDependencies } from './release-evi
 import { getProjectManifest } from '../project/manifests.js'
 import { getDeploymentPods } from './reconcile.js'
 import { redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
-import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidenceId } from './diagnosis-incidents.js'
+import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidence } from './diagnosis-incidents.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 
 const same = (left, right) => canonicalize(left) === canonicalize(right)
@@ -81,7 +81,9 @@ export function verifyDiagnosis(run, lab, scenarioId) {
 
 /** Historical proof is authenticated by the native capture validator, not current live logs. */
 export function diagnosisHistoricalEvidence(run, lab, scenarioId) {
-  const task = lab.tasks.find(item => item.verification?.scenarioId === scenarioId)
+  const tasks = lab.tasks.filter(item => item.verification?.scenarioId === scenarioId)
+  if (tasks.length !== 1) return null
+  const task = tasks[0]
   const record = run.evidence.experimentsById[run.evidence.currentEvidenceByTask[task?.id]]
   return record?.scenarioId === scenarioId && record.measurements.diagnosisCapture && validDiagnosisEvidenceRecord(record, run, lab) ? structuredClone(record.measurements.diagnosisCapture) : null
 }
@@ -89,23 +91,33 @@ export function diagnosisHistoricalEvidence(run, lab, scenarioId) {
 export function diagnosisDependencies(target, { historical = false, scenarioId = null, incidentEpoch = null, lab = null } = {}) {
   const key = `aks-diagnosis:${target.clusterId}:${target.namespace}:${target.deploymentName}:${target.serviceName}:${historical ? `history:${scenarioId}` : 'live'}`
   const live = Object.values(releaseDependencies(target))[0]
-  return { [key]: context => {
+  return { [key]: (context, owner) => {
     const state = stateFor(context, target)
     if (historical) {
       const incident = state?.diagnosis?.incident
-      const task = lab?.tasks.find(item => item.verification?.scenarioId === scenarioId)
+      const tasks = lab?.tasks.filter(item => item.verification?.scenarioId === scenarioId) ?? []
+      const task = tasks.length === 1 ? tasks[0] : null
       const record = context.evidence.experimentsById[context.evidence.currentEvidenceByTask[task?.id]]
-      if (!incident || context.attemptId !== undefined && incident.attemptId !== context.attemptId
+      const unavailable = () => ({ available: false, selector: key, ownerTaskId: owner?.id ?? null, scenarioId,
+        evidence: structuredClone(context.evidence.currentEvidenceByTask) })
+      const declaration = lab?.scenarios?.[scenarioId]
+      if (!lab || !owner || !task || task.id !== owner.id || owner.verification?.scenarioId !== scenarioId
+        || task.verification.scenarioVersion !== declaration?.version || owner.verification.scenarioVersion !== declaration?.version
+        || !validAksRequestScenario(declaration, lab)
+        || !['clusterId', 'namespace', 'deploymentName', 'serviceName'].every(name => declaration.target[name] === target[name])
+        || !incident || context.attemptId !== undefined && incident.attemptId !== context.attemptId
         || context.labId !== undefined && incident.labId !== context.labId
         || incidentEpoch !== null && incident.epoch !== incidentEpoch
         || !['clusterId', 'namespace', 'deploymentName', 'serviceName'].every(name => incident.target[name] === target[name]))
-        return { unavailableIncidentEvidenceId: record?.id ?? null }
-      // Recording precedes native capture. Only that owner's internal pending
-      // context may inspect a passed record before its anchor is committed.
-      if (record?.completed && pendingDiagnosisCaptureEvidenceId(context) !== record.id
-        && (!lab || !diagnosisHistoricalEvidence({ ...context, labId: context.labId ?? incident.labId,
-          attemptId: context.attemptId ?? incident.attemptId, contentVersion: context.contentVersion ?? lab.contentVersion }, lab, scenarioId)))
-        throw new Error('Historical diagnosis requires an authenticated native capture.')
+        return unavailable()
+      const pending = pendingDiagnosisCaptureEvidence(context)
+      const recordMatches = record?.taskId === owner.id && record.scenarioId === scenarioId
+        && record.scenarioVersion === declaration.version && record.completed === true && record.outcome === 'passed'
+      const authorized = pending?.taskId === owner.id && pending.scenarioId === scenarioId
+        && (pending.stage === 'record' || pending.stage === 'capture' && recordMatches && pending.evidenceId === record.id)
+      if (!authorized && (!recordMatches
+        || !diagnosisHistoricalEvidence({ ...context, labId: context.labId ?? incident.labId,
+          attemptId: context.attemptId ?? incident.attemptId, contentVersion: context.contentVersion ?? lab.contentVersion }, lab, scenarioId))) return unavailable()
       return { attemptId: incident.attemptId, contentVersion: context.contentVersion ?? lab?.contentVersion ?? null, incidentId: incident.id, epoch: incident.epoch, target: structuredClone(incident.target),
         fixtureVersion: 1, declarationHash: lab ? diagnosisDigest({ scenario: lab.scenarios[scenarioId], fixtures: lab.initialProjectFiles, incident: Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis') }) : null }
     }

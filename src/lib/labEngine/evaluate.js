@@ -31,7 +31,7 @@ function dependencyMatches(run, task, record) {
   const context = contextFor(run)
   for (const [key, selector] of Object.entries(selectors)) {
     try {
-      if (canonicalize(recordValues[key]) !== canonicalize(selector(context))) return false
+      if (canonicalize(recordValues[key]) !== canonicalize(selector(context, task))) return false
     } catch { return false }
     if (recordGenerations[key] !== (run.dependencyGenerations?.[key] ?? 0)) return false
   }

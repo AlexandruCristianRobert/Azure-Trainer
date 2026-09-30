@@ -21,7 +21,7 @@ function dependencySnapshot(run, task) {
   const context = contextFor(run)
   for (const [key, selector] of Object.entries(task.dependencies ?? {})) {
     try {
-      const selected = selector(context)
+      const selected = selector(context, task)
       canonicalize(selected)
       values[key] = cloneJson(selected)
     } catch {

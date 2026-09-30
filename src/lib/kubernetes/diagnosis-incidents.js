@@ -1,5 +1,5 @@
 import { applyRunAction } from '../labEngine/actions.js'
-import { canonicalize } from '../labEngine/evidence.js'
+import { canonicalize, recordVerification } from '../labEngine/evidence.js'
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { validateKubernetesObject } from './schema.js'
@@ -13,8 +13,18 @@ import { resolvePodConfiguration } from './configuration.js'
 
 const clone = value => structuredClone(value)
 const pendingCaptureContexts = new WeakMap()
-// Read-only capability lookup: only the native capture owner can register one.
-export const pendingDiagnosisCaptureEvidenceId = context => pendingCaptureContexts.get(context)
+const pendingRecordingEvidence = new WeakMap()
+// Read-only, caller-isolated lookup; only the native owner registers a tuple.
+export const pendingDiagnosisCaptureEvidence = context => {
+  const value = pendingCaptureContexts.get(context) ?? pendingRecordingEvidence.get(context.evidence)
+  return value ? { ...value } : null
+}
+/** Native recording interval; ordinary recordVerification remains the owner. */
+export function recordDiagnosisVerification(run, lab, taskId, result) {
+  pendingRecordingEvidence.set(run.evidence, { stage: 'record', evidenceId: `evidence-${run.nextSequence}`, taskId, scenarioId: result.scenarioId })
+  try { return recordVerification(run, lab, taskId, result) }
+  finally { pendingRecordingEvidence.delete(run.evidence) }
+}
 const exact = (value, keys) => isPlainObject(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',')
 const same = (a, b) => canonicalize(a) === canonicalize(b)
 const text = value => typeof value === 'string' && value.length > 0 && value.length <= 512
@@ -172,10 +182,10 @@ function currentEvidence(run, scenarioId, lab, capturePending = false) {
   const evidence = run.evidence.experimentsById[id]
   if (!evidence || evidence.attemptId !== run.attemptId || evidence.labId !== run.labId || evidence.scenarioId !== scenarioId || evidence.outcome !== 'passed' || !evidence.completed) return null
   const context = capturePending ? { ...run } : run
-  if (capturePending) pendingCaptureContexts.set(context, evidence.id)
+  if (capturePending) pendingCaptureContexts.set(context, { stage: 'capture', evidenceId: evidence.id, taskId: task.id, scenarioId })
   for (const [key, selector] of Object.entries(task.dependencies ?? {})) {
     if (evidence.dependencyGenerations[key] !== (run.dependencyGenerations[key] ?? 0)
-      || !same(evidence.dependencyValues[key], selector(context))) return null
+      || !same(evidence.dependencyValues[key], selector(context, task))) return null
   }
   return evidence
 }

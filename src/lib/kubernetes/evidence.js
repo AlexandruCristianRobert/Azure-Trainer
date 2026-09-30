@@ -222,7 +222,7 @@ export function refreshKubernetesDependencies(previous, next, lab) {
   const counters = { ...next.dependencyGenerations }; const changed = new Set()
   for (const task of lab.tasks ?? []) for (const [key, select] of Object.entries(task.dependencies ?? {})) {
     if (changed.has(key)) continue
-    if (canonicalize(select({ ...previous, run: previous })) !== canonicalize(select({ ...next, run: next }))) {
+    if (canonicalize(select({ ...previous, run: previous }, task)) !== canonicalize(select({ ...next, run: next }, task))) {
       changed.add(key); counters[key] = (previous.dependencyGenerations[key] ?? 0) + 1
     }
   }

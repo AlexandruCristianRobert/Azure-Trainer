@@ -13,7 +13,7 @@ import { advanceResourceIncident } from './resource-incidents.js'
 import { startReleaseExperiment, finishReleaseExperiment, cancelReleaseExperiment } from './release-experiments.js'
 import { recordFinalReleaseVerification } from './release-evidence.js'
 import { recordReleaseMilestone } from './release-milestones.js'
-import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive } from './diagnosis-incidents.js'
+import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive, recordDiagnosisVerification } from './diagnosis-incidents.js'
 import { verifyDiagnosis } from './diagnosis-evidence.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
@@ -162,8 +162,14 @@ export function applyAksAction(run, action, lab) {
   const refreshed = refreshKubernetesDependencies(run, run, lab)
   if (lab.capabilities?.kubernetesDiagnostics === true) {
     const assessed = verifyDiagnosis(refreshed, lab, action.scenarioId)
-    let next = recordVerification(assessed.run, lab, task.id, assessed.result)
+    let next = recordDiagnosisVerification(assessed.run, lab, task.id, assessed.result)
     next = captureDiagnosisObservation(next, action.scenarioId, { requestId: assessed.result.measurements.requestId }, lab)
+    next = refreshKubernetesDependencies(refreshed, next, lab)
+    // Native capture finalizes this new record before the outer action returns.
+    // An unavailable -> authenticated dependency transition belongs to this
+    // fresh verification, not to an earlier Task's retained evidence.
+    const evidence = next.evidence.experimentsById[next.evidence.currentEvidenceByTask[task.id]]
+    evidence.dependencyGenerations = Object.fromEntries(Object.keys(evidence.dependencyGenerations).map(key => [key, next.dependencyGenerations[key] ?? 0]))
     const measurements = assessed.result.measurements
     return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
       status: measurements.status, body: measurements.body, measurements }], portalEvents: [], diagnostics: [] }
