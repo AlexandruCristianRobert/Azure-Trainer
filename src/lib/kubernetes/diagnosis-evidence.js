@@ -4,7 +4,7 @@ import { simulateKubernetesRequest } from './requests.js'
 import { inspectDeploymentConsistency, releaseDependencies } from './release-evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { getDeploymentPods } from './reconcile.js'
-import { redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
+import { inspectRequestRecords, redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
 import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidence, probeIncidentSnapshot } from './diagnosis-incidents.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { observeDiagnosisLifecycle } from './diagnosis-lifecycle.js'
@@ -101,6 +101,18 @@ export function verifyDiagnosis(run, lab, scenarioId) {
     rollout: getRolloutSummary(response.run, scenario.target),
     provenanceValid: !!request && requestProvenance(response.measurements, scenario) }
   let passed = response.outcome && measurements.provenanceValid
+  if (lab.id === 'aks-diagnosis-independent' && scenarioId === 'repeatable-recovery') {
+    const application = request && inspectRequestRecords(response.run, { clusterId: scenario.target.clusterId, requestId: request.id }).application
+    const completion = application?.find(item => item.requestId === request.id && item.containerId === request.containerId
+      && item.artifactId === request.artifactId && item.sourceFields?.event === 'request.completed'
+      && item.sourceFields.request_id === request.id && item.sourceFields.status === request.status
+      && item.sourceBindings?.request_id === 'request-id' && item.sourceBindings.status === 'result-status')
+    // Capture the native correlation at Verify time; later bounded log pruning cannot erase earned proof.
+    measurements.completionLog = completion ? { requestId: completion.requestId, containerId: completion.containerId,
+      artifactId: completion.artifactId, event: completion.sourceFields.event, status: completion.sourceFields.status,
+      requestBinding: completion.sourceBindings.request_id, statusBinding: completion.sourceBindings.status } : null
+    passed &&= !!completion
+  }
   if (scenario.requireCompleteRollout) passed &&= measurements.rollout?.complete === true
   if (scenario.observeLifecycle) {
     const incident = state?.diagnosis?.incident

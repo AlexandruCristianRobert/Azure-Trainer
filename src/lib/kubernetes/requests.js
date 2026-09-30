@@ -202,6 +202,8 @@ function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
     && outcome.route.serviceName === scenario.target.serviceName && outcome.route.namespace === scenario.target.namespace
   const failurePattern = expectedTransport.ok ? true
     : expectedTransport.reason === 'NO_READY_ENDPOINTS' ? outcome.route.selectedCount === 0
+      || run.labId === 'aks-diagnosis-independent' && scenario.id === 'inspect-incident'
+        && outcome.route.selectedCount === 2 && (outcome.route.readyEndpointUids?.length ?? 0) === 0
       : expectedTransport.reason === 'CONNECTION_REFUSED' ? (outcome.route.readyEndpointUids?.length ?? 0) > 0
         : true
   const dependencyPattern = outcome.integrationTrace ? true : outcome.status !== 503 ? true : !!outcome.route.podUid

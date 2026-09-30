@@ -280,6 +280,56 @@ export function executeDiagnosisRepair(run, lab, { targetPort = 'http', repairTo
   return run
 }
 
+/** Traverse Lab24 with saved source, a distinct build, live apply and real request Verifies. */
+export function executeIndependentDiagnosis(run, lab, { sourceRepair = 'config-binding', repairOrder = 'readiness-first' } = {}) {
+  if (!['config-binding', 'equivalent-parameter-name'].includes(sourceRepair) || !['readiness-first', 'source-first'].includes(repairOrder))
+    throw new Error('Unknown independent diagnosis repair path.')
+  const save = (path, text) => { run = act(run, lab, { type: 'save-file', path, text }).run }
+  const command = line => { run = act(run, lab, { type: 'command', line }).run }
+  const verify = scenarioId => { run = act(run, lab, { type: 'aks-request', scenarioId }).run }
+  if (!run.runtime.kubernetes.clusters[lab.scenarios.incident.target.clusterId]?.diagnosis?.incident) {
+    run = act(run, lab, { type: 'aks-diagnosis-start', scenarioId: 'incident' }).run
+    verify('inspect-incident')
+  }
+  const deploymentPath = 'k8s/deployment.yaml'
+  const readiness = () => {
+    save(deploymentPath, run.project.savedFiles[deploymentPath].replace('/health/readyz', '/health/ready'))
+    command(`kubectl apply -f ${deploymentPath}`)
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  const source = () => {
+    let app = lab.solutionFiles['app.py']
+    if (sourceRepair === 'equivalent-parameter-name') {
+      app = app.replace('"audience": cfg["audience"]', '"person_scope": cfg["audience"]')
+      save('retrieval.sql', lab.solutionFiles['retrieval.sql'].replace('%(audience)s', '%(person_scope)s'))
+    }
+    save('app.py', app)
+    command('az acr build --registry acraksdiagnosisindependent --image assistant:review-v2 .')
+    save(deploymentPath, repairOrder === 'source-first'
+      ? lab.solutionFiles[deploymentPath].replace('/health/ready', '/health/readyz')
+      : lab.solutionFiles[deploymentPath])
+    command(`kubectl apply -f ${deploymentPath}`)
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  if (repairOrder === 'readiness-first') {
+    readiness()
+    run = applyRunAction(run, { type: 'aks-request', scenarioId: 'restore-backup' }, lab).run
+    source()
+  } else {
+    source()
+    readiness()
+  }
+  verify('restore-backup')
+  verify('restore-support')
+  verify('validate-empty')
+  verify('validate-no-match')
+  for (const path of DIAGNOSIS_MANIFEST.kubernetesFiles) command(`kubectl apply -f ${path}`)
+  command('kubectl rollout restart deployment/assistant-api -n assistant')
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  for (const scenarioId of ['restore-backup', 'restore-support', 'validate-empty', 'validate-no-match', 'repeatable-recovery', 'restore-backup']) verify(scenarioId)
+  return run
+}
+
 export function createAksTestRun(overrides = {}) {
   const lab = makeAksLab(overrides)
   return { lab, run: createBehavioralRun(lab, { attemptId: 'test-aks' }) }

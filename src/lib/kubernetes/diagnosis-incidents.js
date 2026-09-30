@@ -207,6 +207,23 @@ function healthy(run, target) {
   return deployment && pods.length === deployment.spec.replicas && pods.length > 0 && Object.keys(state.projectionDue).length === 0
     && pods.every(pod => !pod.metadata.deletionTimestamp && pod.status.phase === 'Running' && state.health?.containers?.[pod.metadata.uid]?.ready === true)
 }
+/** Lab 24 begins with its only Deployment already unready; retain that exact starting condition. */
+function declaredInitialUnready(run, scenario, lab) {
+  if (lab.id !== 'aks-diagnosis-independent' || scenario.initialFaults !== true) return false
+  const target = scenario.target, state = stateFor(run, target)
+  const deployment = state?.resources[`Deployment/${target.namespace}/${target.deploymentName}`]
+  const pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName)
+  const container = deployment?.spec.template.spec.containers[0]
+  const allAppPods = Object.values(state?.resources ?? {}).filter(item => item.kind === 'Pod' && item.metadata.namespace === target.namespace)
+  return deployment?.spec.replicas === 2 && pods.length === 2 && allAppPods.length === 2
+    && container?.readinessProbe?.httpGet?.path === '/health/readyz'
+    && container?.startupProbe?.httpGet?.path === '/health/startup'
+    && container?.livenessProbe?.httpGet?.path === '/health/live'
+    && Object.keys(state.projectionDue).length === 0
+    && pods.every(pod => pod.status.phase === 'Running' && !pod.metadata.deletionTimestamp
+      && state.health?.containers?.[pod.metadata.uid]?.ready === false
+      && state.podSnapshots?.[pod.metadata.uid]?.environment?.AUDIENCE === 'partner')
+}
 function stage(run, scenario, phase, lab) {
   if (!draftsAgree(run) || !phase.edits.every(edit => run.project.savedFiles[edit.path] === edit.before)) return reject(run, 'Save all drafts and restore the declared fixture preconditions before introducing this phase.')
   let candidate = clone(run); const lines = [{ kind: 'out', text: `Diagnosis investigation: ${scenario.investigationArea}` }]
@@ -237,7 +254,8 @@ function receipt(run, incident, kind, observationId = null, lifecycle = null) {
 }
 export function startDiagnosisIncident(run, scenarioId, lab) {
   const scenario = scenarioFor(run, scenarioId, lab), target = scenario && stableTarget(run, scenario.target)
-  if (!scenario || !target || busy(run) || diagnosisIncidentActive(run) || stateFor(run, target).diagnosis?.incident || !healthy(run, target) || !draftsAgree(run) || !filesApplied(run, target, lab))
+  if (!scenario || !target || busy(run) || diagnosisIncidentActive(run) || stateFor(run, target).diagnosis?.incident
+    || !(healthy(run, target) || declaredInitialUnready(run, scenario, lab)) || !draftsAgree(run) || !filesApplied(run, target, lab))
     return reject(run, 'Diagnosis requires a declared fixture, saved/applied stable healthy baseline, and no active experiment.')
   if (!capturedBaselineReady(run, scenario, lab)) return reject(run, 'Capture authentic working baseline logs on the current saved source and deployed containers before diagnosis.')
   const baselineObjects = baselineObjectCoordinates(run, lab, scenario)
