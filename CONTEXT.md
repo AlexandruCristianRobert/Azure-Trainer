@@ -42,13 +42,29 @@ _Avoid_: Challenge, Assessment mode
 A final Lab that combines the topics practiced in the preceding Labs, requiring the learner to assemble and troubleshoot the complete application setup from scratch.
 _Avoid_: Final quiz, Final exam
 
+**Learning Journey**:
+An ordered series of Labs covering one platform or service family, organized into topics that each progress through Guided, Troubleshooting and Independent Labs, and ending in one Capstone Lab. The Data journey covers Cosmos DB for NoSQL, Azure Database for PostgreSQL and Azure Managed Redis and ends in a single Capstone that combines all three.
+_Avoid_: Track, Course, Path, Module
+
 **Application Factory**:
 A reusable application starter containing a REST API, configuration, container image, and deployment infrastructure that the learner adapts and deploys during Labs.
 _Avoid_: Azure Data Factory, application factory function
 
 **Knowledge Assistant**:
-The example application in the AKS learning journey that answers practice questions using retrieved document passages and returns answers with source references.
+The example application in the AKS and Data learning journeys that answers practice questions using retrieved document passages and returns answers with source references. In the Data journey it keeps its document corpus in PostgreSQL, its Conversation History in Cosmos DB, and its Response Cache and Semantic Cache in Redis.
 _Avoid_: General-purpose chatbot, live AI assistant
+
+**Conversation History**:
+The Knowledge Assistant's record of sessions, the questions asked, the answers returned and learner feedback on those answers. It is also searched for similar previously answered questions.
+_Avoid_: Chat log, Transcript, Memory
+
+**Response Cache**:
+Stored answers reused only when a new request has exactly the same normalized question and filters.
+_Avoid_: Semantic Cache, Output cache
+
+**Semantic Cache**:
+Stored answers reused when a new question's embedding is similar enough to a cached question's embedding, even if the wording differs.
+_Avoid_: Response Cache, Vector cache, Fuzzy cache
 
 **Task**:
 One checkable step of a Lab, stated as a condition over the Sandbox's resource configuration or evidence of observed behavior (e.g. replicas increasing under load). A Task is satisfied by meeting its condition, rather than by entering a prescribed command sequence.
