@@ -26,3 +26,4 @@ Open Claude Code on this branch and say: "continue the data journey from docs/su
 - 2026-10-01 00:30 — Task 1 (fixtures) complete: c81074c.
 - 2026-10-01 00:48 — Task 2 (Cosmos data plane) complete: 6913157. Task 3 (query evaluator) in progress.
 - 2026-10-01 01:05 — Task 3 (Cosmos query evaluator) complete: 37d9aed.
+- 2026-10-01 01:10 — Task 4 (RU cost model) complete: 537a607. SDD ledger mirrored to docs/superpowers/data-journey-sdd-ledger.md (the live one is in git-ignored .superpowers/).
