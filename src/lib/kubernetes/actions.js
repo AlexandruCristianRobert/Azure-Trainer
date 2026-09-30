@@ -15,6 +15,7 @@ import { recordFinalReleaseVerification } from './release-evidence.js'
 import { recordReleaseMilestone } from './release-milestones.js'
 import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive, recordDiagnosisVerification } from './diagnosis-incidents.js'
 import { verifyDiagnosis } from './diagnosis-evidence.js'
+import { verifyAksCapstone } from './capstone/evidence.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -61,6 +62,17 @@ export function validAksRequestScenario(scenario, lab) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (action.type === 'aks-request' && lab?.capabilities?.aksCapstone === true) {
+    if (Object.keys(action).sort().join(',') !== 'scenarioId,type'
+      || typeof action.scenarioId !== 'string')
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS capstone Verify accepts only a named scenario ID.' }] }
+    const verified = verifyAksCapstone(run, lab, action.scenarioId)
+    const task = lab.tasks.find(item => item.verification?.scenarioId === action.scenarioId)
+    if (!task || verified.result.measurements.reason === 'stage-locked')
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_STAGE_INACTIVE', message: 'Only the active capstone Task can be verified.' }] }
+    const next = recordVerification(verified.run, lab, task.id, verified.result)
+    return { run: next, lines: [{ kind: verified.result.completed ? 'out' : 'err', text: `${task.id}: ${verified.result.measurements.reason ?? verified.result.outcome}`, measurements: verified.result.measurements }], portalEvents: [], diagnostics: [] }
+  }
   if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay'].includes(action.type)) {
     const replay = action.type === 'aks-diagnosis-replay'
     if (lab?.capabilities?.kubernetesDiagnostics !== true || Object.keys(action).sort().join(',') !== (replay ? 'observationId,type' : 'scenarioId,type'))

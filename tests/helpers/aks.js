@@ -1,5 +1,5 @@
 import { applyRunAction } from '../../src/lib/labEngine/actions.js'
-import { createBehavioralRun } from '../../src/lib/labEngine/run.js'
+import { createBehavioralRun, validateBehavioralRun } from '../../src/lib/labEngine/run.js'
 import { recordVerification } from '../../src/lib/labEngine/evidence.js'
 import { FOUNDATION_FILES, FOUNDATION_MANIFEST } from '../../src/data/templates/aks-python/foundation.js'
 
@@ -49,6 +49,37 @@ import { evaluateLab } from '../../src/lib/labEngine/evaluate.js'
 import { DIAGNOSIS_MANIFEST, DIAGNOSIS_SOLUTION_FILES } from '../../src/data/templates/aks-python/diagnosis.js'
 import { parsePythonProject } from '../../src/lib/project/python.js'
 import { INTEGRATION_FIXTURES } from '../../src/data/fixtures/aks/integration.js'
+import { aksCapstoneLab } from '../../src/data/labs/aks-journey/capstone.lab.js'
+
+export function seedAksProductionAt(stageId = 'source') {
+  let run = createBehavioralRun(aksCapstoneLab, { attemptId: 'aks-production-test-attempt' })
+  for (const stage of aksCapstoneLab.stages) {
+    if (stage.id === stageId) return { lab: aksCapstoneLab, run }
+    if (['resilience', 'release', 'incident', 'final-cleanup'].includes(stage.id)) throw new Error('Later capstone stage is not implemented.')
+    for (const taskId of stage.taskIds) {
+      const task = aksCapstoneLab.tasks.find(item => item.id === taskId)
+      for (const step of task.solution.steps) {
+        const action = step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+          : step.kind === 'command' ? { type: 'command', line: step.line } : step.action
+        let result
+        try { result = applyRunAction(run, action, aksCapstoneLab) }
+        catch (error) { throw new Error(`${stage.id}/${taskId} ${JSON.stringify(action)}: ${error.message}`) }
+        if (result.diagnostics.length) throw new Error(`${stage.id}/${taskId}: ${JSON.stringify(result.diagnostics)}`)
+        run = result.run
+      }
+    }
+    for (const taskId of stage.taskIds) {
+      const result = applyRunAction(run, { type: 'aks-request', scenarioId: `capstone-${taskId}` }, aksCapstoneLab)
+      if (result.diagnostics.length) throw new Error(`${stage.id}/${taskId} final Verify: ${JSON.stringify(result.diagnostics)}`)
+      run = result.run
+    }
+    const advanced = applyRunAction(run, { type: 'aks-advance-stage' }, aksCapstoneLab)
+    if (advanced.diagnostics.length) throw new Error(`${stage.id} seal: ${JSON.stringify(advanced.diagnostics)} ${JSON.stringify(evaluateLab(aksCapstoneLab, run).tasks.filter(task => stage.taskIds.includes(task.id)).map(task => [task.id, task.status, task.reason]))}`)
+    run = advanced.run
+    validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)
+  }
+  throw new Error(`Unknown capstone stage ${stageId}`)
+}
 
 export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, question = 'How long are backups kept?', requestId = 'request-test-1',
   requestIdExpression = 'current_request_id()', environment = {}, profile = 'healthy' } = {}) {
