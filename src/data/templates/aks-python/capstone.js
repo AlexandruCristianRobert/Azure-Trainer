@@ -47,7 +47,7 @@ const v1 = Object.freeze({
 const v2 = Object.freeze({ ...v1, 'app.py': v2App,
   'k8s/deployment.yaml': deployment.replace('assistant:capstone-v1', 'assistant:capstone-v2') })
 const scale = Object.freeze({ ...v1, 'k8s/deployment.yaml': deployment.replace('  replicas: 2\n', ''), 'k8s/hpa.yaml': hpa })
-const final = Object.freeze({ ...v2, 'k8s/hpa.yaml': '# HPA removed; final deployment owns two replicas.\n' })
+const final = Object.freeze({ ...v2, 'k8s/hpa.yaml': '# HPA exercise complete; final deployment uses two fixed replicas.\n' })
 
 export const CAPSTONE_SOLUTION_FILES = Object.freeze({ v1, v2, scale, final })
 export const CAPSTONE_FILES = Object.freeze({

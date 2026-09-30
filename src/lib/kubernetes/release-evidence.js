@@ -15,6 +15,7 @@ const resourcesFor = (run, target) => run.runtime.kubernetes.clusters[target.clu
 const consistencyLab = { capabilities: { kubernetesRollouts: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesConnectivity: true } }
 const proofTargets = lab => Object.values(lab.scenarios ?? {}).filter(scenario => ['aks-release', 'aks-release-final'].includes(scenario.kind)
   || lab.capabilities?.kubernetesDiagnostics === true && scenario.kind === 'aks-request' && scenario.requireTwoReplicas === true).map(scenario => scenario.target)
+const includeNamespace = (run, lab) => lab.capabilities?.aksCapstone === true && run.stages.sealedStages.length >= 7
 
 function desired(object) {
   if (!object) return null
@@ -40,7 +41,8 @@ export function releaseSavedObjects(run, target, lab) {
     diagnostics.push(...parsed.diagnostics)
     for (const doc of parsed.documents) {
       if (!doc || (doc.metadata?.namespace ?? target.namespace) !== target.namespace
-        || !['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(doc.kind) || doc.kind === 'Deployment' && doc.metadata.name !== target.deploymentName) continue
+        || !['Deployment', 'ConfigMap', 'Secret', 'Service', ...(includeNamespace(run, lab) ? ['Namespace'] : [])].includes(doc.kind)
+        || doc.kind === 'Namespace' && doc.metadata.name !== target.namespace || doc.kind === 'Deployment' && doc.metadata.name !== target.deploymentName) continue
       const result = validateKubernetesObject(doc, { namespace: target.namespace, capabilities: lab.capabilities })
       diagnostics.push(...result.diagnostics)
       if (result.object) docs.push({ path, key: objectKey(result.object), object: result.object })
@@ -62,7 +64,8 @@ export function releaseFingerprint(run, target, lab) {
     sourceVersions: Object.fromEntries(manifest.buildFiles.map(path => [path, run.project.fileVersions[path] ?? 0])),
     savedObjects: docs.map(({ key, object }) => ({ key, hash: releaseDigest(desired(object)) })).sort((a, b) => a.key.localeCompare(b.key)),
     invalidYaml: diagnostics.length > 0,
-    liveObjects: Object.values(resources).filter(object => object.metadata.namespace === target.namespace && ['ConfigMap', 'Secret', 'Service'].includes(object.kind) || object === deployment)
+    liveObjects: Object.values(resources).filter(object => object.metadata.namespace === target.namespace && ['ConfigMap', 'Secret', 'Service'].includes(object.kind) || object === deployment
+      || includeNamespace(run, lab) && object.kind === 'Namespace' && object.metadata.name === target.namespace)
       .map(object => ({ key: objectKey(object), uid: object.metadata.uid, hash: releaseDigest(desired(object)) })).sort((a, b) => a.key.localeCompare(b.key)),
     artifact: artifact ? { id: artifactId, sourceHash: artifact.sourceHash, digest: artifact.digest } : null }
 }
@@ -80,6 +83,9 @@ function proofState(run, target, lab, { trackObjects = false } = {}) {
   const inputsHash = releaseDigest({ deploymentUid: uid, sourceHash: fingerprint.sourceHash, sourceVersions: fingerprint.sourceVersions,
     artifact: fingerprint.artifact, invalidYaml: fingerprint.invalidYaml })
   const previousObjects = proof.objectStates ?? {}
+  // Entering final-cleanup starts a new six-object reapply witness. Earlier
+  // five-object release/incident apply observations cannot satisfy this stage.
+  if (includeNamespace(run, lab) && !previousObjects[`Namespace//${target.namespace}`]) proof.appliedKeys = []
   const objectStates = {}
   for (const key of new Set([...fingerprint.savedObjects.map(item => item.key), ...fingerprint.liveObjects.map(item => item.key)])) {
     const objectHash = releaseDigest({ saved: fingerprint.savedObjects.filter(item => item.key === key), live: fingerprint.liveObjects.find(item => item.key === key) ?? null })
@@ -96,8 +102,9 @@ function proofState(run, target, lab, { trackObjects = false } = {}) {
 
 /** Called at the successful apply boundary, including genuine no-op apply. */
 export function noteReleaseReapply(run, clusterId, object, lab) {
-  if (!lab.capabilities?.kubernetesRollouts || !['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object.kind)) return run
-  const targets = proofTargets(lab).filter(target => target.clusterId === clusterId && target.namespace === object.metadata.namespace)
+  if (!lab.capabilities?.kubernetesRollouts || !['Deployment', 'ConfigMap', 'Secret', 'Service', ...(includeNamespace(run, lab) ? ['Namespace'] : [])].includes(object.kind)) return run
+  const targets = proofTargets(lab).filter(target => target.clusterId === clusterId
+    && target.namespace === (object.kind === 'Namespace' ? object.metadata.name : object.metadata.namespace))
   for (const target of targets) {
     const view = proofState(run, target, lab, { trackObjects: true }); if (!view) continue
     const key = objectKey(object); const saved = view.fingerprint.savedObjects.find(item => item.key === key)

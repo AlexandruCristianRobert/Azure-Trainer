@@ -185,6 +185,8 @@ export function validateAksCapstoneState(run, lab) {
   if (state.cleanupCheckpoint !== null && (state.sealedStages.length < 7
     || typeof lab.aksCapstone?.validateCleanupCheckpoint !== 'function'
     || lab.aksCapstone.validateCleanupCheckpoint(run) !== true)) invalid('AKS cleanup checkpoint is missing validated final-request provenance.')
+  if (state.cleanupCheckpoint === null && run.evidence.aksCleanupReceipt !== undefined)
+    invalid('AKS cleanup receipt cannot outlive its checkpoint.')
   const receipts = run.evidence.aksCapstoneReceipts
   if (!receipts || typeof receipts !== 'object' || Array.isArray(receipts) || Object.keys(receipts).length > 128)
     invalid('AKS durable verification proofs are missing or oversized.')
@@ -230,6 +232,7 @@ export function validateAksCapstoneState(run, lab) {
     previous = seal.sequence
   }
   const sequences = [...journal.map(event => event.sequence), ...Object.values(run.evidence.experimentsById).map(record => record.sequence),
+    ...(state.cleanupCheckpoint ? [state.cleanupCheckpoint.sequence] : []),
     ...state.sealedStages.map(seal => seal.sequence), ...Object.keys(run.artifacts.buildsById).map(id => Number(id.slice(6))),
     ...state.aks.creationReceipts.map(record => record.sequence), ...state.aks.deletionReceipts.map(record => record.sequence)]
   if (new Set(sequences).size !== sequences.length || sequences.some(value => !Number.isSafeInteger(value) || value < 1 || value >= run.nextSequence))
@@ -268,7 +271,10 @@ export function advanceAksStage(run, lab) {
   const exit = lab.aksCapstone?.stageExit?.(run, stage) ?? []
   if (exit.length) return { run, diagnostics: exit }
   if (run.stages.sealedStages.length === 7 && !aksCleanupReady(run, lab)) return reject('AKS_CLEANUP_REQUIRED', 'Verify the final cleanup checkpoint before advancing.')
-  const records = stage.taskIds.map(id => evidenceAt(run, id, run.nextSequence))
+  const records = stage.taskIds.map(id => {
+    const frozenId = run.stages.cleanupCheckpoint?.evidenceIds.find(evidenceId => run.evidence.experimentsById[evidenceId]?.taskId === id)
+    return frozenId ? run.evidence.experimentsById[frozenId] : evidenceAt(run, id, run.nextSequence)
+  })
   const seal = { stageId: stage.id, attemptId: run.attemptId, contentVersion: run.contentVersion, sequence: run.nextSequence,
     taskIds: [...stage.taskIds].sort(), evidenceIds: records.map(record => record.id).sort(),
     dependencyValues: Object.fromEntries(records.map(record => [record.taskId, record.dependencyValues])),

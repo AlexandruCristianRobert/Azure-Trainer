@@ -17,6 +17,7 @@ import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObser
 import { verifyDiagnosis } from './diagnosis-evidence.js'
 import { verifyAksCapstone } from './capstone/evidence.js'
 import { startAksCapstoneIncident, CAPSTONE_INCIDENT_ID } from './capstone/incident.js'
+import { aksFrozenActionAllowed } from './capstone/cleanup.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -64,6 +65,8 @@ export function validAksRequestScenario(scenario, lab) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (lab?.capabilities?.aksCapstone === true && run.stages.cleanupCheckpoint && !aksFrozenActionAllowed(action))
+    return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_CLEANUP_FROZEN', message: 'Frozen final proof permits only cleanup verification.' }] }
   if (action.type === 'aks-capstone-incident') {
     if (lab?.capabilities?.aksCapstone !== true || Object.keys(action).join() !== 'type')
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Start incident accepts no caller overrides.' }] }

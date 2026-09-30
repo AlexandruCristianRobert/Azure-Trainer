@@ -8,6 +8,9 @@ import { CAPSTONE_HPA_DISABLED, measuredMilestone, milestoneDependencies, releas
 import { CAPSTONE_INCIDENT_FILES, CAPSTONE_INCIDENT_ID, CAPSTONE_RELEASE_REQUIREMENTS, CAPSTONE_V2_IMAGE,
   publishedAksCapstoneV2, stableAksCapstoneV2, stableAksCapstoneV2Dependencies, capstoneReleaseProof, capstoneReleaseDependencies,
   capstoneIncidentIdentity, validateCapstoneReleaseStart, validateCapstoneReleaseFinish, validateAksCapstoneDiagnosis } from '../../../lib/kubernetes/capstone/incident.js'
+import { aksFinalReady, aksFinalDependencyHash, aksCleanupEligibility, validateAksCleanupCheckpoint,
+  inspectAksCleanup, aksCleanupReady, aksCleanupDependencies, aksCleanupAppDependencies,
+  aksCleanupAppInventoryClear, aksCleanupInventoryClear } from '../../../lib/kubernetes/capstone/cleanup.js'
 
 const stages = [
   ['source', 'Complete the application contract', ['source-contract']],
@@ -222,12 +225,53 @@ authored['incident-recovered'] = {
   examNote: 'A healthy live request must agree with repeatable saved configuration. Historical isolated results cannot satisfy recovery.',
 }
 
+const finalCases = {
+  'final-internal': ['How long are backups kept?', { status: 200, body: { answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], environment: 'training', release: '2.0' } }, 'internal backup answer and DNS'],
+  'final-external': ['Who provides support?', { status: 200, body: { answer: 'Contact the training desk for support.', sources: ['training-support'], environment: 'training', release: '2.0' } }, 'external support answer'],
+  'final-invalid': ['   ', { status: 400, body: { error: 'Question is required.' } }, 'blank input with no dependency calls'],
+  'final-no-match': ['What is the travel allowance?', { status: 200, body: { answer: 'No matching documents.', sources: [], environment: 'training' } }, 'empty retrieval without an answer call'],
+  'final-timeout': ['How long are backups kept?', { status: 504, body: { error: 'A dependency timed out after retries.', code: 'DEPENDENCY_TIMEOUT' } }, 'bounded persistent embedding timeout'],
+}
+for (const [id, [, , description]] of Object.entries(finalCases)) authored[id] = {
+  text: `Verify the current v2 ${description} after applying all six final manifests and restarting every desired Pod.`,
+  check: run => aksFinalReady(run, aksCapstoneLab), dependencies: { 'capstone-final-current': aksFinalDependencyHash },
+  hints: ['Keep two fixed healthy replicas, no HPA and no active experiment; save all project edits.',
+    id === 'final-timeout' ? 'The request-local timeout profile must return 504 after three embedding attempts, with no query or answer.' : 'Reapply all six final manifests, restart assistant-api, wait for complete rollout and refresh all five final Verify cases.'],
+  solution: solution(...(id === 'final-internal' ? [...yamlFiles.map(path => command(`kubectl apply -f ${path}`)),
+    command('kubectl rollout restart deployment/assistant-api -n assistant'), advance(90)] : []), verify(id)),
+  examNote: 'Final requests observe current saved source, artifact, Services and restarted Pods. A later edit or restart requires fresh proof.',
+}
+authored['cleanup-app'] = {
+  text: 'Freeze the five current final proofs, then delete the owned assistant namespace and its application resources.',
+  check: aksCleanupAppInventoryClear, dependencies: { 'capstone-cleanup-app': aksCleanupAppDependencies },
+  hints: ['Freeze final proof only after all five final Verify cases currently pass.', 'Delete namespace assistant; the ordinary cascade removes its Pods, controllers, HPA and per-Pod timers.'],
+  solution: solution({ kind: 'scenario', action: { type: 'aks-freeze-cleanup' } }, command('kubectl delete namespace assistant'), verify('cleanup-app')),
+  examNote: 'Freeze preserves the demonstrated service before intentional deletion. After freezing, source and workload changes are disabled.',
+}
+authored['cleanup-cloud'] = {
+  text: 'Delete every attempt-owned AKS, ACR and resource group, preserving the supplied prerequisites; verify cleanup and seal the final checkpoint.',
+  check: aksCleanupInventoryClear, dependencies: { 'capstone-cleanup': aksCleanupDependencies },
+  hints: ['Delete aks-capstone, acrakscapstone and rg-aks-capstone with the supported commands.', 'Safe group deletion is an equivalent cascade. Retry remaining exact owned resources after any partial failure.'],
+  solution: solution(command('az aks delete -g rg-aks-capstone -n aks-capstone --yes'), command('az acr delete -n acrakscapstone --yes'),
+    command('az group delete -n rg-aks-capstone --yes'), verify('cleanup-app'), verify('cleanup-cloud')),
+  examNote: 'Historical build/source/evidence records remain after cleanup; live registry publications, contexts, identities and node resources must be gone.',
+}
+
 const tasks = stages.flatMap(stage => stage.taskIds.map(id => capstoneTask(id, authored[id] ?? {
   text: `Complete the ${id} measured capstone milestone when this stage is available.`, check: () => false,
   hints: ['This stage requires its own measured simulator evidence.', 'Inspect the active experiment and saved deployment before verifying.'],
   solution: solution(verify(id)), examNote: 'This later milestone is unavailable until its measured scenario is implemented.',
 })))
 const scenarios = Object.fromEntries(tasks.map(task => [task.verification.scenarioId, { kind: 'aks-capstone-pending', version: 1 }]))
+for (const [id, [question, expected]] of Object.entries(finalCases)) scenarios[`capstone-${id}`] = {
+  kind: 'aks-request', version: 1, target: id === 'final-internal' ? CAPSTONE_TARGET : CAPSTONE_EXTERNAL,
+  request: { method: 'POST', path: '/api/ask', body: { question } }, expected, requireTwoReplicas: true,
+  integrationProfile: id === 'final-timeout' ? 'embedding-timeout-always' : 'healthy',
+  connectivity: id === 'final-internal'
+    ? { origin: { kind: 'service', clusterId: CAPSTONE_CLUSTER_ID, namespace: 'assistant', serviceName: 'assistant-internal' }, hostname: 'assistant-internal.assistant.svc.cluster.local', port: 80 }
+    : { origin: { kind: 'external' }, service: { name: 'assistant-external', namespace: 'assistant' }, port: 80 },
+}
+for (const id of ['cleanup-app', 'cleanup-cloud']) scenarios[`capstone-${id}`] = { kind: 'aks-capstone-cleanup', version: 1 }
 for (const [id, script] of probeSpecs) scenarios[`capstone-${id}`] = { kind: 'aks-probe', version: 1,
   target: { ...CAPSTONE_TARGET, externalServiceName: 'assistant-external' }, durationSeconds: 150,
   script: script === 'coldStartup' ? { initializationSeconds: 6 } : { ...HEALTH_FIXTURES.scenarios[script] } }
@@ -272,6 +316,10 @@ export const aksCapstoneLab = {
     kubernetesRollouts: true, kubernetesDiagnostics: true, aksCapstone: true, acrBuild: true },
   stages, tasks, scenarios, releaseRequirements: CAPSTONE_RELEASE_REQUIREMENTS,
   aksCapstone: { incidentFiles: CAPSTONE_INCIDENT_FILES,
+    cleanupEligibility: run => aksCleanupEligibility(run, aksCapstoneLab),
+    validateCleanupCheckpoint: validateAksCleanupCheckpoint,
+    cleanupReady: run => aksCleanupReady(run, aksCapstoneLab),
+    inspectCleanup: run => inspectAksCleanup(run, aksCapstoneLab),
     validateReleaseStart: (run, scenarioId) => validateCapstoneReleaseStart(run, aksCapstoneLab, scenarioId),
     validateReleaseFinish: (run, experiment) => validateCapstoneReleaseFinish(run, aksCapstoneLab, experiment),
     validatePinnedDiagnosisEvidence: (record, proof, run) => validateAksCapstoneDiagnosis(record, proof, run, aksCapstoneLab),

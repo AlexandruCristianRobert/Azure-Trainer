@@ -149,7 +149,17 @@ const exact = (value, keys) => plain(value) && Object.keys(value).sort().join(',
 const clock = value => Number.isSafeInteger(value) && value >= 0
 const safe = (value, state) => same(value, redactRequestValue(value, state))
 const envelopeKeys = ['id', 'requestId', 'clusterId', 'namespace', 'podUid', 'containerId', 'artifactId', 'simTimeMs', 'requestElapsedMs', 'origin']
-function validOrigin(origin, clusterId, state) {
+function validOrigin(origin, clusterId, state, run) {
+  if (origin?.kind === 'service') {
+    if (run.labId !== 'aks-knowledge-assistant-capstone' || !exact(origin, ['kind', 'clusterId', 'namespace', 'serviceName', 'serviceUid'])
+      || origin.clusterId !== clusterId || origin.namespace !== 'assistant' || origin.serviceName !== 'assistant-internal') return false
+    const service = state.resources['Service/assistant/assistant-internal']
+    if (service?.metadata.uid === origin.serviceUid) return true
+    return Object.values(run.evidence.experimentsById).some(record => record.scenarioId === 'capstone-final-internal'
+      && record.attemptId === run.attemptId && record.outcome === 'passed' && record.completed
+      && record.measurements?.clusterId === clusterId && record.measurements?.route?.serviceUid === origin.serviceUid
+      && typeof record.measurements.finalProof === 'string')
+  }
   return plain(origin) && origin.clusterId === clusterId
     && (exact(origin, ['kind', 'clusterId']) && origin.kind === 'external'
       || exact(origin, ['kind', 'clusterId', 'podUid']) && origin.kind === 'pod'
@@ -161,7 +171,7 @@ function validEnvelope(item, run, clusterId, state) {
     && typeof item.artifactId === 'string' && !!run.artifacts.buildsById[item.artifactId]
     && clock(item.simTimeMs) && item.simTimeMs <= run.runtime.simTimeMs
     && clock(item.requestElapsedMs) && item.requestElapsedMs <= 5000
-    && validOrigin(item.origin, clusterId, state)
+    && validOrigin(item.origin, clusterId, state, run)
     && safe(item, state)
 }
 
@@ -173,8 +183,12 @@ export function validRequestDiagnostics(item, run) {
     || !clock(item.simTimeMs) || item.simTimeMs > run.runtime.simTimeMs || !clock(item.requestElapsedMs) || item.requestElapsedMs > 5000
     || !count(item.dependencyTruncated) || !Array.isArray(item.dependencyRecords) || item.dependencyRecords.length > 30) return false
   const state = run.runtime.kubernetes.clusters[item.clusterId]
-  if (!state || !safe(item, state) || !validOrigin(item.origin, item.clusterId, state)
+  if (!state || !safe(item, state) || !validOrigin(item.origin, item.clusterId, state, run)
     || !plain(item.transport) || typeof item.transport.ok !== 'boolean' || !plain(item.route)) return false
+  if (item.origin.kind === 'service' && (item.scenarioId !== 'capstone-final-internal'
+    || item.route.serviceUid !== item.origin.serviceUid || item.route.serviceName !== item.origin.serviceName
+    || item.hostname !== 'assistant-internal.assistant.svc.cluster.local' || item.port !== 80
+    || item.request?.method !== 'POST' || item.request.path !== '/api/ask' || item.request.body?.question !== 'How long are backups kept?')) return false
   if (!item.transport.ok) return item.status === null && item.podUid === null && item.containerId === null && item.artifactId === null
     && item.dependencyRecords.length === 0 && item.dependencyTruncated === 0
     && ['podUid', 'podName', 'artifactId', 'containerId'].every(key => item.route[key] === undefined)

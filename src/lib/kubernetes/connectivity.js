@@ -102,6 +102,17 @@ export function routeServiceRequest(input, probe, lab) {
       && ready(pod) && state.connectivity?.diagnosticPodUids.includes(pod.metadata.uid)
   } else if (probe?.origin?.kind === 'external' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind') {
     originValid = !!runtimeBefore?.clusters?.[probe.origin.clusterId]?.connectivity
+  } else if (probe?.origin?.kind === 'service' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,namespace,serviceName,serviceUid') {
+    const declaration = lab?.scenarios?.['capstone-final-internal']
+    const target = declaration?.target, origin = probe.origin
+    const service = runtimeBefore?.clusters?.[origin.clusterId]?.resources?.[`Service/${origin.namespace}/${origin.serviceName}`]
+    originValid = lab?.capabilities?.aksCapstone === true && lab.id === 'aks-knowledge-assistant-capstone' && input.labId === lab.id
+      && input.stages?.activeStageId === 'final-cleanup' && !input.stages.cleanupCheckpoint && probe.scenarioId === 'capstone-final-internal'
+      && target?.clusterId === origin.clusterId && target.namespace === 'assistant' && target.serviceName === 'assistant-internal'
+      && origin.namespace === target.namespace && origin.serviceName === target.serviceName && service?.metadata.uid === origin.serviceUid
+      && probe.hostname === 'assistant-internal.assistant.svc.cluster.local' && probe.port === 80
+      && probe.method === declaration.request.method && probe.path === declaration.request.path
+      && probe.body?.question === declaration.request.body.question
   }
   if (!originValid) {
     outcome.transport.reason = 'INVALID_ORIGIN'

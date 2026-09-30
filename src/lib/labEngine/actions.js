@@ -18,6 +18,7 @@ import { getResourceGroup } from '../sandbox/ops.js'
 import { getContainerApp } from '../sandbox/containerapps.js'
 import { capstoneStages, cleanupReady, createStageSeal, recoveryCheckpoint, stageMilestone } from './stages.js'
 import { isAksCapstone, advanceAksStage, finalizeAksVerification } from '../kubernetes/capstone/stages.js'
+import { freezeAksCleanup, aksFrozenActionAllowed } from '../kubernetes/capstone/cleanup.js'
 import { commitAksOwnership } from '../kubernetes/capstone/ownership.js'
 import { injectCapstoneIncident } from './incident.js'
 import { evaluateLab } from './evaluate.js'
@@ -570,6 +571,8 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
+  if (isAksCapstone(lab) && run.stages.cleanupCheckpoint && !aksFrozenActionAllowed(action))
+    return envelope(run, [], [], [diagnostic('AKS_CLEANUP_FROZEN', 'Final proof is frozen. Only reads, cleanup deletions, cleanup Verify and final stage sealing are available.')])
   if (isAksCapstone(lab) && action.scenarioId !== undefined) {
     const task = lab.tasks.find(item => item.verification?.scenarioId === action.scenarioId)
     if (task && !lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id))
@@ -589,6 +592,12 @@ export function applyRunAction(run, action, lab) {
   }
   let result
   switch (action.type) {
+    case 'aks-freeze-cleanup': {
+      if (!isAksCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'Freeze accepts no caller-supplied checkpoint state.')
+      const frozen = freezeAksCleanup(run, lab)
+      result = envelope(frozen.run, [], [], frozen.diagnostics)
+      break
+    }
     case 'aks-advance-stage': {
       if (!isAksCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'AKS stage advancement accepts no caller state.')
       const advanced = advanceAksStage(run, lab)

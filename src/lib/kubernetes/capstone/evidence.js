@@ -1,4 +1,5 @@
 import { verifyCapstoneSource } from './scenarios.js'
+import { verifyAksFinal } from './cleanup.js'
 import { simulateKubernetesRequest } from '../requests.js'
 import { resolveServiceDns } from '../connectivity.js'
 import { inspectRequestRecords } from '../request-records.js'
@@ -32,6 +33,7 @@ export function verifyAksCapstone(run, lab, scenarioId) {
   if (lab.id !== run.labId || !task || lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id) !== true)
     return { run, result: result(false, { reason: 'stage-locked' }) }
   const id = scenarioId.slice('capstone-'.length)
+  if (task.stageId === 'final-cleanup') return verifyAksFinal(run, lab, scenarioId)
   if (task.stageId === 'incident') return verifyAksCapstoneIncident(run, lab, scenarioId)
   if (id === 'published-v2') return { run, result: result(publishedAksCapstoneV2(run), { kind: 'capstone-publication',
     artifactId: run.artifacts.publishedTags[CAPSTONE_V2_IMAGE] ?? null, reason: 'Publish a distinct v2 artifact from the complete saved source.' }) }

@@ -50,6 +50,7 @@ import { DIAGNOSIS_MANIFEST, DIAGNOSIS_SOLUTION_FILES } from '../../src/data/tem
 import { parsePythonProject } from '../../src/lib/project/python.js'
 import { INTEGRATION_FIXTURES } from '../../src/data/fixtures/aks/integration.js'
 import { aksCapstoneLab } from '../../src/data/labs/aks-journey/capstone.lab.js'
+import { CAPSTONE_TARGET } from '../../src/data/labs/aks-journey/capstone-helpers.js'
 
 export function seedAksProductionAt(stageId = 'source') {
   let run = createBehavioralRun(aksCapstoneLab, { attemptId: 'aks-production-test-attempt' })
@@ -79,6 +80,36 @@ export function seedAksProductionAt(stageId = 'source') {
     validateBehavioralRun(JSON.parse(JSON.stringify(run)), aksCapstoneLab)
   }
   throw new Error(`Unknown capstone stage ${stageId}`)
+}
+
+/** Final proof and ordinary cleanup actions; modes also expose real intermediate states. */
+export function executeCapstoneCleanup(run, lab, { mode = 'explicit-deletes' } = {}) {
+  const action = payload => {
+    const result = applyRunAction(run, payload, lab)
+    if (result.diagnostics.length || result.lines.some(item => item.kind === 'err'))
+      throw new Error(`Cleanup ${JSON.stringify(payload)}: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(result.lines.filter(item => item.kind === 'err'))}`)
+    run = result.run
+  }
+  if (!run.stages.cleanupCheckpoint) {
+    for (const id of ['final-internal', 'final-external', 'final-invalid', 'final-no-match', 'final-timeout']) {
+      for (const step of lab.tasks.find(item => item.id === id).solution.steps)
+        action(step.kind === 'file' ? { type: 'save-file', path: step.path, text: step.content }
+          : step.kind === 'command' ? { type: 'command', line: step.line } : step.action)
+    }
+    if (mode === 'verify-only') return run
+    action({ type: 'aks-freeze-cleanup' })
+  }
+  if (mode === 'freeze-only') return run
+  if (run.runtime.kubernetes.clusters[CAPSTONE_TARGET.clusterId]?.resources['Namespace//assistant'])
+    action({ type: 'command', line: 'kubectl delete namespace assistant' })
+  if (mode === 'explicit-deletes') {
+    action({ type: 'command', line: 'az aks delete -g rg-aks-capstone -n aks-capstone --yes' })
+    action({ type: 'command', line: 'az acr delete -n acrakscapstone --yes' })
+  }
+  action({ type: 'command', line: 'az group delete -n rg-aks-capstone --yes' })
+  for (const id of ['cleanup-app', 'cleanup-cloud']) action({ type: 'aks-request', scenarioId: `capstone-${id}` })
+  action({ type: 'aks-advance-stage' })
+  return run
 }
 
 export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks = [], onAction = () => {}, onTask = () => {} } = {}) {

@@ -122,7 +122,7 @@ describe('AKS capstone release and incident', () => {
     reverse = act(reverse, { type: 'aks-advance-stage' })
     expect(reverse.stages.activeStageId).toBe('final-cleanup')
   }, 60000)
-  it('preserves superseded unsealed anchors through pruning, failures, seals and cluster deletion', () => {
+  it('preserves superseded unsealed anchors through pruning, failures and seals', () => {
     let run = structuredClone(injected)
     const original = structuredClone(run.evidence.experimentsById[run.evidence.currentEvidenceByTask['fault-route']])
     for (let index = 0; index < 12; index++) {
@@ -134,9 +134,9 @@ describe('AKS capstone release and incident', () => {
     expect(reload(run)).toEqual(run)
     run = executeCapstoneStage(run, lab, 'incident', { skipTasks: ['fault-route'] })
     expect(reload(run)).toEqual(run)
-    run = act(run, command('az group delete -n rg-aks-capstone --yes'))
-    expect(state(run)).toBeUndefined()
-    expect(reload(run)).toEqual(run)
+    // Actual cluster deletion/reload is exercised after a genuine final-proof
+    // freeze by aks-capstone-cleanup.test.js. Cloud deletion is gated here.
+    expect(applyRunAction(run, command('az group delete -n rg-aks-capstone --yes'), lab).diagnostics[0]?.code).toBe('AKS_CLEANUP_CHECKPOINT_REQUIRED')
     expect(run.evidence.experimentsById[original.id]).toEqual(original)
     const corrupted = structuredClone(run)
     corrupted.evidence.experimentsById[original.id].measurements.diagnosisProvenance.capturedEndpoint = 'https://ai-training.example'

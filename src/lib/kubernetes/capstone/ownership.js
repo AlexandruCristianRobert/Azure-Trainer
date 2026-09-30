@@ -115,7 +115,14 @@ export function commitAksOwnership(before, candidate, events = []) {
   const removed = old.filter(item => !present.has(lower(item.resourceId)))
   const diagnostics = removed.length ? validateAksDeletion(before, removed.map(item => item.resourceId)) : []
   if (diagnostics.length) return { run: before, diagnostics }
+  if (!before.stages.cleanupCheckpoint && before.labId === 'aks-knowledge-assistant-capstone'
+    && removed.some(item => ['resourceGroups', 'aksClusters', 'containerRegistries'].includes(item.type)
+      && before.stages.aks.ownership.some(owned => lower(owned.resourceId) === lower(item.resourceId))))
+    return { run: before, diagnostics: [diagnostic('AKS_CLEANUP_CHECKPOINT_REQUIRED', 'Seal current final verification with Freeze final proof before deleting owned cloud resources.')] }
   const added = current.filter(item => !previous.has(lower(item.resourceId)) && !item.implicit)
+  if (before.stages.cleanupCheckpoint && (added.length || current.some(item => previous.has(lower(item.resourceId))
+    && !same(item.value, previous.get(lower(item.resourceId)).value))))
+    return { run: before, diagnostics: [diagnostic('AKS_CLEANUP_FROZEN', 'Frozen cleanup permits deletion of existing owned resources only.')] }
   const removedOwned = before.stages.aks.ownership.filter(item => removed.some(resource => lower(resource.resourceId) === lower(item.resourceId)))
   if (before.stages.aks.ownership.length - removedOwned.length + added.length > 128
     || before.stages.aks.creationReceipts.length + before.stages.aks.deletionReceipts.length + added.length + removedOwned.length > 256)
