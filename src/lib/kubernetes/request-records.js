@@ -2,6 +2,9 @@ import { getProjectManifest } from '../project/manifests.js'
 import { currentRolloutSecrets, retainedRolloutRedactions } from './rollout-redaction.js'
 
 const copy = value => structuredClone(value)
+const issuedDiagnosisRequests = new WeakMap()
+// Cloning/persisting a request never grants permission to mint a new receipt.
+export const nativeDiagnosisRequest = request => issuedDiagnosisRequests.has(request) && issuedDiagnosisRequests.get(request) === JSON.stringify(request)
 const count = value => Number.isSafeInteger(value) && value >= 0
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const sourceKeys = new Set(['event', 'request_id', 'status', 'endpoint', 'deployment', 'configuration_ref', 'error_code'])
@@ -117,6 +120,7 @@ export function recordRequestOutcome(input, target, outcome) {
       `request=${outcome.requestId} ${target.method} ${target.path} status=${outcome.status} dependencies=${summary.map(item => `${item.operation}:${item.status}`).join(',')}`].slice(-100)
   }
   runtime.requests = [...runtime.requests, redactRequestValue(base, state)].slice(-100)
+  if (diagnosis) issuedDiagnosisRequests.set(runtime.requests.at(-1), JSON.stringify(runtime.requests.at(-1)))
   const retainedIds = new Set(runtime.requests.map(item => item.id))
   for (const cluster of Object.values(runtime.clusters)) if (cluster.connectivity)
     cluster.connectivity.applicationLogs = cluster.connectivity.applicationLogs.filter(log => retainedIds.has(log.requestId))

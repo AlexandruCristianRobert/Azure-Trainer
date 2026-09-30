@@ -10,6 +10,7 @@ import { clearPodState, deleteCascade } from './pod-cleanup.js'
 import { formatContainerLog, requestDiagnosticsEnabled } from './request-records.js'
 import { setDeploymentReplicas } from './scheduling.js'
 import { inspectResources } from './resource-inspection.js'
+import { captureDiagnosisBaseline } from './diagnosis-incidents.js'
 
 const kinds = { pod: 'Pod', pods: 'Pod', deployment: 'Deployment', deployments: 'Deployment', deploy: 'Deployment', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler', hpa: 'HorizontalPodAutoscaler', service: 'Service', services: 'Service', svc: 'Service', endpointslice: 'EndpointSlice', endpointslices: 'EndpointSlice', ep: 'EndpointSlice', eps: 'EndpointSlice', configmap: 'ConfigMap', configmaps: 'ConfigMap', cm: 'ConfigMap', secret: 'Secret', secrets: 'Secret', namespace: 'Namespace', namespaces: 'Namespace', ns: 'Namespace', replicaset: 'ReplicaSet', replicasets: 'ReplicaSet', rs: 'ReplicaSet', node: 'Node', nodes: 'Node', event: 'Event', events: 'Event', ev: 'Event' }
 const namespaced = new Set(['Pod', 'Deployment', 'HorizontalPodAutoscaler', 'Service', 'EndpointSlice', 'ConfigMap', 'Secret', 'ReplicaSet', 'Event'])
@@ -122,6 +123,7 @@ export function runKubectl(sandbox, tokens, { run, lab } = {}) {
   const verb = tokens[0], rest = tokens.slice(1)
   if (verb === 'exec' && lab.capabilities.kubernetesConnectivity === true) {
     const result = runDiagnosticCommand(run, tokens, lab)
+    if (!result.diagnostics.length && result.run !== run) result.run = captureDiagnosisBaseline(result.run, lab)
     const effects = result.run === run ? undefined : [{ type: 'kubernetes-state', kubernetes: result.run.runtime.kubernetes, nextSequence: result.run.nextSequence }]
     return response(sandbox, [...result.lines.map(out), ...result.diagnostics.map(item => err(`Error: ${item.message}`))], effects)
   }

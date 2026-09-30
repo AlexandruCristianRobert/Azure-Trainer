@@ -4,6 +4,8 @@ import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { validDiagnosisLifecycle, validSealedLifecycleReceipt } from '../src/lib/kubernetes/diagnosis-lifecycle.js'
+import { captureDiagnosisBaseline, diagnosisDigest } from '../src/lib/kubernetes/diagnosis-incidents.js'
+import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { act, executeAksSolution, seedDiagnosisTest, seedDiagnosisIncidentTest } from './helpers/aks.js'
 
 const start = run => applyRunAction(run, { type: 'aks-diagnosis-start', scenarioId: 'incident' }, lab)
@@ -106,4 +108,47 @@ test('broken internal selector cannot certify baseline through a healthy externa
   run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
   run = act(run, lab, { type: 'aks-request', scenarioId: 'baseline' }).run
   expect(baselineDone(run)).toBe(false)
+})
+
+test('authenticated baseline survives ordinary live-request pruning and reload with unchanged external evidence', () => {
+  let run = executeAksSolution(createBehavioralRun(lab, { attemptId: 'review-pruned-baseline' }), lab, lab.tasks[0])
+  expect(baselineDone(run)).toBe(true)
+  const evidenceId = run.evidence.currentEvidenceByTask.baseline
+  const internalRequestId = run.runtime.kubernetes.requests.find(request => request.route.serviceName === 'assistant-internal').id
+  for (let index = 0; index < 100; index++) run = act(run, lab, { type: 'command', line: 'kubectl exec diagnostics -n diagnostics -- curl -sS http://assistant-internal.assistant/api/info' }).run
+  expect(run.runtime.kubernetes.requests).toHaveLength(100)
+  expect(run.runtime.kubernetes.requests.every(request => request.status === 200)).toBe(true)
+  expect(run.runtime.kubernetes.requests.some(request => request.id === internalRequestId)).toBe(false)
+  expect(run.evidence.currentEvidenceByTask.baseline).toBe(evidenceId)
+  expect(baselineDone(run)).toBe(true)
+  run = validateBehavioralRun(JSON.parse(JSON.stringify(run)), lab)
+  expect(baselineDone(run)).toBe(true)
+  expect(run.evidence.currentEvidenceByTask.baseline).toBe(evidenceId)
+})
+
+test('native baseline receipts cannot be minted from clones or retargeted by recomputing payload hashes', () => {
+  const initial = createBehavioralRun(lab, { attemptId: 'review-baseline-receipt' })
+  const target = lab.diagnosisBaseline.target, state = initial.runtime.kubernetes.clusters[target.clusterId]
+  const routed = routeServiceRequest(initial, { origin: { kind: 'pod', clusterId: target.clusterId, podUid: state.connectivity.diagnosticPodUids[0] },
+    hostname: 'assistant-internal.assistant', port: 80, method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, lab).run
+  const cloned = structuredClone(routed)
+  expect(captureDiagnosisBaseline(cloned, lab)).toBe(cloned)
+  expect(cloned.runtime.kubernetes.clusters[target.clusterId].diagnosis?.baseline).toBeUndefined()
+  const address = routed.runtime.kubernetes.requests.at(-1).route.address
+  routed.runtime.kubernetes.requests.at(-1).route.address = '203.0.113.99'
+  expect(captureDiagnosisBaseline(routed, lab)).toBe(routed)
+  routed.runtime.kubernetes.requests.at(-1).route.address = address
+  const captured = captureDiagnosisBaseline(routed, lab)
+  expect(captured.runtime.kubernetes.clusters[target.clusterId].diagnosis.baseline.request.status).toBe(200)
+  expect(validateBehavioralRun(JSON.parse(JSON.stringify(captured)), lab)).toBeTruthy()
+  for (const field of ['attemptId', 'taskId', 'sourceHash', 'containerId']) {
+    const wrong = structuredClone(captured), diagnosis = wrong.runtime.kubernetes.clusters[target.clusterId].diagnosis
+    if (field === 'containerId') diagnosis.baseline.request.containerId = 'container-9999'
+    else diagnosis.baseline[field] = 'forged'
+    diagnosis.baselineReceipt.requestDigest = diagnosisDigest(diagnosis.baseline.request)
+    expect(() => validateBehavioralRun(wrong, lab), field).toThrow(/Kubernetes/)
+  }
+  const replaced = act(captured, lab, { type: 'aks-request', scenarioId: 'baseline' }).run
+  const deleted = act(replaced, lab, { type: 'command', line: 'kubectl delete service assistant-internal -n assistant' }).run
+  expect(baselineDone(deleted)).toBe(false)
 })

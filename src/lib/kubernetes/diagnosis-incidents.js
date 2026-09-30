@@ -4,7 +4,7 @@ import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { validateKubernetesObject } from './schema.js'
 import { getDeploymentPods } from './reconcile.js'
-import { inspectRequestRecords, redactRequestValue, requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs } from './request-records.js'
+import { inspectRequestRecords, redactRequestValue, requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs, nativeDiagnosisRequest } from './request-records.js'
 import { simulateIntegration } from './integration.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { validIntegrationTrace } from './state.js'
@@ -62,6 +62,65 @@ export function diagnosisDigest(value) {
   let hash = 2166136261
   for (const c of canonicalize(value)) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619)
   return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+/** Only the native request dispatch may issue this durable, bounded baseline proof. */
+export function captureDiagnosisBaseline(run, lab) {
+  const declaration = lab?.diagnosisBaseline, request = run.runtime.kubernetes.requests.at(-1)
+  if (!declaration || lab.capabilities?.kubernetesDiagnostics !== true || !nativeDiagnosisRequest(request)) return run
+  const state = stateFor(run, declaration.target), task = lab.tasks.find(item => item.id === declaration.taskId)
+  const expected = lab.scenarios[task?.verification?.scenarioId]
+  if (!state || state.diagnosis?.baseline || !request.transport.ok || request.status !== 200
+    || request.clusterId !== declaration.target.clusterId || request.route.serviceName !== declaration.target.serviceName
+    || request.namespace !== declaration.target.namespace || request.origin.kind !== 'pod' || !state.connectivity.diagnosticPodUids.includes(request.origin.podUid)
+    || !same(request.request, expected?.request) || !same(request.body, expected?.expected.body)) return run
+  const target = stableTarget(run, declaration.target), scenario = Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis')
+  const capsule = capsuleFor(run, target, request), coordinates = capsuleCoordinates(run, target, capsule, scenario, lab)
+  const sourceHash = run.artifacts.buildsById[request.artifactId]?.sourceHash
+  if (!coordinates || !sourceHash || sourceHash !== projectSourceHash(selectBuildFiles(run.project.savedFiles, getProjectManifest(run.project.manifestId)))) return run
+  const candidate = clone(run), destination = stateFor(candidate, target), issuedSequence = candidate.nextSequence++
+  destination.diagnosis ??= { version: 1, incident: null, receipts: [] }
+  destination.diagnosis.baseline = { version: 1, labId: run.labId, attemptId: run.attemptId, taskId: task.id,
+    target, request: clone(request), capsule, coordinates, sourceHash }
+  destination.diagnosis.baselineReceipt = { id: `diagnosis-baseline-${issuedSequence}`, issuedSequence, requestId: request.id,
+    taskId: task.id, labId: run.labId, attemptId: run.attemptId, target: clone(target), sourceHash,
+    requestDigest: diagnosisDigest(request), capsuleDigest: diagnosisDigest(capsule) }
+  return validDiagnosisBaseline(candidate, lab, target.clusterId) ? candidate : run
+}
+
+/** Source/configuration reconstruction and an independent native receipt outlive live buffers. */
+export function validDiagnosisBaseline(run, lab, clusterId) {
+  const state = run.runtime.kubernetes.clusters[clusterId], snapshot = state?.diagnosis?.baseline, receipt = state?.diagnosis?.baselineReceipt
+  if (snapshot === undefined && receipt === undefined) return true
+  const declaration = lab?.diagnosisBaseline, task = lab?.tasks.find(item => item.id === declaration?.taskId)
+  const expected = lab?.scenarios[task?.verification?.scenarioId]
+  if (!declaration || !exact(snapshot, ['version', 'labId', 'attemptId', 'taskId', 'target', 'request', 'capsule', 'coordinates', 'sourceHash'])
+    || !exact(receipt, ['id', 'issuedSequence', 'requestId', 'taskId', 'labId', 'attemptId', 'target', 'sourceHash', 'requestDigest', 'capsuleDigest'])
+    || snapshot.version !== 1 || snapshot.labId !== lab.id || snapshot.labId !== run.labId || snapshot.attemptId !== run.attemptId
+    || snapshot.taskId !== declaration.taskId || !exact(snapshot.target, stableKeys) || snapshot.target.clusterId !== clusterId
+    || !same(Object.fromEntries(targetKeys.map(key => [key, snapshot.target[key]])), declaration.target)
+    || !['taskId', 'labId', 'attemptId', 'sourceHash'].every(key => receipt[key] === snapshot[key]) || !same(receipt.target, snapshot.target)
+    || !Number.isSafeInteger(receipt.issuedSequence) || receipt.issuedSequence < 1 || receipt.issuedSequence >= run.nextSequence
+    || receipt.id !== `diagnosis-baseline-${receipt.issuedSequence}`) return false
+  const request = snapshot.request, capsule = snapshot.capsule, artifact = run.artifacts.buildsById[request?.artifactId]
+  if (!isPlainObject(request) || receipt.requestId !== request.id || request.sequence + 1 !== receipt.issuedSequence
+    || receipt.requestDigest !== diagnosisDigest(request) || receipt.capsuleDigest !== diagnosisDigest(capsule)
+    || !artifact || artifact.sourceHash !== snapshot.sourceHash || !run.artifacts.sourceSnapshotsByHash[snapshot.sourceHash]
+    || !request.transport?.ok || request.status !== 200 || request.clusterId !== clusterId || request.namespace !== declaration.target.namespace
+    || request.route.serviceName !== declaration.target.serviceName || request.route.serviceUid !== snapshot.target.serviceUid
+    || request.origin.kind !== 'pod' || !same(request.request, expected?.request) || !same(request.body, expected?.expected.body)) return false
+  const scenario = Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis')
+  const geometry = Object.fromEntries(['podUid', 'containerId', 'artifactId'].map(key => [key, request[key]]))
+  if (!same(capsule, reconstructedCapsule(geometry, snapshot.coordinates, fixtureObjects(lab, scenario)))) return false
+  const historicalState = { ...state, health: { containers: {} }, connectivity: { ...state.connectivity, diagnosticPodUids: [request.origin.podUid] } }
+  const historicalRun = { ...run, runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes, clusters: { ...run.runtime.kubernetes.clusters, [clusterId]: historicalState } } } }
+  if (!validRequestDiagnostics(request, historicalRun)) return false
+  const live = run.runtime.kubernetes.requests.find(item => item.id === request.id)
+  if (live && !same(live, request)) return false
+  const environment = { ...capsule.environment, PGPASSWORD: capsule.authProfile ? INTEGRATION_FIXTURES.profiles[capsule.authProfile].PGPASSWORD : '[UNAVAILABLE]' }
+  const executed = simulateIntegration(artifact.appSpec, { environment, files: capsule.files }, { ...request.request, requestId: request.id }, INTEGRATION_FIXTURES, expected.integrationProfile ?? 'healthy')
+  return executed.status === request.status && same(executed.body, request.body) && same(executed.dependencyTrace, request.dependencyTrace)
+    && same(executed.integrationTrace, request.integrationTrace)
 }
 
 function validScenario(scenario, lab) {
@@ -593,8 +652,9 @@ function validSnapshot(value, incident, scenario, run, lab) {
 }
 export function validDiagnosisState(value, run, lab, clusterId) {
   if (value === undefined) return true
-  if (!requestDiagnosticsEnabled(run) || lab?.capabilities?.kubernetesDiagnostics !== true || !exact(value, ['version', 'incident', 'receipts']) || value.version !== 1
+  if (!requestDiagnosticsEnabled(run) || lab?.capabilities?.kubernetesDiagnostics !== true || !exact(value, ['version', 'incident', 'receipts', ...(value.baseline === undefined ? [] : ['baseline', 'baselineReceipt'])]) || value.version !== 1
     || !Array.isArray(value.receipts) || value.receipts.length > 40) return false
+  if (!validDiagnosisBaseline(run, lab, clusterId)) return false
   if (value.incident === null) return value.receipts.length === 0
   const incident = value.incident
   if (!exact(incident, ['id', 'epoch', 'labId', 'attemptId', 'target', 'phaseId', 'startedAtMs', 'baselineHashes', ...(incident.baselineObjects === undefined ? [] : ['baselineObjects']), 'observations', 'recoveries', 'active'])

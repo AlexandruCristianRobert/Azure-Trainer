@@ -49,6 +49,7 @@ export const diagnosisGuidedLab = {
   capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true,
     kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true, kubernetesDiagnostics: true, acrBuild: true },
   initialProjectFiles: DIAGNOSIS_GUIDED_FILES, solutionFiles: files,
+  diagnosisBaseline: { taskId: 'baseline', target },
   initializeSimulation: run => createDiagnosisSeed(diagnosisGuidedLab, { run }),
   solutionActionResolvers: { 'current-logs': run => diagnosisPodAction(run, target),
     'previous-logs': run => diagnosisPodAction(run, target, true), 'describe-restarted': run => diagnosisPodAction(run, target, true, true) },
