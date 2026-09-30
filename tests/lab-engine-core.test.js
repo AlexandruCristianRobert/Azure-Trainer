@@ -25,6 +25,17 @@ function expectCode(callback, code) {
 }
 
 describe('behavioral run contracts', () => {
+  it('binds selector snapshots and reevaluation to their owning Task while retaining legacy selectors', () => {
+    const lab = behavioralLab(), task = lab.tasks.find(item => item.id === 'request')
+    task.dependencies = { owner: (_context, owner) => owner?.id ?? 'missing-owner', legacy: context => context.project.savedFiles['src/app.txt'] }
+    const run = recordVerification(createBehavioralRun(lab, { attemptId: 'owner-boundary' }), lab, 'request', completed())
+    const record = run.evidence.experimentsById[run.evidence.currentEvidenceByTask.request]
+    expect(record.dependencyValues).toEqual({ owner: 'request', legacy: 'healthy' })
+    expect(evaluateLab(lab, run).tasks.find(item => item.id === 'request').done).toBe(true)
+    task.dependencies.owner = (_context, owner) => owner?.id === 'request' ? 'changed-owner-proof' : 'request'
+    expect(evaluateLab(lab, run).tasks.find(item => item.id === 'request').done).toBe(false)
+  })
+
   it('isolates trusted simulation initialization from learner evidence and rejects extra fields', () => {
     const lab = behavioralLab()
     lab.initializeSimulation = (fresh) => {

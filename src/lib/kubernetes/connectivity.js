@@ -4,8 +4,8 @@ import { simulateAssistant } from './assistant.js'
 import { simulateIntegration } from './integration.js'
 import { KNOWLEDGE_FIXTURES } from '../../data/fixtures/aks/knowledge.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
+import { allocateRequest, recordRequestOutcome, redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
 
-const clone = value => structuredClone(value)
 const resultDns = (ok, reason, service = null, canonicalName = null) => ({ ok, serviceKey: service ? kubeObjectKey('Service', service.metadata.namespace, service.metadata.name) : null,
   address: service?.spec?.clusterIP ?? null, canonicalName, reason })
 const ready = pod => pod?.status?.phase === 'Running' && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True')
@@ -89,8 +89,9 @@ function appResponse(run, cluster, pod, probe) {
 
 export function routeServiceRequest(input, probe, lab) {
   const sequence = input.nextSequence
-  const id = `aks-request-${sequence}`
-  const outcome = { requestId: id, transport: { ok: false, reason: null }, status: null, body: null, route: {}, dependencyTrace: [], diagnostic: null }
+  const diagnosis = requestDiagnosticsEnabled(input)
+  const outcome = { requestId: null, podUid: null, containerId: null, artifactId: null,
+    transport: { ok: false, reason: null }, status: null, body: null, route: {}, dependencyTrace: [], diagnostic: null }
   const runtimeBefore = input.runtime?.kubernetes
   let originValid = false
   if (probe?.origin?.kind === 'pod' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,podUid') {
@@ -101,6 +102,17 @@ export function routeServiceRequest(input, probe, lab) {
       && ready(pod) && state.connectivity?.diagnosticPodUids.includes(pod.metadata.uid)
   } else if (probe?.origin?.kind === 'external' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind') {
     originValid = !!runtimeBefore?.clusters?.[probe.origin.clusterId]?.connectivity
+  } else if (probe?.origin?.kind === 'service' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,namespace,serviceName,serviceUid') {
+    const declaration = lab?.scenarios?.['capstone-final-internal']
+    const target = declaration?.target, origin = probe.origin
+    const service = runtimeBefore?.clusters?.[origin.clusterId]?.resources?.[`Service/${origin.namespace}/${origin.serviceName}`]
+    originValid = lab?.capabilities?.aksCapstone === true && lab.id === 'aks-knowledge-assistant-capstone' && input.labId === lab.id
+      && input.stages?.activeStageId === 'final-cleanup' && !input.stages.cleanupCheckpoint && probe.scenarioId === 'capstone-final-internal'
+      && target?.clusterId === origin.clusterId && target.namespace === 'assistant' && target.serviceName === 'assistant-internal'
+      && origin.namespace === target.namespace && origin.serviceName === target.serviceName && service?.metadata.uid === origin.serviceUid
+      && probe.hostname === 'assistant-internal.assistant.svc.cluster.local' && probe.port === 80
+      && probe.method === declaration.request.method && probe.path === declaration.request.path
+      && probe.body?.question === declaration.request.body.question
   }
   if (!originValid) {
     outcome.transport.reason = 'INVALID_ORIGIN'
@@ -116,7 +128,9 @@ export function routeServiceRequest(input, probe, lab) {
     outcome.transport.reason = 'INVALID_PROBE'
     return { run: input, outcome }
   }
-  const run = clone(input), runtime = run.runtime.kubernetes
+  const allocated = allocateRequest(input), run = allocated.run, runtime = run.runtime.kubernetes
+  outcome.requestId = diagnosis ? allocated.requestId : `aks-request-${sequence}`
+  probe = { ...probe, requestId: outcome.requestId }
   let clientNamespace = 'diagnostics'
   if (probe.origin?.kind === 'pod' && Object.keys(probe.origin).sort().join(',') === 'clusterId,kind,podUid') {
     const state = runtime.clusters?.[probe.origin.clusterId]
@@ -164,37 +178,26 @@ export function routeServiceRequest(input, probe, lab) {
         else if (state.health?.containers?.[pod.metadata.uid]?.localFaults?.hung) outcome.transport.reason = 'PROCESS_TIMEOUT'
         else {
           outcome.transport = { ok: true, reason: null }
+          outcome.podUid = pod.metadata.uid
+          outcome.containerId = state.health?.containers?.[pod.metadata.uid]?.containerId ?? null
+          outcome.artifactId = outcome.route.artifactId
+          if (diagnosis) outcome.route.containerId = outcome.containerId
           const response = appResponse(run, state, pod, probe)
           outcome.status = response.status; outcome.body = response.body; outcome.dependencyTrace = response.dependencyTrace ?? []; outcome.integrationTrace = response.integrationTrace ?? null; outcome.diagnostic = response.diagnostic ?? null
           outcome.workload = response.workload ?? null
+          if (response.appLogRecords !== undefined) outcome.appLogRecords = response.appLogRecords
           if (response.workload && state.resourcesRuntime?.usage?.[pod.metadata.uid]) {
             state.resourcesRuntime.usage[pod.metadata.uid].routedWorkCpuM = (state.resourcesRuntime.usage[pod.metadata.uid].routedWorkCpuM ?? 0) + response.workload.cpuM
           }
           if (outcome.diagnostic?.code === 'POSTGRES_CONNECTION') outcome.dependencyTrace = [...outcome.dependencyTrace, { operation: 'postgres-query', status: 'failed', reason: 'DNS_NOT_FOUND' }]
-          const safeSummary = outcome.dependencyTrace.map(item => ({ operation: item.operation, status: item.status, ...(item.reason ? { reason: item.reason } : {}) }))
-          const log = { requestId: id, sequence, podUid: pod.metadata.uid, podName: pod.metadata.name, namespace: pod.metadata.namespace,
-            image: pod.spec.containers[0].image, method: probe.method, path: probe.path, status: outcome.status,
-            artifactId: outcome.route.artifactId, dependencySummary: safeSummary }
-          const connectivity = state.connectivity
-          connectivity.applicationLogs = [...connectivity.applicationLogs, log].slice(-200)
-          const health = state.health?.containers?.[pod.metadata.uid]
-          if (health) health.currentLogs = [...health.currentLogs,
-            `request=${id} ${probe.method} ${probe.path} status=${outcome.status} dependencies=${safeSummary.map(item => `${item.operation}:${item.status}`).join(',')}`].slice(-100)
         }
       }
     }
   }
   if (!outcome.transport.ok && !outcome.transport.reason) outcome.transport.reason = 'NO_READY_ENDPOINTS'
-  const requests = [...runtime.requests, { id, sequence, connectivity: true, scenarioId: null, transport: outcome.transport, status: outcome.status,
-    route: outcome.route, namespace: outcome.route.namespace ?? clientNamespace, dependencyTrace: outcome.dependencyTrace, origin: probe.origin,
-    hostname: probe.hostname, port: probe.port, integrationTrace: outcome.integrationTrace ?? null,
-    request: { method: probe.method, path: probe.path, ...(probe.body == null ? {} : { body: probe.body }) },
-    ...(outcome.workload ? { workload: outcome.workload } : {}) }].slice(-100)
-  const retainedRequestIds = new Set(requests.map(request => request.id))
-  for (const clusterState of Object.values(runtime.clusters)) if (clusterState.connectivity) {
-    clusterState.connectivity.applicationLogs = clusterState.connectivity.applicationLogs.filter(log => retainedRequestIds.has(log.requestId))
+  if (diagnosis && !outcome.transport.ok) {
+    for (const key of ['podUid', 'podName', 'artifactId', 'containerId']) delete outcome.route[key]
   }
-  run.nextSequence = sequence + 1
-  run.runtime.kubernetes = { ...runtime, requests }
-  return { run, outcome }
+  const safeOutcome = redactRequestValue(outcome, cluster)
+  return { run: recordRequestOutcome(run, probe, safeOutcome), outcome: safeOutcome }
 }

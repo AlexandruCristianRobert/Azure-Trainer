@@ -38,6 +38,13 @@ import { aksProbesIndependentLab } from './aks-journey/probes-independent.lab.js
 import { aksResourcesGuidedLab } from './aks-journey/resources-guided.lab.js'
 import { aksResourcesTroubleshootingLab } from './aks-journey/resources-troubleshooting.lab.js'
 import { aksResourcesIndependentLab } from './aks-journey/resources-independent.lab.js'
+import { aksReleasesGuidedLab } from './aks-journey/releases-guided.lab.js'
+import { aksReleasesTroubleshootingLab } from './aks-journey/releases-troubleshooting.lab.js'
+import { aksReleasesIndependentLab } from './aks-journey/releases-independent.lab.js'
+import { diagnosisGuidedLab } from './aks-journey/diagnosis-guided.lab.js'
+import { diagnosisTroubleshootingLab } from './aks-journey/diagnosis-troubleshooting.lab.js'
+import { diagnosisIndependentLab } from './aks-journey/diagnosis-independent.lab.js'
+import { aksCapstoneLab } from './aks-journey/capstone.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -81,6 +88,13 @@ export const LABS = [
   aksResourcesGuidedLab,
   aksResourcesTroubleshootingLab,
   aksResourcesIndependentLab,
+  aksReleasesGuidedLab,
+  aksReleasesTroubleshootingLab,
+  aksReleasesIndependentLab,
+  diagnosisGuidedLab,
+  diagnosisTroubleshootingLab,
+  diagnosisIndependentLab,
+  aksCapstoneLab,
 ]
 
 export function labById(id) {

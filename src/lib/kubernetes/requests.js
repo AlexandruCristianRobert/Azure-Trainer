@@ -24,7 +24,7 @@ function hasPodDeleteCommand(history, name) {
   })
 }
 
-export function simulateKubernetesRequest(run, scenario) {
+export function simulateKubernetesRequest(run, scenario, lab = null) {
   const connectivity = scenario.connectivity
   if (run.runtime.kubernetes.clusters?.[scenario.target?.clusterId]?.connectivity && connectivity?.origin?.kind === 'diagnostic') {
     const clusterId = scenario.target.clusterId
@@ -47,14 +47,15 @@ export function simulateKubernetesRequest(run, scenario) {
     const externalService = route.externalService && run.runtime.kubernetes.clusters[clusterId].resources[`Service/${scenario.target.namespace}/${route.externalService}`]
     const hostname = route.hostname ?? externalService?.status?.loadBalancer?.ingress?.[0]?.ip
     const routed = routeServiceRequest(run, { origin: route.origin, hostname, port: route.port ?? 80,
-      method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null, integrationProfile: scenario.integrationProfile ?? 'healthy' }, null)
+      method: scenario.request.method, path: scenario.request.path, body: scenario.request.body ?? null, integrationProfile: scenario.integrationProfile ?? 'healthy',
+      scenarioId: scenario.id }, lab)
     const latest = routed.run.runtime.kubernetes.requests.at(-1)
     if (latest?.id === routed.outcome.requestId) latest.scenarioId = scenario.id
     const outcome = routed.outcome
     const matches = outcome.status === scenario.expected.status && canonicalize(outcome.body) === canonicalize(scenario.expected.body)
       && outcome.transport.ok && !!outcome.route.podUid
     const measurements = { status: outcome.status, body: outcome.body, requestSequence: run.nextSequence, clusterId,
-      namespace: scenario.target.namespace, serviceName: externalService?.metadata.name ?? route.serviceName ?? null,
+      namespace: scenario.target.namespace, serviceName: externalService?.metadata.name ?? outcome.route.serviceName ?? route.serviceName ?? null,
       serviceVersion: externalService?.metadata.resourceVersion ?? null, deploymentName: scenario.target.deploymentName,
       deploymentGeneration: run.runtime.kubernetes.clusters[clusterId].resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.generation ?? null,
       selectedPodUid: outcome.route.podUid ?? null, podUid: outcome.route.podUid ?? null, artifactId: outcome.route.artifactId ?? null,
@@ -202,6 +203,8 @@ function simulateConnectivityScenario(run, scenario, origin, hostname, port) {
     && outcome.route.serviceName === scenario.target.serviceName && outcome.route.namespace === scenario.target.namespace
   const failurePattern = expectedTransport.ok ? true
     : expectedTransport.reason === 'NO_READY_ENDPOINTS' ? outcome.route.selectedCount === 0
+      || run.labId === 'aks-diagnosis-independent' && scenario.id === 'inspect-incident'
+        && outcome.route.selectedCount === 2 && (outcome.route.readyEndpointUids?.length ?? 0) === 0
       : expectedTransport.reason === 'CONNECTION_REFUSED' ? (outcome.route.readyEndpointUids?.length ?? 0) > 0
         : true
   const dependencyPattern = outcome.integrationTrace ? true : outcome.status !== 503 ? true : !!outcome.route.podUid

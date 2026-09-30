@@ -2,6 +2,7 @@ import { canonicalize } from './evidence.js'
 import { contextFor, isPlainObject, validCounter, validEvidenceRecord, validateBehavioralLab, validateBehavioralRun } from './run.js'
 import { fail } from './errors.js'
 import { capstoneStages } from './stages.js'
+import { isAksCapstone, getAksSealedTaskIds, aksCleanupReady, isAksTaskSourceCurrent } from '../kubernetes/capstone/stages.js'
 
 function safelyCheck(task, argument) {
   try { return task.check(argument) === true } catch { return false }
@@ -31,7 +32,7 @@ function dependencyMatches(run, task, record) {
   const context = contextFor(run)
   for (const [key, selector] of Object.entries(selectors)) {
     try {
-      if (canonicalize(recordValues[key]) !== canonicalize(selector(context))) return false
+      if (canonicalize(recordValues[key]) !== canonicalize(selector(context, task))) return false
     } catch { return false }
     if (recordGenerations[key] !== (run.dependencyGenerations?.[key] ?? 0)) return false
   }
@@ -52,7 +53,7 @@ function evidenceIsCurrent(run, lab, task, id, record) {
 
 function behavioralTaskState(lab, run, task, index) {
   const context = contextFor(run)
-  const predicate = safelyCheck(task, context)
+  const predicate = safelyCheck(task, context) && (!isAksCapstone(lab) || isAksTaskSourceCurrent(run, task))
   const base = { ...task, index, done: false, status: 'pending', reason: 'requirements-not-satisfied', evidenceIds: [] }
   if (!task.verification) {
     return predicate
@@ -87,7 +88,7 @@ export function evaluateLab(lab, run) {
       return { tasks, doneCount: 0, total: tasks.length, isComplete: false }
     }
   }
-  const sealedIds = behavioral && capstoneStages(lab)
+  const sealedIds = behavioral && isAksCapstone(lab) ? getAksSealedTaskIds(run, lab) : behavioral && capstoneStages(lab)
     ? new Set(lab.stages.slice(0, run.stages.sealedStages.length).flatMap(stage => stage.taskIds)) : new Set()
   const tasks = lab.tasks.map((task, index) => {
     if (sealedIds.has(task.id)) return { ...task, index, done: true, status: 'done', reason: 'stage-sealed',
@@ -97,5 +98,6 @@ export function evaluateLab(lab, run) {
   })
   const doneCount = tasks.filter((task) => task.done).length
   return { tasks, doneCount, total: tasks.length,
-    isComplete: doneCount === tasks.length && (!behavioral || !capstoneStages(lab) || run.stages.sealedStages.length === lab.stages.length) }
+    isComplete: doneCount === tasks.length && (!behavioral || !capstoneStages(lab) || run.stages.sealedStages.length === lab.stages.length)
+      && (!isAksCapstone(lab) || run.stages.sealedStages.length === 8 && aksCleanupReady(run, lab)) }
 }

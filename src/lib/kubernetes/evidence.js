@@ -2,6 +2,8 @@ import { canonicalize } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+export { verifyDiagnosis, diagnosisDependencies, diagnosisHistoricalEvidence } from './diagnosis-evidence.js'
+export { inspectDiagnosis } from './diagnosis-inspection.js'
 
 function digest(value) {
   let hash = 2166136261
@@ -220,7 +222,7 @@ export function refreshKubernetesDependencies(previous, next, lab) {
   const counters = { ...next.dependencyGenerations }; const changed = new Set()
   for (const task of lab.tasks ?? []) for (const [key, select] of Object.entries(task.dependencies ?? {})) {
     if (changed.has(key)) continue
-    if (canonicalize(select({ ...previous, run: previous })) !== canonicalize(select({ ...next, run: next }))) {
+    if (canonicalize(select({ ...previous, run: previous }, task)) !== canonicalize(select({ ...next, run: next }, task))) {
       changed.add(key); counters[key] = (previous.dependencyGenerations[key] ?? 0) + 1
     }
   }

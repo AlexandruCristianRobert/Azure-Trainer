@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { skillAreaById } from '../../data/skillAreas.js'
@@ -10,6 +10,7 @@ import TaskRow from './TaskRow.vue'
 import LabCompletePanel from './LabCompletePanel.vue'
 import { encodeRunExport } from '../../lib/labEngine/export.js'
 import { evaluateLab } from '../../lib/labEngine/evaluate.js'
+import { inspectAksCapstone } from '../../lib/kubernetes/capstone/inspection.js'
 
 const run = useLabRunStore()
 const portal = usePortalStore()
@@ -54,20 +55,23 @@ function toggleNote(id) {
   s.has(id) ? s.delete(id) : s.add(id)
   openNotes.value = s
 }
-function stateOf(t, stage) { return t.done ? 'done' : capstone.value
+function stateOf(t, stage) { return t.done ? 'done' : isCapstone.value
   ? stage?.status === 'Active' && stage.tasks.find(task => !task.done)?.id === t.id ? 'current' : 'pending'
   : t.id === run.currentTaskId || t.status === 'needs-verification' ? 'current' : 'pending' }
 const capstone = computed(() => run.lab?.capabilities?.acaCapstone === true ? run.behavioralRun : null)
+const aksCapstone = computed(() => run.lab?.capabilities?.aksCapstone === true && run.behavioralRun
+  ? inspectAksCapstone(toRaw(run.behavioralRun), run.lab) : null)
+const isCapstone = computed(() => !!capstone.value || !!aksCapstone.value)
 const sealed = computed(() => capstone.value?.stages?.sealedStages ?? [])
 const panelTasks = computed(() => capstone.value ? evaluateLab(run.lab, capstone.value).tasks : run.taskStates)
-const stages = computed(() => (run.lab?.stages ?? []).map((stage, index) => ({ ...stage, index,
+const stages = computed(() => aksCapstone.value?.stages ?? (run.lab?.stages ?? []).map((stage, index) => ({ ...stage, index,
   tasks: panelTasks.value.filter((task) => stage.taskIds.includes(task.id)),
   seal: sealed.value[index] ?? null,
   status: !capstone.value ? 'Open' : sealed.value[index] ? 'Sealed'
     : capstone.value.stages?.activeStageId === stage.id ? 'Active' : 'Locked',
 })))
 const activeStage = computed(() => stages.value.find(stage => stage.status === 'Active'))
-const canAdvance = computed(() => !!activeStage.value && activeStage.value.tasks.every(task => task.done)
+const canAdvance = computed(() => aksCapstone.value ? aksCapstone.value.canAdvance : !!activeStage.value && activeStage.value.tasks.every(task => task.done)
   && !run.behavioralRun?.runtime?.activeScenario)
 const incident = computed(() => capstone.value?.runtime?.incident ?? null)
 const incidentLog = computed(() => capstone.value?.runtime?.logs?.findLast(item => item.code === 'CAPSTONE_INCIDENT_INJECTED') ?? null)
@@ -81,6 +85,16 @@ async function stageAction(type) {
   try {
     errorMessage.value = ''
     const settled = await run.dispatchBehavioral({ type })
+    const diagnostics = settled?.effects?.diagnostics ?? []
+    if (diagnostics.length) errorMessage.value = diagnostics.map(item => item.message).join(' ')
+  } catch (error) { errorMessage.value = error.message }
+}
+async function verifyAksTask(task) {
+  if (!aksCapstone.value || !activeStage.value?.taskIds.includes(task.id) || !task.verification?.scenarioId) return
+  if (aksCapstone.value.cleanup.frozen && !['cleanup-app', 'cleanup-cloud'].includes(task.id)) return
+  try {
+    errorMessage.value = ''
+    const settled = await run.dispatchBehavioral({ type: 'aks-request', scenarioId: task.verification.scenarioId })
     const diagnostics = settled?.effects?.diagnostics ?? []
     if (diagnostics.length) errorMessage.value = diagnostics.map(item => item.message).join(' ')
   } catch (error) { errorMessage.value = error.message }
@@ -114,12 +128,29 @@ async function restart() {
 </script>
 
 <template>
-  <aside class="lab-panel" :class="{ 'lab-panel--collapsed': portal.labPanelCollapsed }" aria-label="Lab Panel">
+  <aside class="lab-panel" :class="{ 'lab-panel--collapsed': portal.labPanelCollapsed, 'lab-panel--completed-capstone': run.isComplete && isCapstone && !portal.labPanelCollapsed }" aria-label="Lab Panel">
     <template v-if="portal.labPanelCollapsed">
       <button type="button" class="lab-panel__expand" aria-label="Expand Lab Panel" @click="portal.toggleLabPanel()"><FluentIcon name="chevron-right" :size="14" /></button>
       <div class="lab-panel__rail-label">Lab · {{ run.doneCount }}/{{ run.total }}</div>
     </template>
-    <template v-else-if="run.isComplete"><LabCompletePanel :error="errorMessage" @restart="restart" /><section v-if="capstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages"><h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }}</li></ol><p>Cleanup checkpoint {{ checkpoint ? 'sealed' : 'pending' }} · {{ ownedGroups.length }} owned {{ ownedGroups.length === 1 ? 'group' : 'groups' }} recorded</p></section></template>
+    <template v-else-if="run.isComplete">
+      <LabCompletePanel :error="errorMessage" @restart="restart" />
+      <section v-if="aksCapstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages">
+        <h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }} · {{ stage.evidenceMode }} evidence</li></ol>
+        <p>Cleanup checkpoint {{ aksCapstone.cleanup.checkpoint ? 'sealed' : 'pending' }} · {{ aksCapstone.cleanup.remaining.length }} owned resources remaining</p>
+        <h3>Retained release and incident receipts</h3>
+        <ol><li v-for="stage in stages.filter(item => ['release', 'incident'].includes(item.id))" :key="stage.id"><strong>{{ stage.title }}</strong><ul><li v-for="proof in stage.proofs" :key="proof.id">
+          <details><summary>{{ proof.evidenceId }} · {{ proof.observation.outcome }}</summary>
+            <p>Measured from {{ proof.observation.startedAtMs / 1000 }}s to {{ proof.observation.endedAtMs / 1000 }}s.</p>
+            <h4>Selected artifacts</h4><ul><li v-for="artifact in proof.artifacts" :key="artifact.buildId"><code>{{ artifact.buildId }}</code> · digest <code>{{ artifact.digest }}</code> · source hash <code>{{ artifact.sourceHash }}</code></li></ul><p v-if="!proof.artifacts.length">None captured.</p>
+            <h4>Captured targets</h4><ul><li v-for="target in proof.targets" :key="`${target.clusterId}/${target.key}`"><code>{{ target.clusterId }}</code> · <code>{{ target.key }}</code> · UID <code>{{ target.uid }}</code> · hash <code>{{ target.hash }}</code></li></ul><p v-if="!proof.targets.length">None captured.</p>
+            <h4>Measured outcomes and diagnostic records</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(proof.observation.measurements, null, 2) }}</pre>
+            <template v-if="proof.observation.owner"><h4>Measured experiment receipt</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(proof.observation.owner, null, 2) }}</pre></template>
+          </details>
+        </li></ul></li></ol>
+      </section>
+      <section v-else-if="capstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages"><h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }}</li></ol><p>Cleanup checkpoint {{ checkpoint ? 'sealed' : 'pending' }} · {{ ownedGroups.length }} owned {{ ownedGroups.length === 1 ? 'group' : 'groups' }} recorded</p></section>
+    </template>
     <template v-else>
       <div class="lab-panel__header">
         <div class="lab-panel__title-row">
@@ -146,6 +177,17 @@ async function restart() {
       <div v-if="run.loading" class="lab-panel__recovery" role="status">Loading Lab progress…</div>
       <div v-if="run.storageError" class="lab-panel__recovery" role="alert"><strong>Lab progress unavailable</strong><p>{{ run.storageError.message }}</p><div class="lab-panel__recovery-actions"><button type="button" class="btn btn--secondary" @click="exportData">Export data</button><button v-if="run.unsaved" type="button" class="btn btn--secondary" :disabled="run.busy" @click="recovery('retrySave')">Retry save</button><button v-if="['INCOMPATIBLE_CONTENT', 'UNSUPPORTED_SCHEMA', 'INVALID_RUN'].includes(run.storageError.code)" type="button" class="btn btn--secondary" @click="recoverRestart">Restart this Lab</button><button v-else type="button" class="btn btn--secondary" @click="reloadWithConfirm">Reload</button></div></div>
       <p v-if="errorMessage" class="lab-panel__recovery" role="alert">{{ errorMessage }}</p>
+      <section v-if="aksCapstone" class="lab-panel__capstone" aria-label="Capstone status">
+        <h3>Operational state</h3>
+        <p>Selected artifact: <code>{{ aksCapstone.artifact.selected.at(-1)?.buildId ?? 'None yet' }}</code></p>
+        <p>Deployed artifacts: <template v-if="aksCapstone.artifact.deployed.length"><code v-for="pod in aksCapstone.artifact.deployed" :key="pod.uid">{{ pod.name }}: {{ pod.artifactId ?? 'none' }} </code></template><span v-else>None yet</span></p>
+        <p>Active deployment: <template v-if="aksCapstone.deployment.length"><code v-for="item in aksCapstone.deployment" :key="`${item.clusterId}/${item.namespace}/${item.name}`">{{ item.namespace }}/{{ item.name }} · {{ item.image }} · {{ item.pods.length }}/{{ item.desiredReplicas }} Pods </code></template><span v-else>None yet</span></p>
+        <p>Cleanup checkpoint: {{ aksCapstone.cleanup.checkpoint ? 'frozen' : 'pending' }}. <template v-if="aksCapstone.cleanup.frozen">Only reads, deletes, and cleanup verification are permitted.</template></p>
+        <p>Owned resources: <template v-if="aksCapstone.cleanup.remaining.length"><code v-for="item in aksCapstone.cleanup.remaining" :key="item.resourceId">{{ item.type }} {{ item.resourceId }} </code></template><span v-else>None remaining</span></p>
+        <p>Supplied prerequisites: <code v-for="item in aksCapstone.cleanup.protected" :key="item.resourceId">{{ item.type }} {{ item.resourceId }} </code></p>
+        <div v-if="activeStage?.id === 'incident' || aksCapstone.incident.current || aksCapstone.incident.history.length" class="lab-panel__incident"><p>Incident progress: {{ aksCapstone.incident.current?.phaseId ?? (aksCapstone.incident.history.length ? 'historical receipts retained' : 'not started') }}</p><ol v-if="aksCapstone.incident.history.length"><li v-for="item in aksCapstone.incident.history" :key="item.id">{{ item.evidenceId }} · {{ item.outcome }}</li></ol></div>
+        <div v-if="activeStage?.index === 7 && !aksCapstone.cleanup.frozen"><p>Freeze after all final requests pass. Cleanup then permits only reads, deletes, and cleanup verification.</p><button type="button" class="btn btn--secondary" :disabled="!aksCapstone.cleanup.eligible || run.loading || run.readOnly || run.busy || !!run.storageError" @click="stageAction('aks-freeze-cleanup')">Freeze cleanup checkpoint</button><p v-if="aksCapstone.cleanup.diagnostics.length">{{ aksCapstone.cleanup.diagnostics.map(item => item.message).join(' ') }}</p></div>
+      </section>
       <section v-if="capstone" class="lab-panel__capstone" aria-label="Capstone status">
         <h3>Operational state</h3>
         <p>Saved source: {{ Object.keys(capstone.project?.savedFiles ?? {}).length }} files · edits require a new build.</p>
@@ -161,11 +203,13 @@ async function restart() {
         </div>
       </section>
       <template v-if="stages.length">
-        <section v-for="stage in stages" :key="stage.id" class="lab-panel__stage" :class="capstone ? `lab-panel__stage--${stage.status.toLowerCase()}` : ''" :aria-label="capstone ? `${stage.status} stage: ${stage.title}` : stage.title">
-          <h3><span>{{ capstone ? `${stage.index + 1}. ` : '' }}{{ stage.title }}</span><span>{{ capstone ? `${stage.status} stage · ` : '' }}{{ stage.tasks.filter((task) => task.done).length }}/{{ stage.tasks.length }}</span></h3>
+        <section v-for="stage in stages" :key="stage.id" class="lab-panel__stage" :class="isCapstone ? `lab-panel__stage--${stage.status.toLowerCase()}` : ''" :aria-label="isCapstone ? `${stage.status} stage: ${stage.title}` : stage.title">
+          <h3><span>{{ isCapstone ? `${stage.index + 1}. ` : '' }}{{ stage.title }}</span><span>{{ isCapstone ? `${stage.status} stage · ` : '' }}{{ stage.tasks.filter((task) => task.done).length }}/{{ stage.tasks.length }}</span></h3>
           <p v-if="stage.seal" class="lab-panel__stage-meta">Sealed at sequence {{ stage.seal.sequence }} · {{ stage.seal.evidenceIds.length }} evidence records</p>
-          <ol class="lab-panel__tasks"><TaskRow v-for="t in stage.tasks" :key="t.id" :task="t" :state="stateOf(t, stage)" :hints-revealed="run.hintsRevealed[t.id] ?? 0" :solution-revealed="!!run.solutionsRevealed[t.id]" :exam-note-open="openNotes.has(t.id)" :help-disabled="run.readOnly || run.loading || !!run.storageError || run.busy || (capstone && stage.status !== 'Active')" @toggle-exam-note="toggleNote(t.id)" @reveal-hint="assistance('revealHint', t.id)" @reveal-solution="assistance('revealSolution', t.id)" /></ol>
-          <button v-if="capstone && stage.status === 'Active'" type="button" class="btn btn--primary lab-panel__advance" :disabled="!canAdvance || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt" @click="stageAction('advance-stage')">{{ stages[stage.index + 1] ? `Advance to ${stages[stage.index + 1].title}` : 'Seal cleanup and complete Lab' }}</button>
+          <p v-if="aksCapstone" class="lab-panel__stage-meta">{{ stage.evidenceMode === 'historical' ? 'Historical sealed evidence' : 'Current evidence' }} · {{ stage.proofs.length }} durable receipts</p>
+          <ol class="lab-panel__tasks"><TaskRow v-for="t in stage.tasks" :key="t.id" :task="t" :state="stateOf(t, stage)" :hints-revealed="run.hintsRevealed[t.id] ?? 0" :solution-revealed="!!run.solutionsRevealed[t.id]" :exam-note-open="openNotes.has(t.id)" :help-disabled="run.readOnly || run.loading || !!run.storageError || run.busy || (isCapstone && stage.status !== 'Active')" @toggle-exam-note="toggleNote(t.id)" @reveal-hint="assistance('revealHint', t.id)" @reveal-solution="assistance('revealSolution', t.id)" /></ol>
+          <div v-if="aksCapstone && stage.status === 'Active'" class="lab-panel__recovery-actions" aria-label="AKS checkpoint verification"><button v-for="task in stage.tasks" :key="task.id" type="button" class="btn btn--secondary" :aria-label="`Verify ${task.title ?? task.id}`" :disabled="!task.verification?.scenarioId || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt || (aksCapstone.cleanup.frozen && !['cleanup-app', 'cleanup-cloud'].includes(task.id))" @click="verifyAksTask(task)">Verify {{ task.title ?? task.id }}</button></div>
+          <button v-if="isCapstone && stage.status === 'Active'" type="button" class="btn btn--primary lab-panel__advance" :disabled="!canAdvance || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt" @click="stageAction(aksCapstone ? 'aks-advance-stage' : 'advance-stage')">{{ stages[stage.index + 1] ? `Advance to ${stages[stage.index + 1].title}` : 'Seal cleanup and complete Lab' }}</button>
         </section>
       </template>
       <ol v-else class="lab-panel__tasks"><TaskRow v-for="t in run.taskStates" :key="t.id" :task="t" :state="t.done ? 'done' : t.id === run.currentTaskId ? 'current' : 'pending'" :hints-revealed="run.hintsRevealed[t.id] ?? 0" :solution-revealed="!!run.solutionsRevealed[t.id]" :exam-note-open="openNotes.has(t.id)" @toggle-exam-note="toggleNote(t.id)" @reveal-hint="run.revealHint(t.id)" @reveal-solution="run.revealSolution(t.id)" /></ol>
@@ -173,3 +217,16 @@ async function restart() {
     </template>
   </aside>
 </template>
+
+<style>
+/* The completed capstone adds sealed receipts after the usual Result. Keep both
+   siblings in the panel's scroll flow rather than shrinking them over each other. */
+.lab-panel--completed-capstone { overflow-y: auto; }
+.lab-panel--completed-capstone .lab-complete,
+.lab-panel--completed-capstone .lab-panel__capstone-result { flex: none; }
+.lab-panel--completed-capstone .lab-complete__notes {
+  flex: none;
+  max-height: clamp(120px, 24vh, 220px);
+  overflow-y: auto;
+}
+</style>

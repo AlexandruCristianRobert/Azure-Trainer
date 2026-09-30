@@ -2,6 +2,9 @@ import { validateKubernetesObject } from './schema.js'
 import { scheduleConfigurationProjection } from './configuration.js'
 import { serviceAllocationDiagnostic } from './services.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+import { registerRevision } from './rollout-history.js'
+import { noteReleaseReapply } from './release-evidence.js'
+import { getAksCapstonePolicy, capstoneTemplateDiagnostic } from './capstone/policy.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -32,7 +35,8 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
   }
   for (let i = 0; i < documents.length; i++) {
-    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true }, sourceLocation: options.locations?.[i] })
+    const beforeObject = clone(next)
+    const result = validateKubernetesObject(documents[i], { namespace: options.namespace, capabilities: { aksCapstoneHpa: lab?.capabilities?.aksCapstone === true && getAksCapstonePolicy(next, lab).allowHpa, deployments: Object.values(next.runtime.kubernetes.clusters[clusterId].resources).filter(x => x.kind === 'Deployment' || x.kind === 'HorizontalPodAutoscaler'), kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true, kubernetesRollouts: lab?.capabilities?.kubernetesRollouts === true }, sourceLocation: options.locations?.[i] })
     if (result.diagnostics.length) return { run: next, lines, diagnostics: result.diagnostics }
     const object = result.object
     const ns = object.metadata.namespace ?? ''
@@ -40,6 +44,14 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       return { run: next, lines, diagnostics: [{ code: 'KUBE_NAMESPACE_NOT_FOUND', message: `Namespace '${ns}' was not found.` }] }
     }
     const key = kubeObjectKey(object.kind, ns, object.metadata.name); const old = next.runtime.kubernetes.clusters[clusterId].resources[key]
+    if (object.kind === 'Deployment' && old) {
+      const previous = clone(old.spec.template), incoming = clone(object.spec.template)
+      const restartedAt = previous.metadata?.annotations?.['kubectl.kubernetes.io/restarted-at']
+      if (restartedAt && incoming.metadata.annotations?.['kubectl.kubernetes.io/restarted-at'] === undefined)
+        incoming.metadata.annotations = { ...(incoming.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': restartedAt }
+      const issue = capstoneTemplateDiagnostic(next, lab)
+      if (issue && JSON.stringify(canonical(previous)) !== JSON.stringify(canonical(incoming))) return { run: beforeObject, lines, diagnostics: [issue] }
+    }
     const explicitReplicas = documents[i]?.kind === 'Deployment' && Object.hasOwn(documents[i]?.spec ?? {}, 'replicas')
     if (object.kind === 'Deployment' && lab?.capabilities?.kubernetesResources === true) {
       const ownership = next.runtime.kubernetes.clusters[clusterId].applyOwnership ??= {}
@@ -55,9 +67,15 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       object.spec.template.metadata.annotations = { ...(object.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': old.spec.template.metadata.annotations['kubectl.kubernetes.io/restarted-at'] }
     }
     const desired = JSON.stringify(desiredObject(object))
-    if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
+    if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); noteReleaseReapply(next, clusterId, object, lab); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
     if (old?.kind === 'Service' && old.spec.type !== object.spec.type) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SERVICE_TYPE', message: 'Changing a Service type in place is unsupported by this trainer.' }] }
+    if (old?.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true
+      && !next.runtime.kubernetes.clusters[clusterId].rollouts?.deployments?.[old.metadata.uid]) {
+      const adopted = registerRevision(next, { clusterId, deploymentUid: old.metadata.uid }, old.spec.template)
+      if (adopted.diagnostics.length) return { run: beforeObject, lines, diagnostics: adopted.diagnostics }
+      next = adopted.run
+    }
     const uid = old?.metadata.uid ?? `kube-${next.nextSequence++}`
     const resourceVersion = String(Number(old?.metadata.resourceVersion ?? '0') + 1)
     const generation = object.kind === 'Deployment' ? (old ? (JSON.stringify(old.spec) === JSON.stringify(object.spec) ? old.metadata.generation : (old.metadata.generation ?? 1) + 1) : 1) : undefined
@@ -68,6 +86,11 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     next.runtime.kubernetes.clusters[clusterId].resources[key] = { ...object, ...generatedService,
       ...(object.kind === 'Service' ? { spec: { ...object.spec, ...(generatedService.spec ?? {}) } } : {}),
       metadata: { ...object.metadata, uid, resourceVersion, ...(generation === undefined ? {} : { generation }) } }
+    if (object.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true) {
+      const revision = registerRevision(next, { clusterId, namespace: object.metadata.namespace, deploymentName: object.metadata.name, deploymentUid: uid }, object.spec.template)
+      if (revision.diagnostics.length) return { run: beforeObject, lines, diagnostics: revision.diagnostics }
+      next = revision.run
+    }
     if (object.kind === 'HorizontalPodAutoscaler' && old && JSON.stringify(old.spec) !== JSON.stringify(object.spec)) {
       const controller = next.runtime.kubernetes.clusters[clusterId].resourcesRuntime?.hpa?.[uid]
       if (controller) {
@@ -78,6 +101,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
     if (object.kind === 'ConfigMap' || object.kind === 'Secret') next = scheduleConfigurationProjection(next, clusterId, key)
     lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} ${old ? 'configured' : 'created'}`, kind: 'out' })
+    noteReleaseReapply(next, clusterId, object, lab)
   }
   return { run: next, lines, diagnostics }
 }

@@ -1,4 +1,5 @@
 import { fail } from './errors.js'
+import { isAksCapstone, captureAksVerification } from '../kubernetes/capstone/stages.js'
 import { cloneJson, contextFor, isJsonValue, isPlainObject, validCounter, validString, validateBehavioralLab, validateBehavioralRun } from './run.js'
 
 export function canonicalize(value) {
@@ -21,7 +22,7 @@ function dependencySnapshot(run, task) {
   const context = contextFor(run)
   for (const [key, selector] of Object.entries(task.dependencies ?? {})) {
     try {
-      const selected = selector(context)
+      const selected = selector(context, task)
       canonicalize(selected)
       values[key] = cloneJson(selected)
     } catch {
@@ -50,6 +51,8 @@ export function recordVerification(run, lab, taskId, result) {
   validateBehavioralRun(run, lab)
   if (!validString(taskId)) fail('INVALID_EVIDENCE', 'A Task id is required.')
   const task = taskFor(lab, taskId)
+  if (isAksCapstone(lab) && !lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(taskId))
+    fail('INVALID_EVIDENCE', 'Only active AKS stage Tasks can be verified.')
   validateResult(result, task)
   const { values, generations } = dependencySnapshot(run, task)
   const sequence = run.nextSequence
@@ -77,7 +80,8 @@ export function recordVerification(run, lab, taskId, result) {
     experimentsById: { ...run.evidence.experimentsById, [id]: record },
     currentEvidenceByTask: { ...run.evidence.currentEvidenceByTask, [taskId]: id },
   }
-  const next = { ...run, nextSequence: sequence + 1, evidence }
+  let next = { ...run, nextSequence: sequence + 1, evidence }
+  if (isAksCapstone(lab)) next = captureAksVerification(next, record)
   return validateBehavioralRun(next, lab)
 }
 
