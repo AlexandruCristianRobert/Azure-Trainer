@@ -152,7 +152,18 @@ const releaseViews = computed(() => run.lab?.capabilities?.kubernetesRollouts &&
       </template>
     </div>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
-  <section v-if="historicalReceipts.length" class="aks-probe-inspection" aria-label="Historical capstone receipts"><h3 class="blade__section-title">Historical capstone receipts</h3><p>Sealed release and incident observations remain available after the cluster is removed.</p><ol><li v-for="item in historicalReceipts" :key="item.proof.id">{{ item.stageId }} · {{ item.proof.evidenceId }} · {{ item.proof.observation.outcome }} · {{ item.proof.artifacts.length }} selected artifacts · {{ item.proof.targets.length }} captured targets</li></ol></section>
+  <section v-if="historicalReceipts.length" class="aks-probe-inspection" aria-label="Historical capstone receipts">
+    <h3 class="blade__section-title">Historical capstone receipts</h3><p>Sealed release and incident observations remain available after the cluster is removed.</p>
+    <ol><li v-for="item in historicalReceipts" :key="item.proof.id">
+      <details><summary>{{ item.stageId }} · {{ item.proof.evidenceId }} · {{ item.proof.observation.outcome }}</summary>
+        <p>Measured from {{ item.proof.observation.startedAtMs / 1000 }}s to {{ item.proof.observation.endedAtMs / 1000 }}s.</p>
+        <h4>Selected artifacts</h4><ul><li v-for="artifact in item.proof.artifacts" :key="artifact.buildId"><code>{{ artifact.buildId }}</code> · digest <code>{{ artifact.digest }}</code> · source hash <code>{{ artifact.sourceHash }}</code></li></ul><p v-if="!item.proof.artifacts.length">None captured.</p>
+        <h4>Captured targets</h4><ul><li v-for="target in item.proof.targets" :key="`${target.clusterId}/${target.key}`"><code>{{ target.clusterId }}</code> · <code>{{ target.key }}</code> · UID <code>{{ target.uid }}</code> · hash <code>{{ target.hash }}</code></li></ul><p v-if="!item.proof.targets.length">None captured.</p>
+        <h4>Measured outcomes and diagnostic records</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(item.proof.observation.measurements, null, 2) }}</pre>
+        <template v-if="item.proof.observation.owner"><h4>Measured experiment receipt</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(item.proof.observation.owner, null, 2) }}</pre></template>
+      </details>
+    </li></ol>
+  </section>
 </div></section></template>
 
 <style scoped>

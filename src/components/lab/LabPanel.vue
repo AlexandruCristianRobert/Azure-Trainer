@@ -133,7 +133,24 @@ async function restart() {
       <button type="button" class="lab-panel__expand" aria-label="Expand Lab Panel" @click="portal.toggleLabPanel()"><FluentIcon name="chevron-right" :size="14" /></button>
       <div class="lab-panel__rail-label">Lab · {{ run.doneCount }}/{{ run.total }}</div>
     </template>
-    <template v-else-if="run.isComplete"><LabCompletePanel :error="errorMessage" @restart="restart" /><section v-if="aksCapstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages"><h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }} · {{ stage.evidenceMode }} evidence</li></ol><p>Cleanup checkpoint {{ aksCapstone.cleanup.checkpoint ? 'sealed' : 'pending' }} · {{ aksCapstone.cleanup.remaining.length }} owned resources remaining</p><h3>Retained release and incident receipts</h3><ol><li v-for="stage in stages.filter(item => ['release', 'incident'].includes(item.id))" :key="stage.id"><strong>{{ stage.title }}</strong><ul><li v-for="proof in stage.proofs" :key="proof.id">{{ proof.evidenceId }} · {{ proof.observation.outcome }} · {{ proof.artifacts.length }} selected artifacts · {{ proof.targets.length }} captured targets</li></ul></li></ol></section><section v-else-if="capstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages"><h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }}</li></ol><p>Cleanup checkpoint {{ checkpoint ? 'sealed' : 'pending' }} · {{ ownedGroups.length }} owned {{ ownedGroups.length === 1 ? 'group' : 'groups' }} recorded</p></section></template>
+    <template v-else-if="run.isComplete">
+      <LabCompletePanel :error="errorMessage" @restart="restart" />
+      <section v-if="aksCapstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages">
+        <h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }} · {{ stage.evidenceMode }} evidence</li></ol>
+        <p>Cleanup checkpoint {{ aksCapstone.cleanup.checkpoint ? 'sealed' : 'pending' }} · {{ aksCapstone.cleanup.remaining.length }} owned resources remaining</p>
+        <h3>Retained release and incident receipts</h3>
+        <ol><li v-for="stage in stages.filter(item => ['release', 'incident'].includes(item.id))" :key="stage.id"><strong>{{ stage.title }}</strong><ul><li v-for="proof in stage.proofs" :key="proof.id">
+          <details><summary>{{ proof.evidenceId }} · {{ proof.observation.outcome }}</summary>
+            <p>Measured from {{ proof.observation.startedAtMs / 1000 }}s to {{ proof.observation.endedAtMs / 1000 }}s.</p>
+            <h4>Selected artifacts</h4><ul><li v-for="artifact in proof.artifacts" :key="artifact.buildId"><code>{{ artifact.buildId }}</code> · digest <code>{{ artifact.digest }}</code> · source hash <code>{{ artifact.sourceHash }}</code></li></ul><p v-if="!proof.artifacts.length">None captured.</p>
+            <h4>Captured targets</h4><ul><li v-for="target in proof.targets" :key="`${target.clusterId}/${target.key}`"><code>{{ target.clusterId }}</code> · <code>{{ target.key }}</code> · UID <code>{{ target.uid }}</code> · hash <code>{{ target.hash }}</code></li></ul><p v-if="!proof.targets.length">None captured.</p>
+            <h4>Measured outcomes and diagnostic records</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(proof.observation.measurements, null, 2) }}</pre>
+            <template v-if="proof.observation.owner"><h4>Measured experiment receipt</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ JSON.stringify(proof.observation.owner, null, 2) }}</pre></template>
+          </details>
+        </li></ul></li></ol>
+      </section>
+      <section v-else-if="capstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages"><h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }}</li></ol><p>Cleanup checkpoint {{ checkpoint ? 'sealed' : 'pending' }} · {{ ownedGroups.length }} owned {{ ownedGroups.length === 1 ? 'group' : 'groups' }} recorded</p></section>
+    </template>
     <template v-else>
       <div class="lab-panel__header">
         <div class="lab-panel__title-row">

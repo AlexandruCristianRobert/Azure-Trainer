@@ -21,16 +21,39 @@ function presentedFixture(stage = 'source') {
     tasks: lab.tasks.map(item => ({ ...item, title: item.id, description: item.id, hints: ['Hint 1', 'Hint 2'], solution: { summary: 'Solution' }, examNote: 'Exam note' })) } }
 }
 
-async function render(component, fixture, { capture = false, props = {} } = {}) {
+async function render(component, fixture, { capture = false, props = {}, completedView = false } = {}) {
   const pinia = createPinia(); setActivePinia(pinia)
   const store = useLabRunStore()
   await store.load(fixture.lab.id, { lab: fixture.lab, repository: behavioralRepository() })
   store.behavioralRun = fixture.run; store.sandbox = fixture.run.sandbox
+  if (completedView) { store.completedAt = '2026-09-30T17:00:00.000Z'; store.readOnly = true }
   let setup
   const wrapped = capture ? { ...component, created() { setup = this.$.setupState } } : component
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   const html = await renderToString(createSSRApp(wrapped, props).use(pinia).use(router))
   return { html, setup, store }
+}
+
+function removedClusterReceipt(stageId) {
+  let { lab, run } = presentedFixture(stageId)
+  for (const line of ['az group create -n rgcap -l eastus', 'az acr create -g rgcap -n acrcapstone --sku Basic',
+    'az acr build -r acrcapstone -t assistant:v1 .',
+    'az aks create -g rgcap -n akscap --enable-managed-identity --generate-ssh-keys',
+    'az aks get-credentials -g rgcap -n akscap', 'kubectl apply -f k8s/namespace.yaml', 'kubectl apply -f k8s/deployment.yaml']) {
+    const result = applyRunAction(run, { type: 'command', line }, lab)
+    expect(result.diagnostics).toEqual([])
+    run = result.run
+  }
+  const clusterId = run.sandbox.aksClusters[0].id
+  const buildId = Object.keys(run.artifacts.buildsById)[0]
+  const task = lab.tasks.find(item => item.id === `task-${stageId}`)
+  run = recordVerification(run, lab, task.id, { ...task.verification, completed: true, outcome: 'passed',
+    startedAtMs: 1200, endedAtMs: 2800, measurements: { clusterId, buildId, password: 'must-not-copy',
+      diagnosticRecords: [{ requestId: 'request-review-7', code: 'ROUTE_TARGET_PORT', message: 'Service target port refused.' }] } })
+  run = applyRunAction(run, { type: 'aks-advance-stage' }, lab).run
+  run = applyRunAction(run, { type: 'command', line: 'az group delete -n rgcap --yes' }, lab).run
+  expect(run.runtime.kubernetes.clusters).toEqual({})
+  return { lab, run, clusterId, buildId }
 }
 
 describe('AKS capstone presentation', () => {
@@ -145,11 +168,18 @@ describe('AKS capstone presentation', () => {
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Send simulated request<\/button>/)
   })
 
-  it('keeps release and incident receipts inspectable from a deleted cluster blade', async () => {
-    const fixture = presentedFixture('cleanup')
-    const { html } = await render(AksClusterBlade, fixture, { props: { resourceGroup: 'removed', name: 'removed' } })
-    expect(html).toContain('Historical capstone receipts')
-    expect(html).toContain('release · evidence-')
-    expect(html).toContain('incident · evidence-')
+  it.each(['release', 'incident'])('shows retained %s measurements and identities after actual cluster deletion', async stageId => {
+    const fixture = removedClusterReceipt(stageId)
+    const proof = inspectAksCapstone(fixture.run, fixture.lab).stages.find(stage => stage.id === stageId).proofs[0]
+    expect(proof.targets.length).toBeGreaterThan(0)
+    const blade = await render(AksClusterBlade, fixture, { props: { resourceGroup: 'rgcap', name: 'akscap' } })
+    expect(blade.html).toContain('Historical capstone receipts')
+    for (const text of [fixture.buildId, proof.artifacts[0].digest, proof.targets[0].uid, 'request-review-7', 'ROUTE_TARGET_PORT', '1.2s', '2.8s'])
+      expect(blade.html).toContain(text)
+    expect(blade.html).not.toContain('must-not-copy')
+    const result = await render(LabPanel, fixture, { completedView: true })
+    for (const text of [fixture.buildId, proof.targets[0].uid, 'request-review-7', 'ROUTE_TARGET_PORT'])
+      expect(result.html).toContain(text)
+    expect(result.html).not.toContain('must-not-copy')
   })
 })
