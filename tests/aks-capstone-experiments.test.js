@@ -21,8 +21,8 @@ describe('AKS capstone resilience', () => {
   let baseline, lab, complete, coldStart, hpaStart, hpaDone
   const prefixes = {}
   const act = (run, action) => { const result = applyRunAction(run, action, lab); expect(errors(result)).toEqual([]); return result.run }
-  beforeAll(() => { ({ run: baseline, lab } = seedAksProductionAt('resilience')) })
-  it('executes seven real measured Tasks, keeps milestones historical and seals stage five', () => {
+  beforeAll(() => {
+    ;({ run: baseline, lab } = seedAksProductionAt('resilience'))
     complete = executeCapstoneResilience(structuredClone(baseline), lab, {
       onAction(run, action) {
         if (action.type === 'aks-probe-start' && action.scenarioId === 'capstone-startup-proof') coldStart = structuredClone(run)
@@ -30,6 +30,8 @@ describe('AKS capstone resilience', () => {
         if (action.type === 'aks-advance' && action.seconds === 300) hpaDone = structuredClone(run)
       }, onTask(run, id) { prefixes[id] = structuredClone(run) },
     })
+  }, 360000)
+  it('executes seven real measured Tasks, keeps milestones historical and seals stage five', () => {
     const tasks = evaluateLab(lab, complete).tasks.filter(task => lab.stages[4].taskIds.includes(task.id))
     expect(tasks.map(task => [task.id, task.status])).toEqual(lab.stages[4].taskIds.map(id => [id, 'done']))
     const next = applyRunAction(complete, { type: 'aks-advance-stage' }, lab)

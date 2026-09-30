@@ -3,10 +3,11 @@ import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import { seedAksCapstoneAt, verifyAksCapstoneFixture } from './helpers/aks.js'
+import { seedAksCapstoneAt, seedDiagnosisTest, verifyAksCapstoneFixture } from './helpers/aks.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { recordVerification } from '../src/lib/labEngine/evidence.js'
 import { inspectAksCapstone } from '../src/lib/kubernetes/capstone/inspection.js'
+import { inspectDiagnosis } from '../src/lib/kubernetes/diagnosis-inspection.js'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { behavioralRepository } from './helpers/behavioralRepository.js'
 import LabPanel from '../src/components/lab/LabPanel.vue'
@@ -166,6 +167,34 @@ describe('AKS capstone presentation', () => {
     expect(html).toContain('Cleanup checkpoint frozen')
     expect(html).toContain('Lab Panel')
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Send simulated request<\/button>/)
+  })
+
+  it('starts only the declared capstone incident in its active stage', async () => {
+    const fixture = presentedFixture('incident')
+    fixture.lab.capabilities.kubernetesDiagnostics = true
+    fixture.lab.scenarios = { 'capstone-incident': { kind: 'aks-diagnosis', target: { clusterId: '/missing', namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' } } }
+    const { html, setup, store } = await render(AksExperimentPanel, fixture, { capture: true })
+    expect(html).toContain('Start declared capstone incident')
+    expect(html).not.toContain('Start diagnosis incident')
+    const dispatch = vi.fn(async () => ({ effects: { diagnostics: [] } }))
+    store.dispatchBehavioral = dispatch
+    await setup.startCapstoneIncident()
+    expect(dispatch).toHaveBeenCalledWith({ type: 'aks-capstone-incident' })
+    const wrongStage = presentedFixture('release')
+    wrongStage.lab.capabilities.kubernetesDiagnostics = true
+    wrongStage.lab.scenarios = fixture.lab.scenarios
+    const releaseView = await render(AksExperimentPanel, wrongStage)
+    expect(releaseView.html).toMatch(/<button[^>]*disabled[^>]*>Start declared capstone incident<\/button>/)
+  })
+
+  it('treats the final comment-only HPA file as intentionally disabled in diagnosis inspection', () => {
+    const { run, lab, target } = seedDiagnosisTest()
+    run.project.savedFiles['k8s/hpa.yaml'] = '# HPA exercise complete; final deployment uses two fixed replicas.\n'
+    const generic = inspectDiagnosis(run, target)
+    const capstone = inspectDiagnosis(run, target, { ...lab, capabilities: { ...lab.capabilities, aksCapstone: true } })
+    const warning = 'Repair saved configuration/Services so every required live object has a valid saved manifest, then apply them.'
+    expect(generic.consistency.reasons).toContain(warning)
+    expect(capstone.consistency.reasons).not.toContain(warning)
   })
 
   it.each(['release', 'incident'])('shows retained %s measurements and identities after actual cluster deletion', async stageId => {

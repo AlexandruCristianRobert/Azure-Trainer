@@ -26,7 +26,7 @@ const diagnosisRequestId = ref('')
 const diagnosisInspection = computed(() => {
   if (!run.lab?.capabilities?.kubernetesDiagnostics || !cluster.value) return null
   const deployment = view.value.deployments.find(item => item.metadata.namespace === namespace.value)
-  return inspectDiagnosis(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: deployment?.metadata.name, serviceName: 'assistant-internal', requestId: diagnosisRequestId.value || undefined })
+  return inspectDiagnosis(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: deployment?.metadata.name, serviceName: 'assistant-internal', requestId: diagnosisRequestId.value || undefined }, run.lab)
 })
 const cluster = computed(() => run.sandbox.aksClusters?.find(item => item.resourceGroup.toLowerCase() === props.resourceGroup.toLowerCase() && item.name.toLowerCase() === props.name.toLowerCase()) ?? null)
 const view = computed(() => projectKubernetesInspection(run.behavioralRun, cluster.value?.id))

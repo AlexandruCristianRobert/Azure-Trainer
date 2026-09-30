@@ -24,7 +24,7 @@ const diagnosisInspection = computed(() => {
     const deployment = Object.values(state?.resources ?? {}).find(item => item.kind === 'Deployment')
     return deployment ? { clusterId, namespace: deployment.metadata.namespace, deploymentName: deployment.metadata.name, serviceName: 'assistant-internal' } : null
   })()
-  return target ? inspectDiagnosis(run.behavioralRun, { ...target, requestId: diagnosisRequestId.value || undefined }) : null
+  return target ? inspectDiagnosis(run.behavioralRun, { ...target, requestId: diagnosisRequestId.value || undefined }, run.lab) : null
 })
 async function diagnosisAction(type, scenarioId) {
   error.value = ''; statusMessage.value = 'Checking the declared diagnosis incident.'
@@ -33,6 +33,14 @@ async function diagnosisAction(type, scenarioId) {
     error.value = result?.effects?.diagnostics?.map(item => item.message).join(' ') ?? ''
     statusMessage.value = error.value || 'Diagnosis incident action recorded.'
   } catch (reason) { error.value = reason.message; statusMessage.value = 'Diagnosis action failed.' }
+}
+async function startCapstoneIncident() {
+  error.value = ''; statusMessage.value = 'Starting the declared capstone incident.'
+  try {
+    const result = await run.dispatchBehavioral({ type: 'aks-capstone-incident' })
+    error.value = result?.effects?.diagnostics?.map(item => item.message).join(' ') ?? ''
+    statusMessage.value = error.value || 'Declared capstone incident recorded.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'Capstone incident could not be started.' }
 }
 const releaseChoice = ref('')
 const releaseScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-release'))
@@ -108,6 +116,7 @@ const integrationInspection = computed(() => integrationCapable.value && choice.
 const fixtureProfiles = computed(() => Object.entries(KNOWLEDGE_FIXTURES.profiles).map(([name, profile]) => ({ name, settings: Object.fromEntries(Object.entries(profile).filter(([key]) => key !== 'PGPASSWORD')) })))
 const frozenCleanup = computed(() => run.lab?.capabilities?.aksCapstone === true && !!run.behavioralRun?.stages?.cleanupCheckpoint)
 const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy || frozenCleanup.value)
+const capstoneStageLocked = stageId => run.lab?.capabilities?.aksCapstone === true && run.behavioralRun?.stages?.activeStageId !== stageId
 const selectedScenario = computed(() => run.lab?.scenarios?.[choice.value] ?? null)
 const latestEvidence = computed(() => Object.values(run.behavioralRun?.evidence?.experimentsById ?? {})
   .filter(record => record.scenarioId === choice.value && record.measurements?.clusterId === selectedScenario.value?.target?.clusterId
@@ -260,11 +269,16 @@ async function copyLogCommand(command) {
     <section v-if="run.lab?.capabilities?.kubernetesDiagnostics" aria-label="AKS diagnosis controls">
       <h3>Diagnosis observation and recovery</h3>
       <p>Each Verify control runs its declared request and records evidence for its own Task.</p>
-      <div v-for="[id] in diagnosisScenarios" :key="id" class="experiment-tool__controls">
-        <button type="button" class="btn" :disabled="locked || !!diagnosisInspection?.incident" :aria-label="`Start diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-start', id)">Start diagnosis incident</button>
-        <button type="button" class="btn" :disabled="locked || !diagnosisInspection?.incident?.active" :aria-label="`Advance diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-next', id)">Continue after recovery</button>
+      <div v-if="run.lab?.capabilities?.aksCapstone" class="experiment-tool__controls">
+        <button type="button" class="btn" :disabled="locked || capstoneStageLocked('incident') || !!diagnosisInspection?.incident || anyExperimentActive" @click="startCapstoneIncident">Start declared capstone incident</button>
       </div>
-      <button v-for="[id] in scenarios" :key="id" type="button" class="btn" :disabled="locked" :aria-label="`Verify diagnosis case: ${id}`" @click="send(id)">Verify {{ id }}</button>
+      <template v-else>
+        <div v-for="[id] in diagnosisScenarios" :key="id" class="experiment-tool__controls">
+          <button type="button" class="btn" :disabled="locked || !!diagnosisInspection?.incident" :aria-label="`Start diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-start', id)">Start diagnosis incident</button>
+          <button type="button" class="btn" :disabled="locked || !diagnosisInspection?.incident?.active" :aria-label="`Advance diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-next', id)">Continue after recovery</button>
+        </div>
+        <button v-for="[id] in scenarios" :key="id" type="button" class="btn" :disabled="locked" :aria-label="`Verify diagnosis case: ${id}`" @click="send(id)">Verify {{ id }}</button>
+      </template>
       <AksDiagnosisInspection v-if="diagnosisInspection" :inspection="diagnosisInspection" :selected-id="diagnosisRequestId" @select="diagnosisRequestId = $event" />
     </section>
     <div v-if="scenarios.length && !run.lab?.capabilities?.kubernetesDiagnostics" class="experiment-tool__controls">
@@ -276,7 +290,7 @@ async function copyLogCommand(command) {
       <p>Start captures the current release. Requests use the external Service and choose the smallest eligible Pod UID; the table inventories every ready backend. Observed samples describe this simulation's traffic.</p>
       <div class="experiment-tool__controls">
         <label>Release scenario<select v-model="releaseChoice" aria-label="Release scenario" :disabled="locked || releaseActive"><option v-for="[id] in releaseScenarios" :key="id" :value="id">{{ id }}</option></select></label>
-        <button type="button" class="btn btn--primary" aria-label="Start release experiment" :disabled="locked || anyExperimentActive || !releaseChoice" @click="releaseAction('aks-release-start', releaseChoice)">Start release experiment</button>
+        <button type="button" class="btn btn--primary" aria-label="Start release experiment" :disabled="locked || capstoneStageLocked('release') || anyExperimentActive || !releaseChoice" @click="releaseAction('aks-release-start', releaseChoice)">Start release experiment</button>
         <button type="button" class="btn" aria-label="Finish release experiment" :disabled="locked || !releaseActive" @click="releaseAction('aks-release-finish')">Finish release experiment</button>
         <button type="button" class="btn" aria-label="Cancel release experiment" :disabled="locked || !releaseActive" @click="releaseAction('aks-release-cancel')">Cancel release experiment</button>
       </div>
@@ -295,7 +309,7 @@ async function copyLogCommand(command) {
       <p>Starting an experiment recreates the target Pods before the simulated clock advances. Their new containers begin cold. Probe schedules are deterministic teaching simulations; production timing can vary.</p>
       <div class="experiment-tool__controls">
         <label>Declared experiment<select v-model="probeChoice" :disabled="locked || !!probeInspection?.experiment"><option v-for="[id, scenario] in probeScenarios" :key="id" :value="id">{{ scenario.title ?? id }}</option></select></label>
-        <button type="button" class="btn btn--primary" :disabled="locked || !!probeInspection?.experiment || !probeChoice" @click="startProbe">Start experiment (recreates Pods)</button>
+        <button type="button" class="btn btn--primary" :disabled="locked || capstoneStageLocked('resilience') || !!probeInspection?.experiment || !probeChoice" @click="startProbe">Start experiment (recreates Pods)</button>
         <button v-if="probeInspection?.experiment" type="button" class="btn" :disabled="locked" @click="cancelProbe">Cancel experiment</button>
       </div>
       <p v-if="probeInspection?.experiment" role="status">{{ probeInspection.experiment.scenarioId }} is {{ probeInspection.experiment.phase ?? probeInspection.experiment.status ?? 'running' }}. Started at {{ probeInspection.experiment.startedAtMs / 1000 }}s; deadline {{ (probeInspection.experiment.deadlineAtMs ?? probeInspection.experiment.endsAtMs ?? 0) / 1000 }}s.</p>
@@ -315,7 +329,7 @@ async function copyLogCommand(command) {
       <p>Profiles use supplied workload fixtures and the explicit cluster clock. Warmup waits for actual ready Pods and complete 15-second metric windows; starting never recreates Pods, forces replicas, or resets HPA history.</p>
       <div class="experiment-tool__controls">
         <label>Resource profile<select v-model="resourceChoice" aria-label="Resource profile" :disabled="locked || !!resourceInspection?.experiment && ['warming', 'running'].includes(resourceInspection.experiment.phase)"><option v-for="[id, scenario] in resourceScenarios" :key="id" :value="id">{{ scenario.profileId }}</option></select></label>
-        <button type="button" class="btn btn--primary" aria-label="Start resource profile" :disabled="locked || !resourceChoice || ['warming', 'running'].includes(resourceInspection?.experiment?.phase)" @click="startResource">Start resource profile</button>
+        <button type="button" class="btn btn--primary" aria-label="Start resource profile" :disabled="locked || capstoneStageLocked('resilience') || !resourceChoice || ['warming', 'running'].includes(resourceInspection?.experiment?.phase)" @click="startResource">Start resource profile</button>
         <button v-if="['warming', 'running'].includes(resourceInspection?.experiment?.phase)" type="button" class="btn" aria-label="Cancel resource profile" :disabled="locked" @click="cancelResource">Cancel resource profile</button>
       </div>
       <p v-if="resourceInspection?.experiment" role="status">{{ resourceInspection.experiment.profileId }} is {{ resourceInspection.experiment.phase }}<template v-if="resourceInspection.experiment.phase === 'warming'">; waiting for {{ resourceInspection.experiment.requiredReadyReplicas }} ready Pod(s) with complete metrics.</template><template v-else-if="resourceInspection.experiment.phase === 'complete'">; outcome {{ resourceInspection.experiment.outcome }}.</template><template v-else-if="resourceInspection.experiment.phase === 'cancelled'">; cancelled: {{ resourceInspection.experiment.cancellationReason }}.</template></p>

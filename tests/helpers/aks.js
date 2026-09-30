@@ -83,7 +83,7 @@ export function seedAksProductionAt(stageId = 'source') {
 }
 
 /** Final proof and ordinary cleanup actions; modes also expose real intermediate states. */
-export function executeCapstoneCleanup(run, lab, { mode = 'explicit-deletes' } = {}) {
+export function executeCapstoneCleanup(run, lab, { mode = 'explicit-deletes', onBeforeSeal = () => {}, onSeal = () => {} } = {}) {
   const action = payload => {
     const result = applyRunAction(run, payload, lab)
     if (result.diagnostics.length || result.lines.some(item => item.kind === 'err'))
@@ -108,11 +108,13 @@ export function executeCapstoneCleanup(run, lab, { mode = 'explicit-deletes' } =
   }
   action({ type: 'command', line: 'az group delete -n rg-aks-capstone --yes' })
   for (const id of ['cleanup-app', 'cleanup-cloud']) action({ type: 'aks-request', scenarioId: `capstone-${id}` })
+  onBeforeSeal(run, 'final-cleanup')
   action({ type: 'aks-advance-stage' })
+  onSeal(run, 'final-cleanup')
   return run
 }
 
-export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks = [], onAction = () => {}, onTask = () => {} } = {}) {
+export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks = [], onAction = () => {}, onTask = () => {}, onBeforeSeal = () => {}, onSeal = () => {}, reverifyAtSeal = false } = {}) {
   const stage = lab.stages.find(item => item.id === stageId)
   for (const id of stage.taskIds) {
     if (skipTasks.includes(id)) continue
@@ -128,9 +130,32 @@ export function executeCapstoneStage(run, lab, stageId, { seal = true, skipTasks
     onTask(run, id)
   }
   if (seal) {
+    if (reverifyAtSeal) for (const id of stage.taskIds) {
+      const result = applyRunAction(run, { type: 'aks-request', scenarioId: `capstone-${id}` }, lab)
+      if (result.diagnostics.length) throw new Error(`${stageId}/${id} final Verify: ${JSON.stringify(result.diagnostics)}`)
+      run = result.run
+    }
+    onBeforeSeal(run, stageId)
     const result = applyRunAction(run, { type: 'aks-advance-stage' }, lab)
     if (result.diagnostics.length) throw new Error(`${stageId} seal: ${JSON.stringify(result.diagnostics)} ${JSON.stringify(evaluateLab(lab, run).tasks.filter(item => stage.taskIds.includes(item.id)))}`)
     run = result.run
+    onSeal(run, stageId)
+  }
+  return run
+}
+
+/** Runs published Solutions through the normal action dispatcher, never fabricating proof. */
+export function executeAksCapstoneSolution(run, lab, { onBeforeSeal = () => {}, onSeal = () => {}, onExperiment = () => {}, cleanupMode = 'explicit-deletes' } = {}) {
+  for (const stage of lab.stages) {
+    if (stage.id === 'final-cleanup') {
+      run = executeCapstoneCleanup(run, lab, { mode: cleanupMode, onBeforeSeal, onSeal })
+      continue
+    }
+    run = executeCapstoneStage(run, lab, stage.id, { onBeforeSeal, onSeal, reverifyAtSeal: true,
+      onAction(current, action, taskId) {
+        if (['aks-probe-start', 'aks-resource-start', 'aks-release-start', 'aks-release-finish', 'aks-capstone-incident'].includes(action.type))
+          onExperiment(current, action, taskId)
+      } })
   }
   return run
 }

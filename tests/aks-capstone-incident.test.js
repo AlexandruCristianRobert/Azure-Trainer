@@ -116,6 +116,11 @@ describe('AKS capstone release and incident', () => {
     for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml']) {
       reverse = act(reverse, save(path, CAPSTONE_SOLUTION_FILES.v2[path])); reverse = act(reverse, command(`kubectl apply -f ${path}`))
     }
+    const retainedRoute = applyRunAction(reverse, verify('fault-route'), lab)
+    expect(retainedRoute.diagnostics).toEqual([])
+    expect(retainedRoute.lines[0].text).toMatch(/^Historical observed-live request:/)
+    expect(retainedRoute.lines[0].measurements.observationOrigin).toBe('observed-live-history')
+    reverse = retainedRoute.run
     reverse = act(reverse, verify('incident-recovered'))
     expect(reverse.evidence.experimentsById[reverse.evidence.currentEvidenceByTask['incident-recovered']].outcome).toBe('passed')
     expect(reload(reverse)).toEqual(reverse)

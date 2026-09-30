@@ -305,7 +305,7 @@ scenarios[CAPSTONE_INCIDENT_ID] = { kind: 'aks-diagnosis', version: 1, target: C
     observationScenarioId: 'capstone-fault-route', recoveryScenarioId: 'capstone-incident-recovered' }] }
 
 export const aksCapstoneLab = {
-  id: 'aks-knowledge-assistant-capstone', title: 'Build and operate a knowledge assistant on AKS', status: 'unavailable',
+  id: 'aks-knowledge-assistant-capstone', title: 'Build and operate a knowledge assistant on AKS', status: 'available',
   skillAreaId: 'containers', service: 'aks', minutes: 120,
   brief: 'Build a Python assistant, publish it to ACR, deploy it on AKS, verify behavior, then measure resilience and releases before cleanup.',
   engineVersion: 2, contentVersion: 1, journeyId: 'aks-knowledge-assistant', journeyOrder: 25, labMode: 'capstone',

@@ -3,7 +3,7 @@ import { redactRequestValue } from './request-records.js'
 import { inspectDeploymentConsistency } from './release-evidence.js'
 
 /** Read-only projection: no routing, reconciliation, evidence allocation or clock advance. */
-export function inspectDiagnosis(input, target) {
+export function inspectDiagnosis(input, target, lab = undefined) {
   const run = input ? JSON.parse(JSON.stringify(input)) : null
   const state = run?.runtime.kubernetes?.clusters?.[target?.clusterId]
   const scoped = item => item.clusterId === target.clusterId && (!target.namespace || item.namespace === target.namespace)
@@ -25,7 +25,7 @@ export function inspectDiagnosis(input, target) {
     ...(state?.health?.events ?? []).filter(event => selected?.podUid && event.podUid === selected.podUid)
       .map(event => ({ ...event, reason: event.reason ?? event.type, simTimeMs: event.atMs ?? null, association: 'pod' })),
   ]
-  const consistency = run && target.deploymentName ? inspectDeploymentConsistency(run, target, getProjectManifest(run.project.manifestId)) : null
+  const consistency = run && target.deploymentName ? inspectDeploymentConsistency(run, target, getProjectManifest(run.project.manifestId), lab) : null
   return redactRequestValue({ incident: history, requests: { records, selected, truncated: run?.runtime.kubernetes?.requestsTruncated ?? 0 },
     logs: { current, previous, truncated: containers.reduce((total, [, container]) => total + (container.logsTruncated ?? 0) + (container.previous?.logsTruncated ?? 0), 0) },
     events, consistency }, state)

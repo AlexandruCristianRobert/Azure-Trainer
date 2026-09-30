@@ -122,14 +122,14 @@ export function verifyAksCapstoneIncident(run, lab, scenarioId) {
     // A retained native first observation remains a valid historical milestone.
     const earned = Object.values(run.evidence.experimentsById).find(item => item.taskId === id && item.measurements.diagnosisCapture && item.outcome === 'passed')
     if (earned && !incident.active) return { run, result: { scenarioId, scenarioVersion: 1, outcome: 'passed', completed: true, startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs,
-      measurements: { kind: 'capstone-historical-diagnosis', receiptId: `aks-proof-${earned.id}`, reason: 'Retained observed route failure.' } } }
+      measurements: { kind: 'capstone-historical-diagnosis', observationOrigin: 'observed-live-history', receiptId: `aks-proof-${earned.id}`, reason: 'Retained observed route failure.' } } }
     const pods = getDeploymentPods(run, CAPSTONE_TARGET.clusterId, 'assistant', 'assistant-api')
     if (!getRolloutSummary(run, CAPSTONE_TARGET)?.complete || pods.length !== 2
       || stateFor(run).resources['Service/assistant/assistant-external']?.spec.ports[0].targetPort !== 8081
       || pods.some(pod => stateFor(run).podSnapshots[pod.metadata.uid]?.environment.AI_ENDPOINT !== 'https://ai-missing.example')) {
       if (earned) return { run, result: { scenarioId, scenarioVersion: 1, outcome: 'passed', completed: true,
         startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs,
-        measurements: { kind: 'capstone-historical-diagnosis', receiptId: `aks-proof-${earned.id}`, reason: 'Retained observed route failure.' } } }
+        measurements: { kind: 'capstone-historical-diagnosis', observationOrigin: 'observed-live-history', receiptId: `aks-proof-${earned.id}`, reason: 'Retained observed route failure.' } } }
       return failed('Wait for every faulty-config Pod to be Available before observing both faults.')
     }
   }
