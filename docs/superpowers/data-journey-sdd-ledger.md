@@ -43,3 +43,7 @@ Ruling 5: Task 5 invalid consistency_level uses SDK_ARGUMENT; call-local args po
 Task 5: complete (commits ca97432..a5002b4, review clean)
 Task 5: minor (deferred): lookupCall returns {key, ...entry}
 Task 5: minor (deferred): if/else, raise, invalid consistency, call-local paths covered only informally (light-testing rule)
+Task 6: dispatched (base ec469be). Ruling 6: change feed via injectable hook {read, recordChange} supplied by Task 7; read_lease 404→None; no try/except — cost if wrong: Task 7 wiring adjustments
+Ruling 7: delete_item runtime left DATA_UNSUPPORTED — no Lab 1-4 uses it — cost if wrong: add store delete later
+Task 6: complete (commits ec469be..253395b, review clean)
+Task 6: minor (deferred): findAccountByName duplicated inline; change feed charge assumes partitionsTouched 1
