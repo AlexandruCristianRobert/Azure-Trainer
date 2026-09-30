@@ -10,6 +10,7 @@ import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { validIntegrationTrace } from './state.js'
 import { validAksRequestScenario } from './actions.js'
 import { resolvePodConfiguration } from './configuration.js'
+import { validDiagnosisLifecycle, validSealedLifecycleReceipt } from './diagnosis-lifecycle.js'
 
 const clone = value => structuredClone(value)
 const pendingCaptureContexts = new WeakMap()
@@ -36,7 +37,7 @@ const targetKeys = ['clusterId', 'namespace', 'deploymentName', 'serviceName']
 const stableKeys = [...targetKeys, 'deploymentUid', 'serviceUid']
 const secretKey = /password|secret|token|credential|api.?key|connection/i
 function validRequestScenario(request, target, lab) {
-  const allowed = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile']
+  const allowed = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout']
   if (!validAksRequestScenario(request, lab) || !isPlainObject(request) || Object.keys(request).some(key => !allowed.includes(key)) || request.kind !== 'aks-request' || request.version !== 1 || !same(request.target, target)) return false
   const http = request.request, expected = request.expected, connectivity = request.connectivity
   if (!(exact(http, ['method', 'path']) && http.method === 'GET' && http.path === '/api/info'
@@ -79,6 +80,8 @@ function validScenario(scenario, lab) {
       const request = lab?.scenarios?.[id]
       if (!text(id) || !validRequestScenario(request, scenario.target, lab)
         || !lab.tasks?.some(task => task.verification?.scenarioId === id && task.verification.scenarioVersion === 1)) return false
+      if (request.observeLifecycle && (id !== phase.observationScenarioId || !phase.edits.some(edit => edit.path === 'k8s/deployment.yaml'
+        && parseKubernetesYaml(edit.after, edit.path).documents.some(object => object.kind === 'Deployment' && object.spec.template.spec.containers[0].livenessProbe?.httpGet.path === '/health/missing')))) return false
     }
   }
   const probe = scenario.controlledProbe
@@ -152,22 +155,28 @@ function stage(run, scenario, phase, lab) {
   } catch { return reject(run, 'The declared fixture failed save or command validation.') }
   return { run: candidate, lines: redactRequestValue(redactRequestValue(lines, stateFor(candidate, scenario.target)), stateFor(run, scenario.target)), diagnostics: [] }
 }
-function receipt(run, incident, kind, observationId = null) {
+function receipt(run, incident, kind, observationId = null, lifecycle = null) {
   const state = stateFor(run, incident.target)
   state.diagnosis.receipts = [...state.diagnosis.receipts, { id: `diagnosis-receipt-${run.nextSequence++}`, incidentId: incident.id,
     epoch: incident.epoch, labId: incident.labId, attemptId: incident.attemptId, target: clone(incident.target), phaseId: incident.phaseId,
-    kind, simTimeMs: run.runtime.simTimeMs, observationId }].slice(-40)
+    kind, simTimeMs: run.runtime.simTimeMs, observationId, ...(lifecycle ? { lifecycle } : {}) }]
+  const retained = new Set(incident.observations.map(item => item.id))
+  const primary = state.diagnosis.receipts.filter(item => item.lifecycle && retained.has(item.observationId))
+  state.diagnosis.receipts = [...primary, ...state.diagnosis.receipts.filter(item => !primary.includes(item)).slice(-(40 - primary.length))]
+    .sort((a, b) => Number(a.id.slice(18)) - Number(b.id.slice(18)))
 }
 export function startDiagnosisIncident(run, scenarioId, lab) {
   const scenario = scenarioFor(run, scenarioId, lab), target = scenario && stableTarget(run, scenario.target)
   if (!scenario || !target || busy(run) || diagnosisIncidentActive(run) || stateFor(run, target).diagnosis?.incident || !healthy(run, target) || !draftsAgree(run) || !filesApplied(run, target, lab))
     return reject(run, 'Diagnosis requires a declared fixture, saved/applied stable healthy baseline, and no active experiment.')
+  const baselineObjects = baselineObjectCoordinates(run, lab, scenario)
+  if (!baselineObjects) return reject(run, 'The stable applied baseline must match the immutable healthy phase preconditions.')
   const baselineHashes = fingerprints(run, target), applied = stage(run, scenario, scenario.phases[0], lab)
   if (applied.diagnostics.length) return applied
   const candidate = applied.run, state = stateFor(candidate, target), epoch = candidate.nextSequence++
   state.diagnosis ??= { version: 1, incident: null, receipts: [] }
   state.diagnosis.incident = { id: `diagnosis-${scenarioId}-${epoch}`, epoch, labId: run.labId, attemptId: run.attemptId, target,
-    phaseId: scenario.phases[0].id, startedAtMs: run.runtime.simTimeMs, baselineHashes, observations: [], recoveries: [], active: true }
+    phaseId: scenario.phases[0].id, startedAtMs: run.runtime.simTimeMs, baselineHashes, baselineObjects, observations: [], recoveries: [], active: true }
   receipt(candidate, state.diagnosis.incident, 'started')
   return applied
 }
@@ -205,6 +214,8 @@ export function advanceDiagnosisIncident(run, scenarioId, lab) {
   return applied
 }
 function capsuleFor(run, target, request) {
+  // A selector that chose no Pod has no captured container configuration.
+  if (!request.transport.ok && request.route.selectedCount === 0) return null
   const state = stateFor(run, target), pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName)
   const podUid = request.podUid ?? request.route.readyEndpointUids?.slice().sort()[0] ?? pods.filter(pod => state.health?.containers[pod.metadata.uid]?.ready).map(pod => pod.metadata.uid).sort()[0]
   const snapshot = state.podSnapshots[podUid], containerId = state.health?.containers[podUid]?.containerId
@@ -239,14 +250,37 @@ function fixtureObjects(lab, scenario) {
 function historicalContext(objects) {
   return { resources: Object.fromEntries(objects.filter(object => object.kind === 'Secret').map((object, index) => [`retained-${index}`, object])), podSnapshots: {} }
 }
-function declaredCaptureObjects(lab, scenario, snapshot) {
+function healthyBaselineObjects(lab, scenario) {
+  const files = { ...lab.initialProjectFiles }
+  // A Guided learner may first publish and deploy logging. Every phase's
+  // immutable before value describes that working incident baseline.
+  for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = edit.before
+  return fixtureObjects({ initialProjectFiles: files }, { phases: [] })
+}
+function baselineObjectCoordinates(run, lab, scenario) {
+  const objects = fixtureObjects(lab, scenario), declared = healthyBaselineObjects(lab, scenario)
+  const actual = fixtureObjects({ initialProjectFiles: run.project.savedFiles }, { phases: [] })
+  if (!same(actual, declared)) return null
+  const coordinates = actual.map(object => objects.findIndex(candidate => same(candidate, object)))
+  return coordinates.every(index => index >= 0) ? coordinates : null
+}
+function validBaselineObjects(incident, lab, scenario) {
+  if (incident.baselineObjects === undefined) return true // earlier valid saves
+  const objects = fixtureObjects(lab, scenario), declared = healthyBaselineObjects(lab, scenario)
+  return Array.isArray(incident.baselineObjects) && incident.baselineObjects.length === declared.length
+    && new Set(incident.baselineObjects).size === incident.baselineObjects.length
+    && incident.baselineObjects.every((index, position) => Number.isInteger(index) && index >= 0 && same(objects[index], declared[position]))
+}
+function declaredCaptureObjects(lab, scenario, snapshot, incident) {
   fixtureObjects(lab, scenario)
-  const cached = declarationCache.get(lab), key = `${snapshot.phaseId}/${snapshot.kind}`
+  const cached = declarationCache.get(lab), key = `${snapshot.phaseId}/${snapshot.kind}/${diagnosisDigest(incident.baselineObjects ?? null)}`
   if (cached.captures.has(key)) return cached.captures.get(key)
   const files = { ...lab.initialProjectFiles }
+  if (incident.baselineObjects) for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = edit.before
   const phase = scenario.phases.find(item => item.id === snapshot.phaseId)
   for (const edit of phase.edits) files[edit.path] = snapshot.kind === 'failure' ? edit.after : edit.before
   const objects = fixtureObjects({ initialProjectFiles: files }, { phases: [] })
+  if (lab.scenarios[snapshot.scenarioId].observeLifecycle) objects.push(...healthyBaselineObjects(lab, scenario))
   cached.captures.set(key, objects)
   return objects
 }
@@ -280,6 +314,7 @@ function capsuleCoordinates(run, target, capsule, scenario, lab) {
   const pod = Object.values(state.resources).find(object => object.kind === 'Pod' && object.metadata.uid === capsule.podUid)
   if (!snapshot || !pod) return null
   const deployment = objects.findIndex(object => object.kind === 'Deployment' && object.metadata.namespace === target.namespace && object.metadata.name === target.deploymentName
+    && object.spec.template.spec.containers[0].image === pod.spec.containers[0].image
     && same(podConfigurationShape(object.spec.template.spec), podConfigurationShape(pod.spec)))
   if (deployment < 0) return null
   const configs = []
@@ -325,6 +360,9 @@ export function validDiagnosisEvidenceRecord(evidence, run, lab) {
     || Number(snapshot.id.slice(22)) !== evidence.sequence + 1 || evidence.startedAtMs !== snapshot.simTimeMs || evidence.endedAtMs !== snapshot.simTimeMs
     || evidence.measurements.requestSequence !== snapshot.records.request.sequence) return false
   const request = snapshot.records.request, measurements = evidence.measurements, declaration = lab.scenarios[evidence.scenarioId]
+  if (declaration?.observeLifecycle && (!same(snapshot.records.lifecycle, measurements.lifecycle)
+    || !validDiagnosisLifecycle(snapshot.records.lifecycle, run, anchor.target, incident.startedAtMs))) return false
+  if (!declaration?.observeLifecycle && snapshot.records.lifecycle !== undefined) return false
   if (!declaration || !requestKeys.every(key => Object.hasOwn(request, key)) || !isPlainObject(measurements.route)
     || measurements.deploymentUid !== anchor.target.deploymentUid || measurements.serviceUid !== anchor.target.serviceUid
     || !['origin', 'status', 'body', 'transport', 'dependencyTrace', 'integrationTrace'].every(key => isJsonValue(measurements[key]))
@@ -352,7 +390,8 @@ export function validDiagnosisEvidenceRecord(evidence, run, lab) {
     || !Array.isArray(measurements.selectedPods) || !measurements.selectedPods.some(pod => pod?.uid === geometry.podUid)) return false
   const expected = reconstructedCapsule(geometry, anchor.coordinates, fixtureObjects(lab, scenario))
   if (!expected || !same(snapshot.capsule, expected) || anchor.capsuleDigest !== diagnosisDigest(expected) || anchor.recordsDigest !== diagnosisDigest(snapshot.records)) return false
-  const objects = fixtureObjects(lab, scenario), declared = declaredCaptureObjects(lab, scenario, snapshot)
+  if (!validBaselineObjects(incident, lab, scenario)) return false
+  const objects = fixtureObjects(lab, scenario), declared = declaredCaptureObjects(lab, scenario, snapshot, incident)
   if (![anchor.coordinates.deployment, ...anchor.coordinates.configs].every(index => declared.some(object => same(object, objects[index])))) return false
   const state = stateFor(run, anchor.target), container = state.health?.containers?.[geometry.podUid]
   if (container && (container.containerId === geometry.containerId || container.previous?.containerId === geometry.containerId)) {
@@ -382,11 +421,13 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   }
   if (outcome.route && !partial(outcome.route, request.route)) return run
   const failed = !request.transport.ok || request.status >= 400
-  const kind = scenarioId === phase.observationScenarioId && failed ? 'failure' : scenarioId === phase.recoveryScenarioId && request.transport.ok && request.status === 200 ? 'recovery' : null
+  const lifecycle = lab.scenarios[scenarioId].observeLifecycle === true && validDiagnosisLifecycle(evidence.measurements.lifecycle, run, incident.target, incident.startedAtMs)
+  const kind = scenarioId === phase.observationScenarioId && (failed || lifecycle) ? 'failure' : scenarioId === phase.recoveryScenarioId && request.transport.ok && request.status === 200 ? 'recovery' : null
   if (!kind) return run
   const list = kind === 'failure' ? 'observations' : 'recoveries'
   if (incident[list].some(item => item.records.request.id === request.id)) return run
   const candidate = clone(run), next = stateFor(candidate, incident.target).diagnosis.incident
+  if (lifecycle) records.lifecycle = clone(evidence.measurements.lifecycle)
   const snapshot = { id: `diagnosis-observation-${candidate.nextSequence++}`, incidentId: incident.id, epoch: incident.epoch, labId: run.labId, attemptId: run.attemptId,
     target: clone(incident.target), phaseId: phase.id, scenarioId, simTimeMs: request.simTimeMs, historical: true, kind,
     records, capsule: capsuleFor(run, incident.target, request), fingerprint: fingerprints(run, incident.target), evidenceId: evidence.id }
@@ -408,7 +449,9 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   for (const record of Object.values(candidate.evidence.experimentsById)) if (record.measurements.diagnosisCapture?.incidentId === incident.id
     && !retainedIds.has(record.measurements.diagnosisCapture.observationId)) delete record.measurements.diagnosisCapture
   for (const item of stateFor(candidate, incident.target).diagnosis.receipts) if (item.observationId !== null && !retainedIds.has(item.observationId)) item.observationId = null
-  receipt(candidate, next, kind, next[list].some(item => item.id === snapshot.id) ? snapshot.id : null)
+  const nativeLifecycle = lifecycle ? stateFor(candidate, incident.target).health.receipts.find(item => item.newContainerId === records.lifecycle.containerId
+    && item.oldContainerId === records.lifecycle.previousContainerId && item.podUid === records.lifecycle.podUid) : null
+  receipt(candidate, next, kind, next[list].some(item => item.id === snapshot.id) ? snapshot.id : null, nativeLifecycle ? clone(nativeLifecycle) : null)
   if (!validDiagnosisEvidenceRecord(candidate.evidence.experimentsById[evidence.id], candidate, lab)) return run
   return candidate
 }
@@ -478,7 +521,7 @@ function validSnapshot(value, incident, scenario, run, lab) {
   const phase = scenario.phases.find(phase => phase.id === value.phaseId)
   if (!phase || value.scenarioId !== (value.kind === 'failure' ? phase.observationScenarioId : phase.recoveryScenarioId)) return false
   const { hash, ...payload } = value
-  if (hash !== diagnosisDigest(payload) || !exact(value.records, ['request', 'application', 'dependency', 'truncated'])) return false
+  if (hash !== diagnosisDigest(payload) || !exact(value.records, ['request', 'application', 'dependency', 'truncated', ...(value.records.lifecycle === undefined ? [] : ['lifecycle'])])) return false
   const evidence = run.evidence.experimentsById[value.evidenceId]
   if (!evidence?.measurements?.diagnosisCapture || !validDiagnosisEvidenceRecord(evidence, run, lab)) return false
   const records = value.records, request = records.request, state = stateFor(run, incident.target)
@@ -494,7 +537,8 @@ function validSnapshot(value, incident, scenario, run, lab) {
     || request.simTimeMs !== value.simTimeMs || !Number.isSafeInteger(request.sequence) || request.sequence >= run.nextSequence || request.sequence <= incident.epoch
     || !same(records, redactRequestValue(redactRequestValue(records, state), historicalSecrets)) || !Array.isArray(records.application) || records.application.length > 100
     || !same(records.dependency, request.dependencyRecords) || !exact(records.truncated, ['requests', 'application', 'dependency']) || !Object.values(records.truncated).every(clock)
-    || value.kind === 'failure' && request.transport?.ok && !(request.status >= 400)
+    || value.kind === 'failure' && request.transport?.ok && !(request.status >= 400) && !(lab.scenarios[value.scenarioId].observeLifecycle === true
+      && validDiagnosisLifecycle(records.lifecycle, run, incident.target, incident.startedAtMs))
     || value.kind === 'recovery' && (!request.transport?.ok || request.status !== 200)) return false
   const historicalState = { ...state, health: { containers: {} }, connectivity: { ...state.connectivity, diagnosticPodUids: request.origin.kind === 'pod' ? [request.origin.podUid] : [] } }
   const historicalRun = { ...run, runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes, requests: [request], clusters: { ...run.runtime.kubernetes.clusters, [incident.target.clusterId]: historicalState } } } }
@@ -521,12 +565,12 @@ export function validDiagnosisState(value, run, lab, clusterId) {
     || !Array.isArray(value.receipts) || value.receipts.length > 40) return false
   if (value.incident === null) return value.receipts.length === 0
   const incident = value.incident
-  if (!exact(incident, ['id', 'epoch', 'labId', 'attemptId', 'target', 'phaseId', 'startedAtMs', 'baselineHashes', 'observations', 'recoveries', 'active'])
+  if (!exact(incident, ['id', 'epoch', 'labId', 'attemptId', 'target', 'phaseId', 'startedAtMs', 'baselineHashes', ...(incident.baselineObjects === undefined ? [] : ['baselineObjects']), 'observations', 'recoveries', 'active'])
     || !Number.isSafeInteger(incident.epoch) || incident.epoch < 1 || incident.epoch >= run.nextSequence || incident.labId !== run.labId || incident.labId !== lab.id || incident.attemptId !== run.attemptId
     || !exact(incident.target, stableKeys) || !Object.values(incident.target).every(text) || incident.target.clusterId !== clusterId
     || !clock(incident.startedAtMs) || incident.startedAtMs > run.runtime.simTimeMs || !validHashes(incident.baselineHashes) || typeof incident.active !== 'boolean') return false
   const entry = Object.entries(lab.scenarios ?? {}).find(([id]) => incident.id === `diagnosis-${id}-${incident.epoch}`), scenario = entry && scenarioFor(run, entry[0], lab)
-  if (!scenario || !same(scenario.target, Object.fromEntries(targetKeys.map(key => [key, incident.target[key]]))) || !scenario.phases.some(phase => phase.id === incident.phaseId)) return false
+  if (!scenario || !validBaselineObjects(incident, lab, scenario) || !same(scenario.target, Object.fromEntries(targetKeys.map(key => [key, incident.target[key]]))) || !scenario.phases.some(phase => phase.id === incident.phaseId)) return false
   const snapshots = []
   for (const [key, kind] of [['observations', 'failure'], ['recoveries', 'recovery']]) {
     if (!Array.isArray(incident[key]) || incident[key].length > 10 || !incident[key].every(item => item.kind === kind && validSnapshot(item, incident, scenario, run, lab))) return false
@@ -535,10 +579,13 @@ export function validDiagnosisState(value, run, lab, clusterId) {
   if (new Set(snapshots.map(item => item.id)).size !== snapshots.length || new Set(snapshots.map(item => item.records.request.id)).size !== snapshots.length) return false
   let previous = 0
   return value.receipts.every(item => {
-    if (!exact(item, ['id', 'incidentId', 'epoch', 'labId', 'attemptId', 'target', 'phaseId', 'kind', 'simTimeMs', 'observationId']) || !/^diagnosis-receipt-[1-9]\d*$/.test(item.id)
+    if (!exact(item, ['id', 'incidentId', 'epoch', 'labId', 'attemptId', 'target', 'phaseId', 'kind', 'simTimeMs', 'observationId', ...(item.lifecycle === undefined ? [] : ['lifecycle'])]) || !/^diagnosis-receipt-[1-9]\d*$/.test(item.id)
       || !boundTo(item, incident) || !scenario.phases.some(phase => phase.id === item.phaseId) || !['started', 'advanced', 'completed', 'target-deleted', 'failure', 'recovery'].includes(item.kind)
       || !clock(item.simTimeMs) || item.simTimeMs < incident.startedAtMs || item.simTimeMs > run.runtime.simTimeMs
       || item.observationId !== null && !snapshots.some(snapshot => snapshot.id === item.observationId && snapshot.phaseId === item.phaseId && snapshot.kind === item.kind)) return false
+    if (item.lifecycle !== undefined && (item.kind !== 'failure' || !item.observationId || !validSealedLifecycleReceipt(item.lifecycle, run)
+      || item.lifecycle.diagnosisLifecycle?.deploymentUid !== incident.target.deploymentUid
+      || !snapshots.some(snapshot => snapshot.id === item.observationId && snapshot.records.lifecycle?.containerId === item.lifecycle.newContainerId))) return false
     const sequence = Number(item.id.slice(18))
     if (sequence <= previous || sequence >= run.nextSequence) return false
     previous = sequence; return true

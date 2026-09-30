@@ -41,6 +41,7 @@ HTTPServer(("0.0.0.0", app.PORT), Handler).serve_forever()
 // access output. Even an empty question enters the application's request scope.
 export function diagnosisServerSource(healthServer) {
   return healthServer.replace('import app\n', 'import app\nfrom uuid import uuid4\nfrom training_diagnostics import set_request_id, reset_request_id\n')
+    .replace('HTTPServer(("0.0.0.0", app.PORT), Handler).serve_forever()', 'print(f"Server startup: listening on port {app.PORT}", flush=True)\nHTTPServer(("0.0.0.0", app.PORT), Handler).serve_forever()')
     .replace('            response = app.answer(request["question"])', `            token = set_request_id(str(uuid4()))
             try:
                 response = app.answer(request["question"])

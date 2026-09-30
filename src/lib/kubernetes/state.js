@@ -17,6 +17,7 @@ import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { normalizeContainerResources } from './resource-schema.js'
 import { requestDiagnosticsEnabled, validRequestDiagnostics, validContainerRequestLogs } from './request-records.js'
 import { validDiagnosisState } from './diagnosis-incidents.js'
+import { validSealedLifecycleReceipt } from './diagnosis-lifecycle.js'
 
 export function emptyKubernetesRuntime() {
   return { version: 1, currentContext: null, contexts: {}, clusters: {}, requests: [] }
@@ -185,6 +186,7 @@ function validClusterState(state, run, lab, clusterId) {
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
     || !Array.isArray(state.health.events) || state.health.events.length > 1000)) return false
+  if (probesEnabled && !state.health.receipts.every(receipt => validSealedLifecycleReceipt(receipt, run))) return false
   if (!probesEnabled && state.health !== undefined) return false
   const resources = Object.entries(state.resources)
   const uids = new Set()

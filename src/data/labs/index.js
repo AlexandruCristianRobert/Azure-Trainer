@@ -41,6 +41,7 @@ import { aksResourcesIndependentLab } from './aks-journey/resources-independent.
 import { aksReleasesGuidedLab } from './aks-journey/releases-guided.lab.js'
 import { aksReleasesTroubleshootingLab } from './aks-journey/releases-troubleshooting.lab.js'
 import { aksReleasesIndependentLab } from './aks-journey/releases-independent.lab.js'
+import { diagnosisGuidedLab } from './aks-journey/diagnosis-guided.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -87,6 +88,7 @@ export const LABS = [
   aksReleasesGuidedLab,
   aksReleasesTroubleshootingLab,
   aksReleasesIndependentLab,
+  diagnosisGuidedLab,
 ]
 
 export function labById(id) {

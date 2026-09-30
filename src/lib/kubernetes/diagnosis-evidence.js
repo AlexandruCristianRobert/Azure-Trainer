@@ -7,6 +7,8 @@ import { getDeploymentPods } from './reconcile.js'
 import { redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
 import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidence } from './diagnosis-incidents.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
+import { observeDiagnosisLifecycle } from './diagnosis-lifecycle.js'
+import { getRolloutSummary } from './rollouts.js'
 
 const same = (left, right) => canonicalize(left) === canonicalize(right)
 const stateFor = (run, target) => run.runtime.kubernetes.clusters[target.clusterId]
@@ -57,8 +59,17 @@ export function verifyDiagnosis(run, lab, scenarioId) {
   const request = response.run.runtime.kubernetes.requests.find(item => item.sequence === response.measurements.requestSequence && item.scenarioId === scenarioId)
   const measurements = { ...response.measurements, status: response.status ?? null, body: response.body ?? null,
     requestId: request?.id ?? null, deploymentUid: deployment?.metadata.uid ?? null,
+    rollout: getRolloutSummary(response.run, scenario.target),
     provenanceValid: !!request && requestProvenance(response.measurements, scenario) }
   let passed = response.outcome && measurements.provenanceValid
+  if (scenario.requireCompleteRollout) passed &&= measurements.rollout?.complete === true
+  if (scenario.observeLifecycle) {
+    const incident = state?.diagnosis?.incident
+    const phase = Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis')?.phases.find(item => item.id === incident?.phaseId)
+    measurements.lifecycle = incident?.active && phase?.observationScenarioId === scenarioId
+      ? observeDiagnosisLifecycle(response.run, scenario.target, incident.startedAtMs) : null
+    passed &&= !!measurements.lifecycle
+  }
   if (scenario.requireTwoReplicas) {
     measurements.consistency = inspectDeploymentConsistency(response.run, scenario.target, getProjectManifest(run.project.manifestId), lab)
     const pods = getDeploymentPods(response.run, scenario.target.clusterId, scenario.target.namespace, scenario.target.deploymentName)

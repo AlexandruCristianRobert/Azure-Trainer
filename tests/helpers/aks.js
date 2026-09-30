@@ -221,7 +221,9 @@ export function executeAksSolution(run, lab, task) {
         run = result.run
       } else run = act(run, lab, action).run
     } else if (step.kind === 'scenario') {
-      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-release') {
+      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-diagnosis') {
+        run = act(run, lab, { type: step.control === 'next' ? 'aks-diagnosis-next' : 'aks-diagnosis-start', scenarioId: step.scenarioId }).run
+      } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-release') {
         run = act(run, lab, { type: step.control === 'finish' ? 'aks-release-finish' : 'aks-release-start', scenarioId: step.scenarioId }).run
         for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
       } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
