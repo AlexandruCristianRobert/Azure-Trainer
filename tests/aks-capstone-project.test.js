@@ -39,6 +39,7 @@ describe('AKS capstone teaching project', () => {
     expect(result.measurements.cases.noMatch).toMatchObject({ status: 200, body: { sources: [] } })
     expect(result.measurements.cases.retryFailure).toMatchObject({ status: 503 })
     expect(result.measurements.health.readyBefore.status).toBe(503)
+    expect(result.measurements.health.readyBeforeClosed.status).toBe(503)
     expect(result.measurements.health.readyClosed.status).toBe(503)
     expect(result.measurements.workload).toMatchObject({ operation: 'process_batch', units: 20, checksum: 3230 })
   })
@@ -62,6 +63,16 @@ describe('AKS capstone teaching project', () => {
   it('requires readiness to stay closed until initialization even when admission is open', () => {
     const files = { ...CAPSTONE_SOLUTION_FILES.v1,
       'app.py': CAPSTONE_SOLUTION_FILES.v1['app.py'].replace('initialized() and accepting_requests()', 'accepting_requests()') }
+    const result = verifyCapstoneSource(files, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
+    expect(result.passed).toBe(false)
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_HEALTH' }))
+  })
+
+  it('requires readiness to stay closed before initialization when admission is also closed', () => {
+    const files = { ...CAPSTONE_SOLUTION_FILES.v1,
+      'app.py': CAPSTONE_SOLUTION_FILES.v1['app.py'].replace(
+        'initialized() and accepting_requests()',
+        '(initialized() and accepting_requests()) or not (initialized() or accepting_requests())') }
     const result = verifyCapstoneSource(files, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES)
     expect(result.passed).toBe(false)
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'CAPSTONE_HEALTH' }))
