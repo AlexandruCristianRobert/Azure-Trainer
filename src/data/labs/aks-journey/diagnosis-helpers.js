@@ -1,5 +1,6 @@
 import { diagnosisDependencies } from '../../../lib/kubernetes/diagnosis-evidence.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
+import { canonicalize } from '../../../lib/labEngine/evidence.js'
 
 export function diagnosisTask(id, scenarioId, content) {
   const { target, lab, historical = false, ...task } = content
@@ -20,6 +21,22 @@ export function diagnosisPodAction(run, target, previous = false, describe = fal
 export function diagnosisRolloutHealthy(context, taskId) {
   const record = context.evidence.experimentsById[context.evidence.currentEvidenceByTask[taskId]]
   return record?.measurements.rollout?.complete === true
+}
+
+/** Earlier baseline traffic remains historical proof; both actual routes must have worked. */
+export function diagnosisBaselinePassed(context, lab, target) {
+  const scenario = lab.scenarios.baseline
+  const external = context.evidence.experimentsById[context.evidence.currentEvidenceByTask.baseline]
+  if (external?.outcome !== 'passed' || external.measurements.provenanceValid !== true) return false
+  return context.runtime.kubernetes.requests.some(request => request.diagnosticsVersion === 1 && request.clusterId === target.clusterId
+    && request.namespace === target.namespace && request.route?.serviceName === target.serviceName && request.route.namespace === target.namespace
+    && request.origin.kind === 'pod' && context.runtime.kubernetes.clusters[target.clusterId].connectivity.diagnosticPodUids.includes(request.origin.podUid)
+    && request.transport.ok && request.status === 200
+    && canonicalize(request.request) === canonicalize(scenario.request) && canonicalize(request.body) === canonicalize(scenario.expected.body)
+    && request.integrationTrace?.vectorProvenance === 'embedding' && request.integrationTrace.sourceProvenance === 'rows'
+    && canonicalize(request.integrationTrace.selectedIds) === canonicalize(scenario.expected.body.sources)
+    && canonicalize(request.integrationTrace.contextIds) === canonicalize(scenario.expected.body.sources)
+    && ['embedding', 'postgres-query', 'answer'].every(operation => request.dependencyTrace.some(stage => stage.operation === operation && stage.status === 'succeeded')))
 }
 
 /** Grade compiled bindings and the actually routed captured artifact, not source spelling. */

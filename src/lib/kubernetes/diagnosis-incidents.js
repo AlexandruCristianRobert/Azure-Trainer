@@ -11,6 +11,8 @@ import { validIntegrationTrace } from './state.js'
 import { validAksRequestScenario } from './actions.js'
 import { resolvePodConfiguration } from './configuration.js'
 import { validDiagnosisLifecycle, validSealedLifecycleReceipt } from './diagnosis-lifecycle.js'
+import { getProjectManifest } from '../project/manifests.js'
+import { projectSourceHash, selectBuildFiles } from '../project/build.js'
 
 const clone = value => structuredClone(value)
 const pendingCaptureContexts = new WeakMap()
@@ -63,10 +65,15 @@ export function diagnosisDigest(value) {
 }
 
 function validScenario(scenario, lab) {
-  if (!isPlainObject(scenario) || !isJsonValue(scenario) || Object.keys(scenario).some(key => !['kind', 'version', 'target', 'investigationArea', 'phases', 'controlledProbe'].includes(key))
+  if (!isPlainObject(scenario) || !isJsonValue(scenario) || Object.keys(scenario).some(key => !['kind', 'version', 'target', 'investigationArea', 'phases', 'controlledProbe', 'baselineTaskId'].includes(key))
     || scenario.kind !== 'aks-diagnosis' || scenario.version !== 1 || !exact(scenario.target, targetKeys) || !Object.values(scenario.target).every(text)
     || !text(scenario.investigationArea) || !Array.isArray(scenario.phases) || scenario.phases.length < 1 || scenario.phases.length > 10
     || new Set(scenario.phases.map(phase => phase?.id)).size !== scenario.phases.length) return false
+  if (scenario.baselineTaskId !== undefined) {
+    const task = lab.tasks?.find(item => item.id === scenario.baselineTaskId)
+    if (!text(scenario.baselineTaskId) || !task || !validRequestScenario(lab.scenarios[task.verification?.scenarioId], scenario.target, lab)
+      || lab.scenarios[task.verification.scenarioId].expected.status !== 200) return false
+  }
   for (const phase of scenario.phases) {
     if (!exact(phase, ['id', 'edits', 'commands', 'observationScenarioId', 'recoveryScenarioId']) || !text(phase.id)
       || !Array.isArray(phase.edits) || phase.edits.length < 1 || phase.edits.length > 10 || new Set(phase.edits.map(edit => edit?.path)).size !== phase.edits.length
@@ -169,6 +176,7 @@ export function startDiagnosisIncident(run, scenarioId, lab) {
   const scenario = scenarioFor(run, scenarioId, lab), target = scenario && stableTarget(run, scenario.target)
   if (!scenario || !target || busy(run) || diagnosisIncidentActive(run) || stateFor(run, target).diagnosis?.incident || !healthy(run, target) || !draftsAgree(run) || !filesApplied(run, target, lab))
     return reject(run, 'Diagnosis requires a declared fixture, saved/applied stable healthy baseline, and no active experiment.')
+  if (!capturedBaselineReady(run, scenario, lab)) return reject(run, 'Capture authentic working baseline logs on the current saved source and deployed containers before diagnosis.')
   const baselineObjects = baselineObjectCoordinates(run, lab, scenario)
   if (!baselineObjects) return reject(run, 'The stable applied baseline must match the immutable healthy phase preconditions.')
   const baselineHashes = fingerprints(run, target), applied = stage(run, scenario, scenario.phases[0], lab)
@@ -179,6 +187,30 @@ export function startDiagnosisIncident(run, scenarioId, lab) {
     phaseId: scenario.phases[0].id, startedAtMs: run.runtime.simTimeMs, baselineHashes, baselineObjects, observations: [], recoveries: [], active: true }
   receipt(candidate, state.diagnosis.incident, 'started')
   return applied
+}
+/** Optional authored prerequisite; older diagnosis fixtures keep their original start contract. */
+function capturedBaselineReady(run, scenario, lab) {
+  if (scenario.baselineTaskId === undefined) return true
+  const task = lab.tasks.find(item => item.id === scenario.baselineTaskId)
+  const evidence = currentEvidence(run, task.verification.scenarioId, lab)
+  if (!evidence || evidence.measurements.provenanceValid !== true || !task.check(run, task)) return false
+  const records = inspectRequestRecords(run, { clusterId: scenario.target.clusterId, requestId: evidence.measurements.requestId })
+  const request = records.request, state = stateFor(run, scenario.target)
+  const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, getProjectManifest(run.project.manifestId)))
+  const pods = getDeploymentPods(run, scenario.target.clusterId, scenario.target.namespace, scenario.target.deploymentName)
+  if (!request || request.scenarioId !== task.verification.scenarioId || request.status !== 200 || !request.transport.ok
+    || !same(request.request, lab.scenarios[request.scenarioId].request) || !same(request.body, lab.scenarios[request.scenarioId].expected.body)
+    || !['podUid', 'artifactId'].every(key => request[key] === evidence.measurements[key])
+    || request.containerId !== evidence.measurements.route?.containerId
+    || state.health.containers[request.podUid]?.containerId !== request.containerId
+    || state.podSnapshots[request.podUid]?.artifactId !== request.artifactId
+    || run.artifacts.buildsById[request.artifactId]?.sourceHash !== sourceHash
+    || !pods.some(pod => pod.metadata.uid === request.podUid)
+    || !pods.every(pod => run.artifacts.buildsById[state.podSnapshots[pod.metadata.uid]?.artifactId]?.sourceHash === sourceHash)) return false
+  const logged = event => records.application.some(item => item.containerId === request.containerId && item.artifactId === request.artifactId
+    && item.sourceFields.event === event && item.sourceFields.request_id === request.id && item.sourceBindings.request_id === 'request-id'
+    && (event !== 'request.completed' || item.sourceFields.status === request.status && item.sourceBindings.status === 'result-status'))
+  return logged('request.started') && logged('request.completed')
 }
 function incidentFor(run, scenarioId, lab) {
   const scenario = scenarioFor(run, scenarioId, lab), incident = scenario && stateFor(run, scenario.target)?.diagnosis?.incident

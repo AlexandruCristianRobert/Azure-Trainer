@@ -59,7 +59,7 @@ export function validSealedLifecycleReceipt(receipt, run) {
     || !Number.isSafeInteger(receipt.atMs) || receipt.atMs < 0 || receipt.atMs > run.runtime.simTimeMs
     || !Number.isSafeInteger(receipt.restartCount) || receipt.restartCount < 1
     || !same(seal.previousServerLogs, serverStartupLogs(run, seal.artifactId)) || seal.previousServerLogs.length !== 1
-    || !Array.isArray(seal.events) || seal.events.length < 2 || seal.events.length > 4) return false
+    || !Array.isArray(seal.events) || seal.events.length < 1 || seal.events.length > 4) return false
   return seal.events.every(event => exact(event, ['type', 'atMs', 'podUid', 'probeType', 'success', 'status', 'failures'])
     && event.type === 'probe-result' && event.probeType === 'liveness' && event.podUid === receipt.podUid && event.success === false
     && event.status === null && Number.isSafeInteger(event.failures) && event.failures > 0

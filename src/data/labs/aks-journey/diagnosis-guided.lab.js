@@ -1,6 +1,6 @@
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { DIAGNOSIS_MANIFEST } from '../../templates/aks-python/diagnosis.js'
-import { diagnosisTask, diagnosisPodAction, diagnosisLoggingPassed, diagnosisRolloutHealthy } from './diagnosis-helpers.js'
+import { diagnosisTask, diagnosisPodAction, diagnosisLoggingPassed, diagnosisRolloutHealthy, diagnosisBaselinePassed } from './diagnosis-helpers.js'
 import { createDiagnosisSeed, DIAGNOSIS_GROUP, DIAGNOSIS_CLUSTER, DIAGNOSIS_REGISTRY, DIAGNOSIS_GUIDED_FILES, DIAGNOSIS_GUIDED_SOLUTION_FILES as files } from './diagnosis-seeds.js'
 
 const target = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${DIAGNOSIS_GROUP}/providers/Microsoft.ContainerService/managedClusters/${DIAGNOSIS_CLUSTER}`,
@@ -56,7 +56,7 @@ export const diagnosisGuidedLab = {
     ...phases.map(item => ({ id: item.id, title: `Diagnose ${item.id}`, taskIds: [`observe-${item.id}`, `recover-${item.id}`] })),
     { id: 'final', title: 'Prove current service', taskIds: ['final-internal', 'final-external'] } ],
   scenarios: { baseline: request(healthy, false, true), logging: request(),
-    incident: { kind: 'aks-diagnosis', version: 1, target, investigationArea: 'Service routing, container lifecycle and the last reached dependency stage', phases },
+    incident: { kind: 'aks-diagnosis', version: 1, target, baselineTaskId: 'logging', investigationArea: 'Service routing, container lifecycle and the last reached dependency stage', phases },
     'observe-selector': request({ ...transportFailure, route: { selectedCount: 0 } }), 'recover-selector': request(),
     'observe-lifecycle': { ...request(), observeLifecycle: true }, 'recover-lifecycle': { ...request(), requireCompleteRollout: true },
     'observe-embedding': request({ status: 502, body: { error: 'The configured AI deployment is not available in this trainer.', code: 'AI_DEPLOYMENT' } }), 'recover-embedding': request(),
@@ -68,7 +68,7 @@ export const diagnosisGuidedLab = {
 const task = (id, scenarioId, content) => diagnosisTask(id, scenarioId, { target, lab: diagnosisGuidedLab, ...content })
 const historical = (id, content) => task(id, id, { historical: true, stageId: id.split('-')[1], ...content })
 diagnosisGuidedLab.tasks = [
-  task('baseline', 'baseline', { target: external, dependencies: {}, stageId: 'baseline',
+  task('baseline', 'baseline', { target: external, dependencies: {}, stageId: 'baseline', check: context => diagnosisBaselinePassed(context, diagnosisGuidedLab, target),
     text: 'Inspect the current context and namespaces. Prove the known backups question through both the internal Service from diagnostics and the external Service.',
     explanation: 'The standalone training/version 2.0 project has two nodes and two desired Pods. Context chooses the cluster and default namespace; default contains no app. Use -n assistant for app inspection and -n diagnostics for the diagnostic client. Running is process state; Ready controls endpoints. Service port 80 resolves named targetPort http to listener 8080.',
     hints: ['Run kubectl config current-context, get-contexts, get namespaces and get pods -n assistant; inspect both Services and EndpointSlices.', 'Use the supplied diagnostics Pod with the qualified internal hostname, then Verify baseline for the external known question.'],
