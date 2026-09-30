@@ -5,7 +5,8 @@ import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { aksCleanupReady, inspectAksCleanup, aksCleanupEligibility, aksFinalContractMatches } from '../src/lib/kubernetes/capstone/cleanup.js'
 import { CAPSTONE_TARGET } from '../src/data/labs/aks-journey/capstone-helpers.js'
-import { publishedAksCapstoneV2 } from '../src/lib/kubernetes/capstone/incident.js'
+import { publishedAksCapstoneV2, stableAksCapstoneV2 } from '../src/lib/kubernetes/capstone/incident.js'
+import { canonicalize } from '../src/lib/labEngine/evidence.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { createRegistry } from '../src/lib/sandbox/registry.js'
 
@@ -55,6 +56,41 @@ describe('AKS capstone final proof and cleanup', () => {
       expect(result.run).toEqual(baseline)
     }
   })
+  it('freezes and completes cleanup at the full 128-entry ownership bound', () => {
+    let run = structuredClone(verified)
+    const names = Array.from({ length: 128 - run.stages.aks.ownership.length }, (_, index) => `rg-capstone-extra-${index}-`.padEnd(90, 'x'))
+    for (const name of names) run = act(run, command(`az group create -n ${name} -l westeurope`))
+    expect(run.stages.aks.ownership).toHaveLength(128)
+    expect(aksCleanupEligibility(run, lab)).toEqual([])
+    const owned = structuredClone(run.stages.aks.ownership)
+    run = act(run, { type: 'aks-freeze-cleanup' })
+    expect(new TextEncoder().encode(JSON.stringify(run.stages.cleanupCheckpoint)).length).toBeLessThanOrEqual(32768)
+    expect(run.stages.cleanupCheckpoint.inventory).toEqual(owned.map(item => item.sequence))
+    const remaining = inspectAksCleanup(run, lab).remaining
+    expect(owned.every(entry => remaining.some(item => entry.resourceId === item.resourceId && entry.type === item.type))).toBe(true)
+    const forged = structuredClone(run)
+    forged.stages.cleanupCheckpoint.inventory[0] = forged.stages.cleanupCheckpoint.inventory[1]
+    forged.evidence.aksCleanupReceipt.snapshot = canonicalize(forged.stages.cleanupCheckpoint)
+    expect(() => reload(forged)).toThrow()
+    run = reload(run)
+    for (const name of names) run = act(run, command(`az group delete -n ${name} --yes`))
+    run = executeCapstoneCleanup(run, lab, { mode: 'group-cascade' })
+    expect(run.stages.aks.creationReceipts).toHaveLength(128)
+    expect(run.stages.aks.deletionReceipts).toHaveLength(128)
+    expect(inspectAksCleanup(run, lab)).toMatchObject({ protectedIntact: true, remaining: [] })
+    expect(evaluateLab(lab, reload(run))).toMatchObject({ isComplete: true, doneCount: 31 })
+  }, 180000)
+  it('shares the exact six-object contract with freeze eligibility', () => {
+    let run = act(structuredClone(verified), { type: 'save-file', path: 'k8s/configmap.yaml',
+      text: verified.project.savedFiles['k8s/configmap.yaml'] + '\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra-final-config\n  namespace: assistant\ndata:\n  NOTE: extra\n' })
+    for (const path of ['namespace', 'configmap', 'secret', 'deployment', 'service-internal', 'service-external'])
+      run = act(run, command(`kubectl apply -f k8s/${path}.yaml`))
+    run = act(run, command('kubectl rollout restart deployment/assistant-api -n assistant'))
+    run = act(run, { type: 'aks-advance', seconds: 90 })
+    expect(stableAksCapstoneV2(run, lab, { requireRestart: true })).toBe(true)
+    expect(aksCleanupEligibility(run, lab)[0]?.code).toBe('AKS_FINAL_NOT_CURRENT')
+    expect(applyRunAction(run, { type: 'aks-freeze-cleanup' }, lab).diagnostics[0]?.code).toBe('AKS_FINAL_NOT_CURRENT')
+  }, 60000)
   it('rejects broken rebuilt v2 health, workload and logging contracts', () => {
     expect(aksFinalContractMatches(verified)).toBe(true)
     for (const alter of [source => source.replace('200 if initialized() and accepting_requests() else 503', '200'),

@@ -48,7 +48,8 @@ export function aksFinalReady(run, lab) {
     || activeAksExperiment(run) || Object.keys(run.project.savedFiles).some(path => run.project.savedFiles[path] !== run.project.draftFiles[path])
     || !stableAksCapstoneV2(run, lab, { requireRestart: true }) || !aksFinalContractMatches(run)) return false
   const consistency = inspectDeploymentConsistency(run, CAPSTONE_TARGET, CAPSTONE_MANIFEST, lab)
-  return !!(consistency.consistent && consistency.witness?.appliedKeys.includes('Namespace//assistant')
+  return !!(consistency.consistent && aksFinalDependencies(run).savedObjects.length === 6
+    && consistency.witness?.appliedKeys.includes('Namespace//assistant')
     && consistency.witness.reapply && consistency.witness.restart)
 }
 
@@ -73,7 +74,9 @@ export function freezeAksCleanup(run, lab) {
     dependencyValues: Object.fromEntries(records.map(record => [record.taskId, clone(record.dependencyValues)])),
     dependencyGenerations: Object.fromEntries(records.map(record => [record.taskId, clone(record.dependencyGenerations)])),
     sourceVersions: clone(run.project.fileVersions), fingerprint: aksFinalDependencies(run),
-    inventory: clone(run.stages.aks.ownership), protectedDigest: hash(aksProtectedRefs()) }
+    // A creation sequence identifies one exact owned incarnation. Resolve its
+    // full identity from the durable receipt instead of repeating long ARM IDs.
+    inventory: run.stages.aks.ownership.map(item => item.sequence), protectedDigest: hash(aksProtectedRefs()) }
   return { run: { ...run, nextSequence: run.nextSequence + 1,
     stages: { ...run.stages, cleanupCheckpoint: checkpoint },
     evidence: { ...run.evidence, aksCleanupReceipt: { sequence: checkpoint.sequence, attemptId: run.attemptId, snapshot: canonicalize(checkpoint) } } }, diagnostics: [] }
@@ -94,7 +97,7 @@ export function validateAksCleanupCheckpoint(run) {
       || new TextEncoder().encode(canonicalize(cp)).length > 32768) return false
     const inventory = run.stages.aks.creationReceipts.filter(item => item.sequence < cp.sequence
       && !run.stages.aks.deletionReceipts.some(deleted => deleted.creationSequence === item.sequence && deleted.sequence < cp.sequence))
-      .map(({ digest, ...item }) => item)
+      .map(item => item.sequence)
     if (!same(cp.inventory, inventory)) return false
     const records = cp.evidenceIds.map(id => run.evidence.experimentsById[id])
     if (records.some((record, index) => !record || record.taskId !== AKS_FINAL_TASKS[index]
@@ -137,7 +140,10 @@ function appRemaining(run) {
 export function inspectAksCleanup(run, lab) {
   let protectedIntact = false
   try { validateAksOwnership(run); protectedIntact = true } catch { /* Invalid prerequisite/ownership history stays closed. */ }
-  const inventory = run.stages.cleanupCheckpoint?.inventory ?? run.stages.aks.ownership
+  const checkpoint = run.stages.cleanupCheckpoint
+  const inventory = checkpoint
+    ? run.stages.aks.creationReceipts.filter(item => checkpoint.inventory.includes(item.sequence))
+    : run.stages.aks.ownership
   const clusterIds = new Set(inventory.filter(item => item.type === 'aksClusters').map(item => lower(item.resourceId)))
   const registryIds = new Set(inventory.filter(item => item.type === 'containerRegistries').map(item => lower(item.resourceId)))
   const current = aksResourceInventory(run)
