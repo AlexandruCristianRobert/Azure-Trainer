@@ -297,8 +297,14 @@ export function runCosmosQuery(container, text, parameters = [], { partitionKey 
     const itemsInScope = partitionKeyValue === undefined ? allItems.slice() : allItems.filter((item) => partitionValue(container, item) === partitionKeyValue)
     const matched = itemsInScope.filter((item) => where.every((cond) => evalCondition(item, cond)))
 
-    const orderPaths = ast.orderBy ? (ast.orderBy.type === 'paths' ? ast.orderBy.items.map((item) => item.path) : [ast.orderBy.path]) : []
-    const usedIndex = [...where.map((cond) => cond.path), ...orderPaths].every((path) => isPathIndexed(container.indexingPolicy, toSlashPath(path)))
+    // Ordinary WHERE/ORDER BY property paths are served by includedPaths/excludedPaths.
+    // A VectorDistance ORDER BY is served by a vectorIndexes entry instead (real Cosmos
+    // configurations commonly exclude the vector path from ordinary indexing), so it is
+    // checked separately rather than against isPathIndexed.
+    const orderPaths = ast.orderBy?.type === 'paths' ? ast.orderBy.items.map((item) => item.path) : []
+    const propertyPathsIndexed = [...where.map((cond) => cond.path), ...orderPaths].every((path) => isPathIndexed(container.indexingPolicy, toSlashPath(path)))
+    const vectorIndexed = ast.orderBy?.type !== 'vector' || (container.indexingPolicy?.vectorIndexes ?? []).some((entry) => entry.path === toSlashPath(ast.orderBy.path))
+    const usedIndex = propertyPathsIndexed && vectorIndexed
 
     if (ast.orderBy?.type === 'paths' && ast.orderBy.items.length >= 2) {
       const compositeIndexes = container.indexingPolicy?.compositeIndexes ?? []

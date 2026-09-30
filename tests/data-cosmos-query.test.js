@@ -36,5 +36,11 @@ describe('runCosmosQuery', () => {
     const q = 'SELECT TOP 1 c.id, VectorDistance(c.embedding, @v) AS score FROM c ORDER BY VectorDistance(c.embedding, @v)'
     expect(runCosmosQuery(vc, q, [{ name: '@v', value: [0.9, 0.1] }]).rows[0].id).toBe('a')
     expect(runCosmosQuery(vc, q, [{ name: '@v', value: [1, 0, 0] }]).error.message).toMatch('do not match')
+    const vcIndexed = container({
+      indexingPolicy: { ...container().indexingPolicy, excludedPaths: [{ path: '/embedding/*' }], vectorIndexes: [{ path: '/embedding', type: 'diskANN' }] },
+      vectorEmbeddingPolicy: vc.vectorEmbeddingPolicy,
+      items: vc.items,
+    })
+    expect(runCosmosQuery(vcIndexed, q, [{ name: '@v', value: [0.9, 0.1] }]).stats.usedIndex).toBe(true)
   })
 })
