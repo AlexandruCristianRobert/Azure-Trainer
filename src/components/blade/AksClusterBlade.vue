@@ -8,6 +8,7 @@ import { inspectIntegrationRequests } from '../../lib/kubernetes/integration-ins
 import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-inspection.js'
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
+import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
@@ -51,6 +52,8 @@ const probeView = computed(() => run.lab?.capabilities?.kubernetesProbes === tru
     deploymentName: 'assistant', serviceName: 'assistant-internal' }) : null)
 const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources === true && cluster.value
   ? inspectResources(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: 'assistant' }) : null)
+const releaseViews = computed(() => run.lab?.capabilities?.kubernetesRollouts && cluster.value
+  ? view.value.deployments.filter(deployment => deployment.metadata.namespace === namespace.value).map(deployment => ({ name: deployment.metadata.name, view: inspectRelease(run.behavioralRun, { clusterId: cluster.value.id, namespace: deployment.metadata.namespace, deploymentName: deployment.metadata.name, serviceName: 'assistant-public' }, run.lab) })).filter(item => item.view) : [])
 </script>
 
 <template><section class="blade"><div class="blade__content blade__content--full">
@@ -65,6 +68,14 @@ const resourceView = computed(() => run.lab?.capabilities?.kubernetesResources =
     <h3 class="blade__section-title">Nodes</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'vmSize', label: 'VM size' }]" :rows="view.nodes" empty-text="No nodes are modeled" />
     <h3 class="blade__section-title">Deployments</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Replicas' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="deploymentRows" empty-text="No deployments in this namespace" />
     <h3 class="blade__section-title">Pods</h3><EntityTable :columns="[{ key: 'name', label: 'Name', grow: 1.5 }, { key: 'status', label: 'Status' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="podRows" empty-text="No Pods in this namespace" />
+    <section v-if="releaseViews.length" class="aks-probe-inspection" aria-label="Read-only release inspection">
+      <h3 class="blade__section-title">Release revisions and artifacts</h3>
+      <article v-for="item in releaseViews" :key="item.name"><h4>{{ item.name }}</h4><p>Revision {{ item.view.summary.currentRevision }}: updated {{ item.view.summary.updated }}, ready {{ item.view.summary.ready }}, available {{ item.view.summary.available }}, unavailable {{ item.view.summary.unavailable }}, terminating {{ item.view.summary.terminating }}. {{ item.view.summary.complete ? 'Complete' : 'Incomplete' }}. Saved/live {{ item.view.savedLiveMismatch ? 'mismatch' : 'match' }}.</p>
+        <p>Conditions: {{ item.view.summary.conditions.map(condition => `${condition.type} ${condition.status} (${condition.reason})`).join('; ') }}</p>
+        <ul><li v-for="revision in item.view.revisions" :key="revision.revision">Revision {{ revision.revision }} {{ revision.current ? '(current)' : '' }} · {{ revision.rsUid }} · {{ revision.image }}</li></ul>
+        <div class="aks-probe-inspection__table"><table><thead><tr><th scope="col">Pod</th><th scope="col">Revision</th><th scope="col">Status</th><th scope="col">Artifact</th><th scope="col">Digest</th><th scope="col">Source hash</th></tr></thead><tbody><tr v-for="pod in item.view.pods" :key="pod.uid"><th scope="row">{{ pod.name }}</th><td>{{ pod.revision }}</td><td>{{ pod.status }}</td><td>{{ pod.artifactId ?? 'not captured' }}</td><td>{{ pod.digest ?? 'none' }}</td><td>{{ pod.sourceHash ?? 'none' }}</td></tr></tbody></table></div>
+      </article>
+    </section>
     <section v-if="configCapable" class="aks-config-inspection" aria-labelledby="aks-config-inspection-title">
       <header><h3 id="aks-config-inspection-title" class="blade__section-title">Pod configuration snapshot</h3><p>Environment and mounted settings are captured when each Pod starts. This view is read-only.</p></header>
       <label>Pod <select v-model="selectedPodUid" aria-label="Select Pod configuration to inspect"><option v-for="pod in namespacePods" :key="pod.metadata.uid" :value="pod.metadata.uid">{{ pod.metadata.name }}</option></select></label>

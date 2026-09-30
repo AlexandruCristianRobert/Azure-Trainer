@@ -228,6 +228,7 @@ function clearExperimentFaults(state, experiment) {
 }
 
 export function startProbeExperiment(input, scenarioId, lab) {
+  if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => state.rollouts?.experiment?.status === 'active')) return { run: input, ...invalid('A release experiment is already active. Finish or cancel it first.') }
   const scenario = lab?.scenarios?.[scenarioId]
   if (!scenario || typeof scenarioId !== 'string') return { run: input, ...invalid('The selected probe experiment is not declared by this Lab.') }
   const durationSeconds = scenario.durationSeconds ?? scenario.script?.durationSeconds ?? scenario.script?.finishAfterStartSeconds ?? 60

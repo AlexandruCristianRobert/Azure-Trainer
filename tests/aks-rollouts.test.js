@@ -263,11 +263,13 @@ test('stable replica-only decrease preserves the preceding resource topic one-se
   expect(status(run)).toMatchObject({ terminating: 0, complete: true })
 })
 
-test.each(['apply', 'manual'])('desired replicas changed by %s cancel only the matching active baseline experiment', cause => {
+test('controller cancels only the matching active baseline experiment when desired replicas change', () => {
   let run = releaseTestRun()
   state(run).rollouts.experiment = { status: 'active', deploymentUid: deployment(run).metadata.uid, baselineReplicas: 2 }
-  if (cause === 'apply') run = applySpec(run, spec => { spec.replicas = 3 })
-  else run = act(run, lab, { type: 'command', line: 'kubectl scale deployment/assistant-api --replicas 3 -n assistant' }).run
+  // Partial pre-Task4 records exercise the controller compatibility seam,
+  // rather than the now-strict persisted/action experiment schema.
+  deployment(run).spec.replicas = 3
+  run = reconcileRollouts(run, target.clusterId, run.runtime.simTimeMs, lab).run
   expect(state(run).rollouts.experiment).toMatchObject({ status: 'cancelled', cancellationReason: 'desired-replicas-changed', endedAtMs: 15000 })
   expect(status(run).desired).toBe(3)
 })
@@ -277,7 +279,8 @@ test('unrelated and old experiment records are left alone by replica changes', (
     let run = releaseTestRun()
     state(run).rollouts.experiment = { deploymentUid: deployment(run).metadata.uid, ...experiment }
     const original = structuredClone(state(run).rollouts.experiment)
-    run = applySpec(run, spec => { spec.replicas = 3 })
+    deployment(run).spec.replicas = 3
+    run = reconcileRollouts(run, target.clusterId, run.runtime.simTimeMs, lab).run
     expect(state(run).rollouts.experiment).toEqual(original)
   }
 })

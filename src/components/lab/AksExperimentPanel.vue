@@ -7,11 +7,30 @@ import { inspectConnectivity } from '../../lib/kubernetes/connectivity-inspectio
 import { inspectIntegration, INTEGRATION_PROFILE_LABELS } from '../../lib/kubernetes/integration-inspection.js'
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
+import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
 import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 const run = useLabRunStore()
+const releaseChoice = ref('')
+const releaseScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-release'))
+const releaseFinalScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-release-final'))
+const releaseTarget = computed(() => releaseScenarios.value.find(([id]) => id === releaseChoice.value)?.[1]?.target ?? releaseScenarios.value[0]?.[1]?.target ?? releaseFinalScenarios.value[0]?.[1]?.target)
+const releaseView = computed(() => run.lab?.capabilities?.kubernetesRollouts && releaseTarget.value && run.behavioralRun ? inspectRelease(run.behavioralRun, releaseTarget.value, run.lab) : null)
+const releaseActive = computed(() => releaseView.value?.experiment?.status === 'active')
+const anyExperimentActive = computed(() => Object.values(run.behavioralRun?.runtime?.kubernetes?.clusters ?? {}).some(state => state.rollouts?.experiment?.status === 'active' || state.health?.experiment?.status === 'active' || ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase)))
+watch(releaseScenarios, values => { if (!values.some(([id]) => id === releaseChoice.value)) releaseChoice.value = values[0]?.[0] ?? '' }, { immediate: true })
+async function releaseAction(type, value = null) {
+  error.value = ''; statusMessage.value = 'Checking release experiment state.'
+  const action = type === 'aks-advance' ? { type, seconds: value } : type === 'aks-release-cancel' ? { type } : { type, scenarioId: value ?? releaseView.value?.experiment?.scenarioId ?? releaseChoice.value }
+  try {
+    const result = await run.dispatchBehavioral(action)
+    error.value = result?.effects?.diagnostics?.map(item => item.message).join(' ') ?? ''
+    const experiment = releaseView.value?.experiment
+    statusMessage.value = error.value || (type === 'aks-request' ? result?.effects?.lines?.map(line => line.text).join(' ') || 'Final release verification recorded.' : experiment ? `Release ${experiment.scenarioId}: ${experiment.phase}; ${experiment.status}; ${experiment.outcome ?? `${experiment.samples.length} observed samples`}.` : 'Release action recorded.')
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'Release action failed.' }
+}
 const choice = ref('')
 const error = ref('')
 const scenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-request'))
@@ -210,6 +229,23 @@ async function copyLogCommand(command) {
       <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable && scenario.request.path !== '/api/work' ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
       <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send()">Send simulated request</button>
     </div>
+    <section v-if="run.lab?.capabilities?.kubernetesRollouts" class="aks-probe-controls" aria-label="AKS release experiments">
+      <h3>Release traffic and recovery</h3>
+      <p>Start captures the current release. Requests use the external Service and choose the smallest eligible Pod UID; the table inventories every ready backend. Observed samples describe this simulation's traffic.</p>
+      <div class="experiment-tool__controls">
+        <label>Release scenario<select v-model="releaseChoice" aria-label="Release scenario" :disabled="locked || releaseActive"><option v-for="[id] in releaseScenarios" :key="id" :value="id">{{ id }}</option></select></label>
+        <button type="button" class="btn btn--primary" aria-label="Start release experiment" :disabled="locked || anyExperimentActive || !releaseChoice" @click="releaseAction('aks-release-start', releaseChoice)">Start release experiment</button>
+        <button type="button" class="btn" aria-label="Finish release experiment" :disabled="locked || !releaseActive" @click="releaseAction('aks-release-finish')">Finish release experiment</button>
+        <button type="button" class="btn" aria-label="Cancel release experiment" :disabled="locked || !releaseActive" @click="releaseAction('aks-release-cancel')">Cancel release experiment</button>
+      </div>
+      <p role="status" aria-live="polite">{{ releaseView?.experiment ? `${releaseView.experiment.scenarioId}: ${releaseView.experiment.phase}; ${releaseView.experiment.status}; ${releaseView.experiment.samples.length} observed sample(s). ${releaseView.experiment.outcome ?? releaseView.experiment.cancellationReason ?? ''}` : 'No release experiment has started.' }}</p>
+      <p v-if="releaseView?.summary">Revision {{ releaseView.summary.currentRevision }}: updated {{ releaseView.summary.updated }}, ready {{ releaseView.summary.ready }}, available {{ releaseView.summary.available }}, unavailable {{ releaseView.summary.unavailable }}, terminating {{ releaseView.summary.terminating }}. {{ releaseView.summary.complete ? 'Rollout complete.' : 'Rollout incomplete.' }}</p>
+      <p v-if="releaseView">Saved/live objects: {{ releaseView.savedLiveMismatch ? 'mismatch; repair and reapply the saved manifests.' : 'match.' }}</p>
+      <div class="experiment-tool__controls"><button v-for="seconds in [1, 15, 60]" :key="seconds" type="button" class="btn" :aria-label="`Advance release simulation by ${seconds} seconds`" :disabled="locked" @click="releaseAction('aks-advance', seconds)">Advance {{ seconds }}s</button><button v-for="[id] in releaseFinalScenarios" :key="id" type="button" class="btn" :disabled="locked" :aria-label="`Verify final release: ${id}`" @click="releaseAction('aks-request', id)">Verify final release</button></div>
+      <h4>Observed samples</h4>
+      <div class="aks-probe-controls__table"><table><thead><tr><th scope="col">Time</th><th scope="col">Transport / HTTP</th><th scope="col">Answer / sources / release</th><th scope="col">Selected Pod</th><th scope="col">Available</th><th scope="col">Backend artifacts</th></tr></thead><tbody><tr v-for="sample in releaseView?.experiment?.samples ?? []" :key="sample.requestId"><th scope="row">{{ sample.atMs / 1000 }}s</th><td>{{ sample.transport.ok ? `HTTP ${sample.status}` : sample.transport.reason }}</td><td>{{ sample.answer ?? 'No answer' }}<br>{{ sample.sources.join(', ') || 'No sources' }} · {{ sample.release ?? 'No release field' }}</td><td>{{ sample.podUid ?? 'none' }}</td><td>{{ sample.rollout.available }}</td><td><div v-for="backend in sample.backends" :key="backend.podUid">{{ backend.podUid }} · revision {{ backend.revision }} · {{ backend.artifactId }} · {{ backend.digest }}</div></td></tr></tbody></table></div>
+      <p>Inspect history, Pod events, and rollout status in the shell. Final proof requires current saved build files, matching applied manifests, and a witnessed reapply followed by rollout restart.</p>
+    </section>
     <section v-if="probeCapable" class="aks-probe-controls" aria-label="AKS health probe experiments">
       <h3>Health probe timeline</h3>
       <p>Starting an experiment recreates the target Pods before the simulated clock advances. Their new containers begin cold. Probe schedules are deterministic teaching simulations; production timing can vary.</p>

@@ -9,6 +9,8 @@ import { accountResourceSecond, sampleResourceMetrics } from './resource-usage.j
 import { reconcileHpa } from './hpa.js'
 import { observeResourceExperiment } from './resource-experiments.js'
 import { nextRolloutDeadline, reconcileRollouts } from './rollouts.js'
+import { nextReleaseTimestamp, observeReleaseTimestamp } from './release-experiments.js'
+import { refreshReleaseProofs } from './release-evidence.js'
 
 const clone = value => structuredClone(value)
 
@@ -129,10 +131,11 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = reconcileResourceTerminations(run, run.runtime.simTimeMs, lab)
   run = observeProbeExperiment(run, run.runtime.simTimeMs, lab)
   run = observeResourceExperiment(run, run.runtime.simTimeMs, lab)
+  run = observeReleaseTimestamp(run, run.runtime.simTimeMs, lab)
   let events = scheduledEventCount(run, run.runtime.simTimeMs)
   if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
   while (true) {
-    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target), nextAccountingDeadline(run, target), nextRolloutDeadline(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
+    const next = [nextHealthDeadline(run, target), nextProjectionDeadline(run, target), nextExperimentDeadline(run, target), nextTerminationDeadline(run, target), nextAccountingDeadline(run, target), nextRolloutDeadline(run, target), nextReleaseTimestamp(run, target)].filter(Number.isFinite).sort((a, b) => a - b)[0]
     if (next === undefined) break
     events += scheduledEventCount(run, next)
     if (events > 10_000) return { run: input, diagnostics: [{ code: 'SIMULATION_LIMIT', message: 'AKS probe advancement exceeded 10,000 scheduled events.' }] }
@@ -140,6 +143,7 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
     run = projectConfigurationAt(run, next)
     run = resourceTimestamp(run, next, lab)
     run = observeProbeExperiment(run, next, lab)
+    run = observeReleaseTimestamp(run, next, lab)
   }
   run.runtime.simTimeMs = target
   run = projectConfigurationAt(run, target)
@@ -150,6 +154,8 @@ export function advanceKubernetesTimeResult(input, seconds, lab) {
   run = reconcileResourceTerminations(run, target, lab)
   run = observeProbeExperiment(run, target, lab)
   run = observeResourceExperiment(run, target, lab)
+  run = observeReleaseTimestamp(run, target, lab)
+  run = refreshReleaseProofs(run, lab)
   return { run: finishProbeExperiment(run, lab), diagnostics: [] }
 }
 

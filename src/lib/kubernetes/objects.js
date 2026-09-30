@@ -3,6 +3,7 @@ import { scheduleConfigurationProjection } from './configuration.js'
 import { serviceAllocationDiagnostic } from './services.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
 import { registerRevision } from './rollout-history.js'
+import { noteReleaseReapply } from './release-evidence.js'
 
 export const kubeObjectKey = (kind, namespace = '', name) => `${kind}/${namespace ?? ''}/${name}`
 const clone = value => structuredClone(value)
@@ -57,7 +58,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
       object.spec.template.metadata.annotations = { ...(object.spec.template.metadata.annotations ?? {}), 'kubectl.kubernetes.io/restarted-at': old.spec.template.metadata.annotations['kubectl.kubernetes.io/restarted-at'] }
     }
     const desired = JSON.stringify(desiredObject(object))
-    if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); continue }
+    if (old && JSON.stringify(desiredObject(old)) === desired) { lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} unchanged`, kind: 'out' }); noteReleaseReapply(next, clusterId, object, lab); continue }
     if (old?.kind === 'Deployment' && JSON.stringify(canonical(old.spec.selector)) !== JSON.stringify(canonical(object.spec.selector))) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SELECTOR', message: 'Deployment selector is immutable.' }] }
     if (old?.kind === 'Service' && old.spec.type !== object.spec.type) return { run: next, lines, diagnostics: [{ code: 'KUBE_IMMUTABLE_SERVICE_TYPE', message: 'Changing a Service type in place is unsupported by this trainer.' }] }
     if (old?.kind === 'Deployment' && lab?.capabilities?.kubernetesRollouts === true
@@ -91,6 +92,7 @@ export function applyKubernetesObjects(run, documents, options = {}, lab) {
     }
     if (object.kind === 'ConfigMap' || object.kind === 'Secret') next = scheduleConfigurationProjection(next, clusterId, key)
     lines.push({ text: `${object.kind.toLowerCase()}/${object.metadata.name} ${old ? 'configured' : 'created'}`, kind: 'out' })
+    noteReleaseReapply(next, clusterId, object, lab)
   }
   return { run: next, lines, diagnostics }
 }

@@ -22,6 +22,8 @@ import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
 import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/state.js'
 import { applyAksAction } from '../kubernetes/actions.js'
+import { observeReleaseTimestamp, cancelChangedReleaseExperiments, activeRelease, cancelReleaseExperiment } from '../kubernetes/release-experiments.js'
+import { refreshReleaseProofs } from '../kubernetes/release-evidence.js'
 import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
 import { reconcileKubernetes } from '../kubernetes/reconcile.js'
 import { initializeConnectivity } from '../kubernetes/services.js'
@@ -97,7 +99,9 @@ export function applyCommandEffects(run, effects, lab) {
       next = { ...next, runtime: { ...next.runtime, kubernetes: { ...next.runtime.kubernetes, contexts, currentContext: effect.name } } }
     } else if (effect.type === 'kubernetes-state') {
       if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'kubernetes', 'nextSequence'].includes(key)) || !Number.isInteger(effect.nextSequence) || effect.nextSequence < next.nextSequence) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed or unavailable in this Lab.')
-      const candidate = cancelChangedResourceExperiments(cancelChangedProbeExperiments({ ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence }))
+      let candidate = cancelChangedResourceExperiments(cancelChangedProbeExperiments({ ...next, runtime: { ...next.runtime, kubernetes: cloneJson(effect.kubernetes) }, nextSequence: effect.nextSequence }))
+      candidate = cancelChangedReleaseExperiments(candidate)
+      candidate = refreshReleaseProofs(candidate, lab)
       if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_EFFECT', 'Kubernetes state effect is malformed.')
       next = candidate
     } else if (effect.type === 'publish-build') {
@@ -554,8 +558,12 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
-  if (action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel' || action.type === 'aks-resource-next-incident') {
+  if (['aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type) || action.type === 'aks-request' || action.type === 'aks-advance' || action.type === 'aks-integration-next-incident' || action.type === 'aks-probe-start' || action.type === 'aks-probe-cancel' || action.type === 'aks-resource-start' || action.type === 'aks-resource-cancel' || action.type === 'aks-resource-next-incident') {
     const aks = applyAksAction(run, action, lab)
+    if (!aks.diagnostics.length && activeRelease(aks.run)
+      && ['aks-integration-next-incident', 'aks-resource-next-incident'].includes(action.type))
+      aks.run = cancelReleaseExperiment(aks.run, 'unrelated-fault-started').run
+    if (lab.capabilities?.kubernetesRollouts) aks.run = refreshReleaseProofs(aks.run, lab)
     const refreshed = refreshKubernetesDependencies(run, aks.run, lab)
     const result = { ...aks, run: refreshed }
     validateBehavioralRun(result.run, lab)
@@ -685,6 +693,11 @@ export function applyRunAction(run, action, lab) {
   }
   result.run = cancelChangedProbeExperiments(result.run)
   result.run = cancelChangedResourceExperiments(result.run)
+  if (!result.diagnostics.length && activeRelease(result.run)
+    && ['aks-config-next-incident', 'aks-connectivity-next-incident'].includes(action.type))
+    result.run = cancelReleaseExperiment(result.run, 'unrelated-fault-started').run
+  if (lab.capabilities?.kubernetesRollouts) result.run = refreshReleaseProofs(result.run, lab, { previous: run, restarted: action.type === 'command' && result.lines.some(line => /deployment(?:\.apps)?\/.+ restarted$/.test(line.text)) })
+  if (lab.capabilities?.kubernetesRollouts && !result.diagnostics.length && ['command', 'save-file'].includes(action.type)) result.run = observeReleaseTimestamp(result.run, result.run.runtime.simTimeMs, lab)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result

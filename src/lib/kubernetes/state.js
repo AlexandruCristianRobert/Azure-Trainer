@@ -3,6 +3,7 @@ import { validateKubernetesObject } from './schema.js'
 import { normalizeRolloutSpec } from './rollout-schema.js'
 import { rolloutTemplate, rolloutTemplateHash, registerRevision } from './rollout-history.js'
 import { validRolloutRedactionPaths } from './rollout-redaction.js'
+import { validReleaseExperiment, validReleaseProofs } from './release-schema.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash } from '../project/build.js'
 import { parsePythonProject } from '../project/python.js'
@@ -172,6 +173,8 @@ function validClusterState(state, run, lab, clusterId) {
   if (resourcesEnabled && !validResourceRuntime(state, run, lab, clusterId)) return false
   if (!resourcesEnabled && (state.resourcesRuntime !== undefined || state.applyOwnership !== undefined)) return false
   if (rolloutsEnabled && (!isPlainObject(state.rollouts) || state.rollouts.version !== 1 || !isPlainObject(state.rollouts.deployments) || !Array.isArray(state.rollouts.receipts) || state.rollouts.receipts.length > 40)) return false
+  if (rolloutsEnabled && (state.rollouts.experiment !== null && !validReleaseExperiment(state.rollouts.experiment, state, clusterId, run, lab)
+    || !state.rollouts.receipts.every(receipt => validReleaseExperiment(receipt, state, clusterId, run, lab, true)) || !validReleaseProofs(state.rollouts.proofs, state, run))) return false
   if (!rolloutsEnabled && state.rollouts !== undefined) return false
   if (probesEnabled && (!isPlainObject(state.health) || state.health.version !== 1 || !isPlainObject(state.health.containers)
     || (state.health.experiment !== null && !isPlainObject(state.health.experiment)) || !Array.isArray(state.health.receipts) || state.health.receipts.length > 40
@@ -715,7 +718,10 @@ function validHistoricalConnectivityLog(log, request, run, state, lab, clusterId
         || Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence.completed === true
           && ['passed', 'failed'].includes(evidence.outcome) && evidence.measurements?.clusterId === clusterId
           && evidence.measurements?.samples?.some(matchesHistoricalResourceSample)))
-    return probeReceipt || resourceReceipt
+    const releaseReceipt = lab?.capabilities?.kubernetesRollouts === true && origin?.kind === 'external' && origin.clusterId === clusterId
+      && [...(state.rollouts?.receipts ?? []), state.rollouts?.experiment].filter(Boolean).some(receipt => receipt.target.clusterId === clusterId
+        && receipt.samples?.some(sample => sample.requestId === request.id && sample.status === log.status && sample.podUid === log.podUid && sample.artifactId === log.artifactId))
+    return probeReceipt || resourceReceipt || releaseReceipt
   }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence

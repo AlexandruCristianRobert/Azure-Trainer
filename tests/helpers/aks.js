@@ -34,17 +34,17 @@ export function releaseTestRun({ replicas = 2, minReadySeconds = 5, progressDead
   return advanceKubernetesTime(run, 15, RELEASE_TEST_LAB)
 }
 
-export function applyReleaseTemplate(input, { version = '2.0', readinessPath = '/health/ready' } = {}) {
+export function applyReleaseTemplate(input, { version = '2.0', readinessPath = '/health/ready' } = {}, scenarioLab = RELEASE_TEST_LAB) {
   let run = input
   const app = version === '1.0' ? RELEASE_FILES['app.py'] : RELEASE_SOLUTION_FILES['app.py']
-  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'app.py', text: app }).run
+  run = act(run, scenarioLab, { type: 'save-file', path: 'app.py', text: app }).run
   const tag = version === '1.0' ? 'release-v1' : 'release-v2'
-  run = act(run, RELEASE_TEST_LAB, { type: 'command', line: `az acr build --registry acraksreleasesguided -t assistant:${tag} .` }).run
+  run = act(run, scenarioLab, { type: 'command', line: `az acr build --registry acraksreleasesguided -t assistant:${tag} .` }).run
   const deployment = parseYaml(run.project.savedFiles['k8s/deployment.yaml'])
   deployment.spec.template.spec.containers[0].image = `acraksreleasesguided.azurecr.io/assistant:${tag}`
   deployment.spec.template.spec.containers[0].readinessProbe.httpGet.path = readinessPath
-  run = act(run, RELEASE_TEST_LAB, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
-  return act(run, RELEASE_TEST_LAB, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
+  run = act(run, scenarioLab, { type: 'save-file', path: 'k8s/deployment.yaml', text: stringifyYaml(deployment) }).run
+  return act(run, scenarioLab, { type: 'command', line: 'kubectl apply -f k8s/deployment.yaml' }).run
 }
 
 export function releaseUndoFixture() {

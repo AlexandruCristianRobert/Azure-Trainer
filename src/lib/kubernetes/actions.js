@@ -10,6 +10,8 @@ import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_SCENARIO_PHASES } from '../../da
 import { cancelProbeExperiment, startProbeExperiment } from './probe-experiments.js'
 import { cancelResourceExperiment, startResourceExperiment } from './resource-experiments.js'
 import { advanceResourceIncident } from './resource-incidents.js'
+import { startReleaseExperiment, finishReleaseExperiment, cancelReleaseExperiment } from './release-experiments.js'
+import { recordFinalReleaseVerification } from './release-evidence.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -25,6 +27,13 @@ function validConnectivityExpected(expected) {
 }
 
 export function applyAksAction(run, action, lab) {
+  if (['aks-release-start', 'aks-release-finish', 'aks-release-cancel'].includes(action.type)) {
+    if (lab?.capabilities?.kubernetesRollouts !== true || Object.keys(action).sort().join(',') !== (action.type === 'aks-release-cancel' ? 'type' : 'scenarioId,type'))
+      return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Release controls accept only a declared scenario ID; cancellation accepts no values.' }] }
+    const result = action.type === 'aks-release-start' ? startReleaseExperiment(run, action.scenarioId, lab)
+      : action.type === 'aks-release-finish' ? finishReleaseExperiment(run, action.scenarioId, lab) : cancelReleaseExperiment(run)
+    return { ...result, lines: [], portalEvents: [] }
+  }
   if (action.type === 'aks-resource-next-incident') {
     if (Object.keys(action).length !== 1 || lab?.capabilities?.kubernetesResources !== true)
       return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Resource incident advancement accepts no caller-selected values.' }] }
@@ -72,6 +81,7 @@ export function applyAksAction(run, action, lab) {
   if (action.type !== 'aks-request' || Object.keys(action).some(key => !['type', 'scenarioId'].includes(key))
     || lab?.capabilities?.kubernetes !== true || typeof action.scenarioId !== 'string')
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS requests accept only a declared scenarioId; outcomes cannot be supplied by the caller.' }] }
+  if (lab.capabilities?.kubernetesRollouts && lab.scenarios?.[action.scenarioId]?.kind === 'aks-release-final') return { ...recordFinalReleaseVerification(run, lab, action.scenarioId), portalEvents: [] }
   const scenario = lab.scenarios?.[action.scenarioId]
   if (lab.id === AI_TROUBLESHOOTING_LAB_ID && INTEGRATION_SCENARIO_PHASES[action.scenarioId] !== run.runtime.kubernetes?.integrationIncident?.phase) {
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_INCIDENT_NOT_READY', message: 'This assistant request belongs to a later incident phase.' }] }

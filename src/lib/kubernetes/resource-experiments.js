@@ -117,6 +117,7 @@ export function resourceExperimentActive(run) {
 function digest(value) { let hash = 2166136261; for (const c of JSON.stringify(canonicalize(value))) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619); return (hash >>> 0).toString(16) }
 
 export function startResourceExperiment(input, scenarioId, lab) {
+  if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => state.rollouts?.experiment?.status === 'active')) return { run: input, diagnostics: [invalid('A release experiment is already active. Finish or cancel it first.', 'RESOURCE_EXPERIMENT_ACTIVE')] }
   if (lab?.capabilities?.kubernetesResources !== true || !validScenario(lab, scenarioId))
     return { run: input, diagnostics: [invalid('Resource experiment starts accept only a declared immutable profile ID.')] }
   if (Object.values(input.runtime.kubernetes.clusters ?? {}).some(state => ['warming', 'running'].includes(state.resourcesRuntime?.experiment?.phase) || state.health?.experiment?.status === 'active'))
