@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, toRaw, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { projectKubernetesInspection } from '../../lib/kubernetes/inspection.js'
@@ -10,6 +10,7 @@ import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
 import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
 import { inspectDiagnosis } from '../../lib/kubernetes/diagnosis-inspection.js'
+import { inspectAksCapstone } from '../../lib/kubernetes/capstone/inspection.js'
 import AksDiagnosisInspection from '../lab/AksDiagnosisInspection.vue'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
@@ -17,6 +18,10 @@ import EntityTable from './EntityTable.vue'
 
 const props = defineProps({ resourceGroup: String, name: String })
 const run = useLabRunStore(); const portal = usePortalStore(); const namespace = ref(''); const bladeTab = ref('overview')
+const capstoneInspection = computed(() => run.lab?.capabilities?.aksCapstone === true && run.behavioralRun
+  ? inspectAksCapstone(toRaw(run.behavioralRun), run.lab) : null)
+const historicalReceipts = computed(() => capstoneInspection.value?.stages
+  .filter(stage => ['release', 'incident'].includes(stage.id)).flatMap(stage => stage.proofs.map(proof => ({ stageId: stage.id, proof }))) ?? [])
 const diagnosisRequestId = ref('')
 const diagnosisInspection = computed(() => {
   if (!run.lab?.capabilities?.kubernetesDiagnostics || !cluster.value) return null
@@ -147,6 +152,7 @@ const releaseViews = computed(() => run.lab?.capabilities?.kubernetesRollouts &&
       </template>
     </div>
   </template><p v-else class="aks-blade__empty">This cluster was deleted or is unavailable. Return to its resource group to inspect the remaining resources.</p>
+  <section v-if="historicalReceipts.length" class="aks-probe-inspection" aria-label="Historical capstone receipts"><h3 class="blade__section-title">Historical capstone receipts</h3><p>Sealed release and incident observations remain available after the cluster is removed.</p><ol><li v-for="item in historicalReceipts" :key="item.proof.id">{{ item.stageId }} · {{ item.proof.evidenceId }} · {{ item.proof.observation.outcome }} · {{ item.proof.artifacts.length }} selected artifacts · {{ item.proof.targets.length }} captured targets</li></ol></section>
 </div></section></template>
 
 <style scoped>

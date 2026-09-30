@@ -106,7 +106,8 @@ const canSend = computed(() => integrationCapable.value
   : scenarios.value.some(([id]) => id === choice.value))
 const integrationInspection = computed(() => integrationCapable.value && choice.value ? inspectIntegration(run.behavioralRun, run.lab, choice.value) : null)
 const fixtureProfiles = computed(() => Object.entries(KNOWLEDGE_FIXTURES.profiles).map(([name, profile]) => ({ name, settings: Object.fromEntries(Object.entries(profile).filter(([key]) => key !== 'PGPASSWORD')) })))
-const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
+const frozenCleanup = computed(() => run.lab?.capabilities?.aksCapstone === true && !!run.behavioralRun?.stages?.cleanupCheckpoint)
+const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy || frozenCleanup.value)
 const selectedScenario = computed(() => run.lab?.scenarios?.[choice.value] ?? null)
 const latestEvidence = computed(() => Object.values(run.behavioralRun?.evidence?.experimentsById ?? {})
   .filter(record => record.scenarioId === choice.value && record.measurements?.clusterId === selectedScenario.value?.target?.clusterId
@@ -255,6 +256,7 @@ async function copyLogCommand(command) {
 <template>
   <section class="experiment-tool" aria-label="AKS experiment controls">
     <header><h2>{{ run.lab?.capabilities?.kubernetesRollouts ? 'Observe and verify a release' : 'Verify a Kubernetes service' }}</h2><p>Requests use the current Service and the Pods' captured image. {{ run.lab?.capabilities?.kubernetesRollouts ? 'Advance simulated time explicitly to observe rolling updates.' : 'Results transition immediately because this is a simulation.' }}</p></header>
+    <p v-if="frozenCleanup" role="status">Cleanup checkpoint frozen. Experiment controls are read-only; use the Lab Panel for the two cleanup Verify tasks. Only reads, deletes, and cleanup verification are permitted.</p>
     <section v-if="run.lab?.capabilities?.kubernetesDiagnostics" aria-label="AKS diagnosis controls">
       <h3>Diagnosis observation and recovery</h3>
       <p>Each Verify control runs its declared request and records evidence for its own Task.</p>
