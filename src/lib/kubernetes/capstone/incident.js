@@ -1,4 +1,5 @@
-import { CAPSTONE_TARGET, CAPSTONE_IMAGE, CAPSTONE_HPA_DISABLED, capstonePublication } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_IMAGE, CAPSTONE_HPA_DISABLED } from '../../../data/labs/aks-journey/capstone-constants.js'
+import { CAPSTONE_TARGET, capstonePublication } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { CAPSTONE_MANIFEST, CAPSTONE_SOLUTION_FILES } from '../../../data/templates/aks-python/capstone.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { projectSourceHash, selectBuildFiles } from '../../project/build.js'
