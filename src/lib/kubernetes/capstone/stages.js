@@ -11,6 +11,7 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 const same = (a, b) => canonicalize(a) === canonicalize(b)
 const bytes = value => new TextEncoder().encode(canonicalize(value)).length
 const hash = value => sourceTextHash(canonicalize(value))
+const proofHash = ({ evidenceHash, ...payload }) => hash(payload)
 const sorted = values => [...new Set(values)].sort()
 const invalid = message => fail('INVALID_RUN', message)
 export const isAksCapstone = lab => lab?.capabilities?.aksCapstone === true
@@ -78,11 +79,18 @@ function measuredObservation(run, record) {
 // Only redacted identities and hashes survive cluster deletion.
 export function captureAksVerification(run, record) {
   const id = `aks-proof-${record.id}`
-  const receipt = { id, kind: 'verification', evidenceId: record.id, evidenceHash: hash(record),
+  const payload = { id, kind: 'verification', evidenceId: record.id,
     attemptId: run.attemptId, contentVersion: run.contentVersion, sequence: record.sequence,
     sourceVersions: cloneJson(sourceVersionsAt(run.project.sourceJournal, record.sequence)), ...selectedIdentity(run, record),
     observation: measuredObservation(run, record) }
+  // The owning verification binds the entire captured payload, including target
+  // hashes and native owner summaries that cannot be recomputed after deletion.
+  const anchored = { ...record, aksCapstoneReceiptHash: hash(payload) }
+  const receipt = { ...payload, evidenceHash: hash(anchored) }
   const receipts = { ...run.evidence.aksCapstoneReceipts }
+  if (receipts[id] && (run.stages.sealedStages.some(seal => seal.receiptIds.includes(id))
+    || run.stages.cleanupCheckpoint?.evidenceIds?.includes(record.id)) && !same(receipts[id], receipt))
+    fail('INVALID_EVIDENCE', 'A pinned AKS verification proof cannot be replaced.')
   if (!receipts[id] && Object.keys(receipts).length >= 128) {
     const pinned = new Set(run.stages.sealedStages.flatMap(seal => seal.receiptIds))
     const victim = Object.values(receipts).find(item => !pinned.has(item.id)
@@ -91,7 +99,8 @@ export function captureAksVerification(run, record) {
   }
   if (bytes(receipt) > 16_384 || !receipts[id] && Object.keys(receipts).length >= 128)
     fail('INVALID_EVIDENCE', 'AKS durable proof storage limit reached.')
-  return { ...run, evidence: { ...run.evidence, aksCapstoneReceipts: { ...receipts, [id]: receipt } } }
+  return { ...run, evidence: { ...run.evidence, experimentsById: { ...run.evidence.experimentsById, [record.id]: anchored },
+    aksCapstoneReceipts: { ...receipts, [id]: receipt } } }
 }
 
 // Native diagnosis enriches new evidence after recordVerification. Finalize only
@@ -121,7 +130,8 @@ export function isAksTaskSourceCurrent(run, task) {
 export function isAksPinnedDiagnosisEvidence(record, run, lab) {
   if (!isAksCapstone(lab) || typeof lab.aksCapstone?.validatePinnedDiagnosisEvidence !== 'function') return false
   const proof = run.evidence.aksCapstoneReceipts?.[`aks-proof-${record.id}`]
-  return !!proof && proof.evidenceHash === hash(record) && proof.attemptId === run.attemptId
+  return !!proof && proof.evidenceHash === hash(record) && proofHash(proof) === record.aksCapstoneReceiptHash
+    && proof.attemptId === run.attemptId
     && (run.stages.sealedStages.some(seal => seal.evidenceIds.includes(record.id))
       || run.stages.cleanupCheckpoint?.evidenceIds?.includes(record.id))
     && lab.aksCapstone.validatePinnedDiagnosisEvidence(record, proof, run) === true
@@ -168,6 +178,7 @@ export function validateAksCapstoneState(run, lab) {
     if (!exact(receipt, ['id', 'kind', 'evidenceId', 'evidenceHash', 'attemptId', 'contentVersion', 'sequence', 'sourceVersions', 'artifacts', 'targets', 'observation'])
       || receipt.id !== id || receipt.kind !== 'verification' || id !== `aks-proof-${receipt.evidenceId}`
       || !record || receipt.sequence !== record.sequence || receipt.evidenceHash !== hash(record)
+      || record.aksCapstoneReceiptHash !== proofHash(receipt)
       || receipt.attemptId !== run.attemptId || receipt.contentVersion !== run.contentVersion || bytes(receipt) > 16_384
       || !same(receipt.sourceVersions, sourceVersionsAt(journal, receipt.sequence))
       || !exact(receipt.observation, ['outcome', 'startedAtMs', 'endedAtMs', 'measurements', 'owner'])
@@ -187,7 +198,7 @@ export function validateAksCapstoneState(run, lab) {
   for (const [index, seal] of state.sealedStages.entries()) {
     const stage = lab.stages[index]
     const records = stage.taskIds.map(id => evidenceAt(run, id, seal.sequence))
-    if (!exact(seal, ['stageId', 'attemptId', 'contentVersion', 'sequence', 'taskIds', 'evidenceIds', 'dependencyValues', 'dependencyGenerations', 'sourceVersions', 'receiptIds'])
+    if (!exact(seal, ['stageId', 'attemptId', 'contentVersion', 'sequence', 'taskIds', 'evidenceIds', 'dependencyValues', 'dependencyGenerations', 'sourceVersions', 'receiptIds', 'receiptHashes'])
       || seal.stageId !== stage.id || seal.attemptId !== run.attemptId || seal.contentVersion !== run.contentVersion
       || !Number.isSafeInteger(seal.sequence) || seal.sequence <= previous || seal.sequence >= run.nextSequence || bytes(seal) > 32_768
       || !same(seal.taskIds, [...stage.taskIds].sort()) || !same(seal.sourceVersions, sourceVersionsAt(journal, seal.sequence))
@@ -195,6 +206,7 @@ export function validateAksCapstoneState(run, lab) {
       || !same(seal.evidenceIds, records.map(record => record.id).sort())
       || !same(seal.receiptIds, records.map(record => `aks-proof-${record.id}`).sort())
       || seal.receiptIds.some(id => !receipts[id])
+      || !same(seal.receiptHashes, Object.fromEntries(seal.receiptIds.map(id => [id, proofHash(receipts[id])])))
       || records.some(record => !sourceCurrentAtSeal(lab.tasks.find(task => task.id === record.taskId), receipts[`aks-proof-${record.id}`], seal.sourceVersions))
       || !same(seal.dependencyValues, Object.fromEntries(records.map(record => [record.taskId, record.dependencyValues])))
       || !same(seal.dependencyGenerations, Object.fromEntries(records.map(record => [record.taskId, record.dependencyGenerations])))
@@ -246,7 +258,8 @@ export function advanceAksStage(run, lab) {
     taskIds: [...stage.taskIds].sort(), evidenceIds: records.map(record => record.id).sort(),
     dependencyValues: Object.fromEntries(records.map(record => [record.taskId, record.dependencyValues])),
     dependencyGenerations: Object.fromEntries(records.map(record => [record.taskId, record.dependencyGenerations])),
-    sourceVersions: cloneJson(run.project.fileVersions), receiptIds: records.map(record => `aks-proof-${record.id}`).sort() }
+    sourceVersions: cloneJson(run.project.fileVersions), receiptIds: records.map(record => `aks-proof-${record.id}`).sort(),
+    receiptHashes: Object.fromEntries(records.map(record => [`aks-proof-${record.id}`, record.aksCapstoneReceiptHash])) }
   if (bytes(seal) > 32_768) return reject('AKS_STAGE_OVERSIZED', 'The AKS stage seal exceeds its storage limit.')
   const next = { ...run, nextSequence: run.nextSequence + 1,
     stages: { ...run.stages, activeStageId: lab.stages[run.stages.sealedStages.length + 1]?.id ?? null, sealedStages: [...run.stages.sealedStages, seal] },
