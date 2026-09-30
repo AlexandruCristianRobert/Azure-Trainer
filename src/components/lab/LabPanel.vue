@@ -128,7 +128,7 @@ async function restart() {
 </script>
 
 <template>
-  <aside class="lab-panel" :class="{ 'lab-panel--collapsed': portal.labPanelCollapsed }" aria-label="Lab Panel">
+  <aside class="lab-panel" :class="{ 'lab-panel--collapsed': portal.labPanelCollapsed, 'lab-panel--completed-capstone': run.isComplete && isCapstone && !portal.labPanelCollapsed }" aria-label="Lab Panel">
     <template v-if="portal.labPanelCollapsed">
       <button type="button" class="lab-panel__expand" aria-label="Expand Lab Panel" @click="portal.toggleLabPanel()"><FluentIcon name="chevron-right" :size="14" /></button>
       <div class="lab-panel__rail-label">Lab · {{ run.doneCount }}/{{ run.total }}</div>
@@ -217,3 +217,16 @@ async function restart() {
     </template>
   </aside>
 </template>
+
+<style>
+/* The completed capstone adds sealed receipts after the usual Result. Keep both
+   siblings in the panel's scroll flow rather than shrinking them over each other. */
+.lab-panel--completed-capstone { overflow-y: auto; }
+.lab-panel--completed-capstone .lab-complete,
+.lab-panel--completed-capstone .lab-panel__capstone-result { flex: none; }
+.lab-panel--completed-capstone .lab-complete__notes {
+  flex: none;
+  max-height: clamp(120px, 24vh, 220px);
+  overflow-y: auto;
+}
+</style>

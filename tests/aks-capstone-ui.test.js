@@ -8,6 +8,8 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { recordVerification } from '../src/lib/labEngine/evidence.js'
 import { inspectAksCapstone } from '../src/lib/kubernetes/capstone/inspection.js'
 import { inspectDiagnosis } from '../src/lib/kubernetes/diagnosis-inspection.js'
+import { createBehavioralRun } from '../src/lib/labEngine/run.js'
+import { aksDeployGuidedLab } from '../src/data/labs/aks-journey/deploy-guided.lab.js'
 import { useLabRunStore } from '../src/stores/labRun.js'
 import { behavioralRepository } from './helpers/behavioralRepository.js'
 import LabPanel from '../src/components/lab/LabPanel.vue'
@@ -30,7 +32,7 @@ async function render(component, fixture, { capture = false, props = {}, complet
   if (completedView) { store.completedAt = '2026-09-30T17:00:00.000Z'; store.readOnly = true }
   let setup
   const wrapped = capture ? { ...component, created() { setup = this.$.setupState } } : component
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }, { path: '/lab/:id', component: { template: '<div />' } }] })
   const html = await renderToString(createSSRApp(wrapped, props).use(pinia).use(router))
   return { html, setup, store }
 }
@@ -167,6 +169,18 @@ describe('AKS capstone presentation', () => {
     expect(html).toContain('Cleanup checkpoint frozen')
     expect(html).toContain('Lab Panel')
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Send simulated request<\/button>/)
+  })
+
+  it('places a completed capstone Result and sealed receipts in one scroll flow', async () => {
+    const fixture = presentedFixture('cleanup')
+    const { html } = await render(LabPanel, fixture, { completedView: true })
+    expect(html).toContain('lab-panel--completed-capstone')
+    expect(html).toContain('Lab complete')
+    expect(html).toContain('Capstone sealed stages')
+    expect(html.indexOf('Lab complete')).toBeLessThan(html.indexOf('Capstone sealed stages'))
+    const ordinary = await render(LabPanel, { lab: aksDeployGuidedLab, run: createBehavioralRun(aksDeployGuidedLab, { attemptId: 'ordinary-complete-ui' }) }, { completedView: true })
+    expect(ordinary.html).toContain('Lab complete')
+    expect(ordinary.html).not.toContain('lab-panel--completed-capstone')
   })
 
   it('starts only the declared capstone incident in its active stage', async () => {
