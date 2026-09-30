@@ -9,15 +9,39 @@ import { useLabRunStore } from '../src/stores/labRun.js'
 import { behavioralRepository } from './helpers/behavioralRepository.js'
 import { releaseTestRun } from './helpers/aks.js'
 import { lab, start, action } from './helpers/release-evidence.js'
+import { aksReleasesGuidedLab } from '../src/data/labs/aks-journey/releases-guided.lab.js'
+import { createBehavioralRun } from '../src/lib/labEngine/run.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
-async function render(component, behavioralRun, { readOnly = false, busy = false } = {}) {
+async function render(component, behavioralRun, { readOnly = false, busy = false, contentLab = lab } = {}) {
   const pinia = createPinia(); setActivePinia(pinia)
-  const store = useLabRunStore(); await store.load(lab.id, { lab, repository: behavioralRepository() })
+  const store = useLabRunStore(); await store.load(contentLab.id, { lab: contentLab, repository: behavioralRepository() })
   store.behavioralRun = behavioralRun; store.sandbox = behavioralRun.sandbox; store.readOnly = readOnly; store.running = busy
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   const props = component === AksClusterBlade ? { resourceGroup: 'rgaksreleases', name: 'aksreleases' } : {}
   return renderToString(createSSRApp(component, props).use(pinia).use(router))
 }
+
+test('Guided milestone Verify controls expose all four historical proofs as native keyboard buttons', async () => {
+  const run = createBehavioralRun(aksReleasesGuidedLab, { attemptId: 'guided-ui' })
+  const html = await render(AksExperimentPanel, run, { contentLab: aksReleasesGuidedLab })
+  for (const scenario of ['baseline-v1', 'published-v2', 'failed-revision', 'recovered-v2'])
+    expect(html).toMatch(new RegExp(`<button[^>]*type="button"[^>]*aria-label="Verify release milestone: ${scenario}"`))
+  expect(html).not.toContain('Send simulated request')
+  expect(html).not.toContain('aria-label="AKS resource experiments"')
+})
+
+test('Guided baseline verification displays retained info, captured digest and the three-stage source evidence', async () => {
+  const seeded = createBehavioralRun(aksReleasesGuidedLab, { attemptId: 'guided-milestone-ui' })
+  const run = applyRunAction(seeded, { type: 'aks-request', scenarioId: 'baseline-v1' }, aksReleasesGuidedLab).run
+  const html = await render(AksExperimentPanel, run, { contentLab: aksReleasesGuidedLab })
+  expect(html).toContain('aria-label="Release milestone evidence"')
+  expect(html).toContain('training-backups')
+  expect(html).toContain('postgres-query')
+  expect(html).toContain('sha256:')
+  expect(html).toContain('1.0')
+  expect(html).not.toContain('training-only-password')
+})
 
 test('release controls are keyboard-native buttons and use a text status and accessible samples table', async () => {
   const html = await render(AksExperimentPanel, start())

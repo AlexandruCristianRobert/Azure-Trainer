@@ -18,13 +18,14 @@ const deploymentFor = (run, target) => stateFor(run, target)?.resources[`Deploym
 export function activeRelease(run) { return Object.values(run.runtime.kubernetes?.clusters ?? {}).find(state => state.rollouts?.experiment?.status === 'active')?.rollouts.experiment ?? null }
 
 export function validReleaseScenario(scenario, final = false) {
-  const keys = final ? ['kind', 'version', 'target', 'expectedRelease'] : ['kind', 'version', 'target', 'expectedRelease', 'requiredAvailable', 'zeroFailedRequests', 'requireIncident', 'requireDeadline', 'incidentEpoch']
+  const keys = final ? ['kind', 'version', 'target', 'expectedRelease'] : ['kind', 'version', 'target', 'expectedRelease', 'requiredAvailable', 'zeroFailedRequests', 'requireIncident', 'requireDeadline', 'incidentEpoch', 'freshIncidentEpoch']
   return !!scenario && Object.keys(scenario).every(key => keys.includes(key)) && scenario.kind === (final ? 'aks-release-final' : 'aks-release') && scenario.version === 1
     && scenario.expectedRelease === '2.0' && scenario.target && Object.keys(scenario.target).sort().join(',') === 'clusterId,deploymentName,namespace,serviceName'
     && Object.values(scenario.target).every(value => typeof value === 'string' && value.length > 0)
     && (final || Number.isInteger(scenario.requiredAvailable) && scenario.requiredAvailable >= 1 && scenario.requiredAvailable <= 6
       && ['zeroFailedRequests', 'requireIncident', 'requireDeadline'].every(key => typeof scenario[key] === 'boolean')
-      && (!scenario.requireDeadline || scenario.requireIncident) && Number.isInteger(scenario.incidentEpoch) && scenario.incidentEpoch >= 0)
+      && (!scenario.requireDeadline || scenario.requireIncident) && Number.isInteger(scenario.incidentEpoch) && scenario.incidentEpoch >= 0
+      && (scenario.freshIncidentEpoch === undefined || typeof scenario.freshIncidentEpoch === 'boolean'))
 }
 
 export function startReleaseExperiment(input, scenarioId, lab) {
@@ -37,13 +38,16 @@ export function startReleaseExperiment(input, scenarioId, lab) {
   if (!deployment || !summary) return { run: input, diagnostics: [error('Apply the target Deployment before starting this release experiment.')] }
   const run = clone(input); const runtime = run.runtime.kubernetes; const now = run.runtime.simTimeMs
   const history = stateFor(run, scenario.target).rollouts.deployments[deployment.metadata.uid]
-  const ongoingRevision = scenario.requireIncident && !summary.complete && history.revisions.some(item => item.revision < summary.currentRevision)
+  const ongoingRevision = scenario.requireIncident && !scenario.freshIncidentEpoch && !summary.complete && history.revisions.some(item => item.revision < summary.currentRevision)
     && getDeploymentPods(run, scenario.target.clusterId, scenario.target.namespace, scenario.target.deploymentName).some(pod => !pod.metadata.ownerReferences.some(ref => ref.uid === history.currentRsUid))
+  // A fresh exercise uses its globally monotonic experiment identity. Receipt
+  // eviction and reload cannot reuse an earlier incident epoch.
+  const incidentEpoch = scenario.freshIncidentEpoch ? scenario.incidentEpoch + run.nextSequence : scenario.incidentEpoch
   stateFor(run, scenario.target).rollouts.experiment = {
     version: 1, id: `release-${run.nextSequence++}`, attemptId: run.attemptId, scenarioId, scenarioVersion: 1,
     target: clone(scenario.target), deploymentUid: deployment.metadata.uid, context: runtime.currentContext,
     contextNamespace: runtime.contexts[runtime.currentContext]?.namespace ?? null,
-    baselineReplicas: deployment.spec.replicas, baselineRevision: summary.currentRevision, incidentEpoch: scenario.incidentEpoch,
+    baselineReplicas: deployment.spec.replicas, baselineRevision: summary.currentRevision, incidentEpoch,
     baseline: { savedHash: releaseDigest(run.project.savedFiles), objectsHash: releaseDigest(Object.values(stateFor(run, scenario.target).resources).filter(item => ['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(item.kind))), artifactIds: [...new Set(getDeploymentPods(run, scenario.target.clusterId, scenario.target.namespace, scenario.target.deploymentName).map(pod => stateFor(run, scenario.target).podSnapshots[pod.metadata.uid]?.artifactId ?? null))] },
     expected: clone(scenario), status: 'active', phase: ongoingRevision ? 'changed-template' : 'baseline', startedAtMs: now, endedAtMs: null,
     changedTemplate: ongoingRevision, incidentSeen: false, deadlineSeen: false, terminalSinceMs: null,

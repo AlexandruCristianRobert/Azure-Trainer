@@ -12,6 +12,7 @@ import { cancelResourceExperiment, startResourceExperiment } from './resource-ex
 import { advanceResourceIncident } from './resource-incidents.js'
 import { startReleaseExperiment, finishReleaseExperiment, cancelReleaseExperiment } from './release-experiments.js'
 import { recordFinalReleaseVerification } from './release-evidence.js'
+import { recordReleaseMilestone } from './release-milestones.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -82,6 +83,7 @@ export function applyAksAction(run, action, lab) {
     || lab?.capabilities?.kubernetes !== true || typeof action.scenarioId !== 'string')
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'AKS requests accept only a declared scenarioId; outcomes cannot be supplied by the caller.' }] }
   if (lab.capabilities?.kubernetesRollouts && lab.scenarios?.[action.scenarioId]?.kind === 'aks-release-final') return { ...recordFinalReleaseVerification(run, lab, action.scenarioId), portalEvents: [] }
+  if (lab.capabilities?.kubernetesRollouts && lab.scenarios?.[action.scenarioId]?.kind === 'aks-release-milestone') return { ...recordReleaseMilestone(run, lab, action.scenarioId), portalEvents: [] }
   const scenario = lab.scenarios?.[action.scenarioId]
   if (lab.id === AI_TROUBLESHOOTING_LAB_ID && INTEGRATION_SCENARIO_PHASES[action.scenarioId] !== run.runtime.kubernetes?.integrationIncident?.phase) {
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_INCIDENT_NOT_READY', message: 'This assistant request belongs to a later incident phase.' }] }

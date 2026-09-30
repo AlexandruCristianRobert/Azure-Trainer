@@ -204,7 +204,7 @@ export function releaseIncidentObservation(run, lab, scenarioId) {
   const state = run.runtime.kubernetes.clusters[scenario.target.clusterId]
   const uid = state?.resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]?.metadata.uid
   const experiment = [state?.rollouts.experiment, ...(state?.rollouts.receipts ?? [])].find(item => item?.scenarioId === scenarioId && item.attemptId === run.attemptId
-    && item.deploymentUid === uid && item.incidentEpoch === scenario.incidentEpoch && item.incidentSeen && item.incident
+    && item.deploymentUid === uid && item.incidentEpoch === (scenario.freshIncidentEpoch ? state.rollouts.experiment?.incidentEpoch : scenario.incidentEpoch) && item.incidentSeen && item.incident
     && (!scenario.requireDeadline || item.deadlineSeen && item.incident.deadline) && canonicalize(item.target) === canonicalize(scenario.target))
   return experiment ? { attemptId: experiment.attemptId, scenarioId, deploymentUid: uid, incidentEpoch: experiment.incidentEpoch, ...clone(experiment.incident) } : null
 }

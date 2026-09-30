@@ -108,7 +108,10 @@ export function executeAksSolution(run, lab, task) {
       if (!action) throw new Error(`Unknown AKS solution command resolver: ${step.resolver ?? '(missing)'}`)
       run = act(run, lab, action).run
     } else if (step.kind === 'scenario') {
-      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
+      if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-release') {
+        run = act(run, lab, { type: step.control === 'finish' ? 'aks-release-finish' : 'aks-release-start', scenarioId: step.scenarioId }).run
+        for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
+      } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-probe') {
         run = act(run, lab, { type: 'aks-probe-start', scenarioId: step.scenarioId }).run
         for (const seconds of step.advances ?? []) run = act(run, lab, { type: 'aks-advance', seconds }).run
       } else if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-resource-profile') {

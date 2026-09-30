@@ -721,7 +721,13 @@ function validHistoricalConnectivityLog(log, request, run, state, lab, clusterId
     const releaseReceipt = lab?.capabilities?.kubernetesRollouts === true && origin?.kind === 'external' && origin.clusterId === clusterId
       && [...(state.rollouts?.receipts ?? []), state.rollouts?.experiment].filter(Boolean).some(receipt => receipt.target.clusterId === clusterId
         && receipt.samples?.some(sample => sample.requestId === request.id && sample.status === log.status && sample.podUid === log.podUid && sample.artifactId === log.artifactId))
-    return probeReceipt || resourceReceipt || releaseReceipt
+    const milestoneReceipt = lab?.capabilities?.kubernetesRollouts === true && origin?.kind === 'external' && origin.clusterId === clusterId
+      && Object.values(run.evidence?.experimentsById ?? {}).some(record => record.attemptId === run.attemptId
+        && lab.scenarios?.[record.scenarioId]?.kind === 'aks-release-milestone'
+        && record.measurements?.clusterId === clusterId && record.measurements?.namespace === log.namespace
+        && [record.measurements?.proof?.sample, record.measurements?.proof?.info].some(sample => sample?.requestId === request.id
+          && sample.status === log.status && sample.podUid === log.podUid && sample.artifactId === log.artifactId))
+    return probeReceipt || resourceReceipt || releaseReceipt || milestoneReceipt
   }
   return Object.values(run.evidence?.experimentsById ?? {}).some(evidence => evidence?.scenarioId === request.scenarioId
     && typeof evidence.completed === 'boolean' && evidence.measurements?.requestSequence === log.sequence

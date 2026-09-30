@@ -47,7 +47,9 @@ export function validReleaseExperiment(experiment, state, clusterId, run, lab, r
     || !Array.isArray(experiment.baseline.artifactIds) || experiment.baseline.artifactIds.length > 12 || !experiment.baseline.artifactIds.every(nullableText)
     || !isJsonValue(experiment.expected) || !Array.isArray(experiment.samples) || experiment.samples.length < 1 || experiment.samples.length > 1200) return false
   const scenario = lab.scenarios?.[experiment.scenarioId]
-  if (!scenario || canonicalize(experiment.expected) !== canonicalize(scenario) || experiment.incidentEpoch !== scenario.incidentEpoch || canonicalize(experiment.target) !== canonicalize(scenario.target)) return false
+  if (!scenario || canonicalize(experiment.expected) !== canonicalize(scenario)
+    || (scenario.freshIncidentEpoch ? experiment.incidentEpoch !== scenario.incidentEpoch + Number(experiment.id.slice('release-'.length)) : experiment.incidentEpoch !== scenario.incidentEpoch)
+    || canonicalize(experiment.target) !== canonicalize(scenario.target)) return false
   const limit = experiment.endedAtMs ?? run.runtime.simTimeMs
   if (experiment.samples[0]?.atMs !== experiment.startedAtMs || experiment.samples[0]?.rollout?.desired !== experiment.baselineReplicas
     || experiment.samples[0]?.rollout?.currentRevision !== experiment.baselineRevision
