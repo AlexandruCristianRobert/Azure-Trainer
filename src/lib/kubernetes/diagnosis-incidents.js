@@ -12,6 +12,9 @@ import { validAksRequestScenario } from './actions.js'
 import { resolvePodConfiguration } from './configuration.js'
 
 const clone = value => structuredClone(value)
+const pendingCaptureContexts = new WeakMap()
+// Read-only capability lookup: only the native capture owner can register one.
+export const pendingDiagnosisCaptureEvidenceId = context => pendingCaptureContexts.get(context)
 const exact = (value, keys) => isPlainObject(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',')
 const same = (a, b) => canonicalize(a) === canonicalize(b)
 const text = value => typeof value === 'string' && value.length > 0 && value.length <= 512
@@ -164,12 +167,15 @@ function incidentFor(run, scenarioId, lab) {
     || !same(Object.fromEntries(targetKeys.map(key => [key, incident.target[key]])), scenario.target)) return null
   return { scenario, incident, phase: scenario.phases.find(phase => phase.id === incident.phaseId) }
 }
-function currentEvidence(run, scenarioId, lab) {
+function currentEvidence(run, scenarioId, lab, capturePending = false) {
   const task = lab.tasks.find(task => task.verification?.scenarioId === scenarioId), id = run.evidence.currentEvidenceByTask[task?.id]
   const evidence = run.evidence.experimentsById[id]
   if (!evidence || evidence.attemptId !== run.attemptId || evidence.labId !== run.labId || evidence.scenarioId !== scenarioId || evidence.outcome !== 'passed' || !evidence.completed) return null
+  const context = capturePending ? { ...run } : run
+  if (capturePending) pendingCaptureContexts.set(context, evidence.id)
   for (const [key, selector] of Object.entries(task.dependencies ?? {})) {
-    if (evidence.dependencyGenerations[key] !== (run.dependencyGenerations[key] ?? 0) || !same(evidence.dependencyValues[key], selector(run))) return null
+    if (evidence.dependencyGenerations[key] !== (run.dependencyGenerations[key] ?? 0)
+      || !same(evidence.dependencyValues[key], selector(context))) return null
   }
   return evidence
 }
@@ -358,7 +364,7 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   const found = incidentFor(run, entry[0], lab), { incident, phase } = found
   if (!liveTarget(run, incident.target)) return run
   const records = inspectRequestRecords(run, { clusterId: incident.target.clusterId, requestId: outcome.requestId }), request = records.request
-  const evidence = currentEvidence(run, scenarioId, lab)
+  const evidence = currentEvidence(run, scenarioId, lab, true)
   if (!request || request.scenarioId !== scenarioId || request.route.serviceUid !== incident.target.serviceUid || !evidence || evidence.measurements.requestSequence !== request.sequence
     || request.simTimeMs < incident.startedAtMs) return run
   for (const key of ['podUid', 'containerId', 'artifactId', 'transport', 'status', 'body', 'dependencyTrace', 'integrationTrace']) {

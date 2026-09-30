@@ -5,7 +5,7 @@ import { inspectDeploymentConsistency, releaseDependencies } from './release-evi
 import { getProjectManifest } from '../project/manifests.js'
 import { getDeploymentPods } from './reconcile.js'
 import { redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
-import { validDiagnosisEvidenceRecord, diagnosisDigest } from './diagnosis-incidents.js'
+import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidenceId } from './diagnosis-incidents.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 
 const same = (left, right) => canonicalize(left) === canonicalize(right)
@@ -20,8 +20,17 @@ function requestProvenance(measurements, scenario) {
   if (scenario.expected.status === 400) return trace.inputDisposition === 'rejected' && operations.length === 0 && trace.attempts.length === 0
   if (scenario.expected.status !== 200) {
     const failed = operations.findIndex(item => item.status === 'failed')
-    return failed >= 0 && operations.slice(0, failed).every(item => item.status === 'succeeded')
-      && operations.slice(failed + 1).length === 0 && operations[failed].operation === ({ POSTGRES_CONNECTION: 'postgres-query', DEPENDENCY_UNAVAILABLE: 'answer' }[scenario.expected.body?.code] ?? operations[failed].operation)
+    const stages = ['embedding', 'postgres-query', 'answer'], failureStage = operations[failed]?.operation
+    const requiredStage = scenario.integrationProfile === 'answer-unavailable-always' ? 'answer'
+      : ['embedding-timeout-always', 'retry-after-too-long'].includes(scenario.integrationProfile) ? 'embedding'
+        : /^POSTGRES_|^(VECTOR_DIMENSION|QUERY_PARAMETERS)$/.test(scenario.expected.body?.code ?? '') ? 'postgres-query' : failureStage
+    const index = stages.indexOf(requiredStage)
+    if (failed !== index || index < 0 || !same(operations.map(item => [item.operation, item.status]),
+      stages.slice(0, index + 1).map((operation, position) => [operation, position === index ? 'failed' : 'succeeded']))) return false
+    if (index >= 1 && trace.vectorProvenance !== 'embedding') return false
+    // Source IDs are emitted only by a successful return. At answer failure,
+    // authenticate the real retrieved rows used to construct its context.
+    return index < 2 || trace.queryBindings?.published === true && trace.selectedIds.length > 0 && same(trace.contextIds, trace.selectedIds)
   }
   const sources = measurements.body?.sources
   if (scenario.expected.body?.answer === 'No matching documents.' && Array.isArray(sources) && sources.length === 0)
@@ -74,7 +83,7 @@ export function verifyDiagnosis(run, lab, scenarioId) {
 export function diagnosisHistoricalEvidence(run, lab, scenarioId) {
   const task = lab.tasks.find(item => item.verification?.scenarioId === scenarioId)
   const record = run.evidence.experimentsById[run.evidence.currentEvidenceByTask[task?.id]]
-  return record?.measurements.diagnosisCapture && validDiagnosisEvidenceRecord(record, run, lab) ? structuredClone(record.measurements.diagnosisCapture) : null
+  return record?.scenarioId === scenarioId && record.measurements.diagnosisCapture && validDiagnosisEvidenceRecord(record, run, lab) ? structuredClone(record.measurements.diagnosisCapture) : null
 }
 
 export function diagnosisDependencies(target, { historical = false, scenarioId = null, incidentEpoch = null, lab = null } = {}) {
@@ -84,10 +93,19 @@ export function diagnosisDependencies(target, { historical = false, scenarioId =
     const state = stateFor(context, target)
     if (historical) {
       const incident = state?.diagnosis?.incident
+      const task = lab?.tasks.find(item => item.verification?.scenarioId === scenarioId)
+      const record = context.evidence.experimentsById[context.evidence.currentEvidenceByTask[task?.id]]
       if (!incident || context.attemptId !== undefined && incident.attemptId !== context.attemptId
         || context.labId !== undefined && incident.labId !== context.labId
         || incidentEpoch !== null && incident.epoch !== incidentEpoch
-        || !['clusterId', 'namespace', 'deploymentName', 'serviceName'].every(name => incident.target[name] === target[name])) return null
+        || !['clusterId', 'namespace', 'deploymentName', 'serviceName'].every(name => incident.target[name] === target[name]))
+        return { unavailableIncidentEvidenceId: record?.id ?? null }
+      // Recording precedes native capture. Only that owner's internal pending
+      // context may inspect a passed record before its anchor is committed.
+      if (record?.completed && pendingDiagnosisCaptureEvidenceId(context) !== record.id
+        && (!lab || !diagnosisHistoricalEvidence({ ...context, labId: context.labId ?? incident.labId,
+          attemptId: context.attemptId ?? incident.attemptId, contentVersion: context.contentVersion ?? lab.contentVersion }, lab, scenarioId)))
+        throw new Error('Historical diagnosis requires an authenticated native capture.')
       return { attemptId: incident.attemptId, contentVersion: context.contentVersion ?? lab?.contentVersion ?? null, incidentId: incident.id, epoch: incident.epoch, target: structuredClone(incident.target),
         fixtureVersion: 1, declarationHash: lab ? diagnosisDigest({ scenario: lab.scenarios[scenarioId], fixtures: lab.initialProjectFiles, incident: Object.values(lab.scenarios).find(item => item.kind === 'aks-diagnosis') }) : null }
     }
