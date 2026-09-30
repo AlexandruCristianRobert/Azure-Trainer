@@ -17,6 +17,17 @@ export const releaseDigest = value => {
 }
 const stateFor = (run, target) => run.runtime.kubernetes.clusters[target.clusterId]
 const deploymentFor = (run, target) => stateFor(run, target)?.resources[`Deployment/${target.namespace}/${target.deploymentName}`]
+const releaseAnswers = {
+  'How long are backups kept?': { answer: 'Training backups are kept for 30 days.', source: 'training-backups' },
+  'Who provides support?': { answer: 'Contact the training desk for support.', source: 'training-support' },
+}
+export function validReleaseFlow(sample) {
+  const expected = releaseAnswers[sample?.question]
+  return !!expected && sample.transport.ok && sample.status === 200 && sample.answer === expected.answer
+    && sample.sources.length === 1 && sample.sources[0] === expected.source
+    && sample.integrationTrace?.vectorProvenance === 'embedding' && sample.integrationTrace?.sourceProvenance === 'rows'
+    && ['embedding', 'postgres-query', 'answer'].every(operation => sample.operations.some(item => item.operation === operation && item.status === 'succeeded'))
+}
 export function releasePolicy(run, target) {
   const spec = deploymentFor(run, target)?.spec
   if (!spec) return null
@@ -134,8 +145,11 @@ export function finishReleaseExperiment(input, scenarioId, lab, forcedReason = n
   const incidentObserved = e.incidentSeen && e.incident !== null && e.incident.podUids.length > 0 && e.incident.reasons.length > 0
   const policy = releasePolicyMeetsBrief(releasePolicy(run, e.target), lab.releaseRequirements)
     && e.samples.filter(sample => sample.rollout.currentRevision !== e.baselineRevision).every(sample => releasePolicyMeetsBrief(sample.rolloutPolicy, lab.releaseRequirements))
+  // Failed historical traffic is allowed by recovery scenarios; every actual
+  // successful response must still answer its own observed question correctly.
+  const correctAnswers = e.samples.filter(sample => sample.transport.ok && sample.status === 200).every(validReleaseFlow)
   const passed = !forcedReason && e.changedTemplate && (!e.expected.requireIncident || incidentObserved)
-    && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability && policy
+    && (!e.expected.requireDeadline || incidentObserved && e.deadlineSeen && e.incident.deadline) && terminal && availability && policy && correctAnswers
   Object.assign(e, { status: 'finished', phase: 'finished', outcome: passed ? 'passed' : 'failed', endedAtMs: run.runtime.simTimeMs,
     reason: forcedReason ?? (passed ? 'terminal-release-observed' : 'Observe the required revision/incident and ten stable terminal seconds while meeting the availability brief.') })
   retainReleaseReceipt(stateFor(run, e.target), e)
@@ -198,8 +212,7 @@ export function observeReleaseTimestamp(input, atMs, lab) {
     e.incident.deadline ||= deadline
   }
   const s = captured.sample
-  const terminal = summary.complete && s.rollout.available >= e.expected.requiredAvailable && s.transport.ok && s.status === 200 && s.release === e.expected.expectedRelease
-    && ['embedding', 'postgres-query', 'answer'].every(operation => s.operations.some(item => item.operation === operation && item.status === 'succeeded'))
+  const terminal = summary.complete && s.rollout.available >= e.expected.requiredAvailable && validReleaseFlow(s) && s.release === e.expected.expectedRelease
     && s.backends.length === e.baselineReplicas && s.backends.every(item => item.artifactId === s.artifactId)
   if (terminal && e.changedTemplate && (!e.expected.requireIncident || e.incidentSeen)) { e.terminalSinceMs ??= atMs; e.phase = 'recovered' }
   else { e.terminalSinceMs = null; e.phase = e.incidentSeen ? 'incident-seen' : e.changedTemplate ? 'changed-template' : 'baseline' }

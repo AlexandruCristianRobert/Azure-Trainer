@@ -3,6 +3,7 @@ import { parse, stringify } from 'yaml'
 import { aksReleasesIndependentLab as lab } from '../src/data/labs/aks-journey/releases-independent.lab.js'
 import { createBehavioralRun, validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { verifyReleaseState } from '../src/lib/kubernetes/release-evidence.js'
 import { getRolloutSummary } from '../src/lib/kubernetes/rollouts.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
@@ -39,7 +40,12 @@ test('standalone Lab21 starts with three healthy v1 Pods and leaves policy for t
 test.each([{ maxSurge: 1, maxUnavailable: 0 }, { maxSurge: '25%', maxUnavailable: '0%' }])('real traversal accepts resolved rolling budgets %j', strategy => {
   const run = executeIndependentRelease(initial(), lab, strategy)
   expect(evaluateLab(lab, run).isComplete).toBe(true)
-  expect(verifyReleaseState(run, lab, 'final-v2').passed).toBe(true)
+  const final = verifyReleaseState(run, lab, 'final-v2')
+  expect(final.passed).toBe(true)
+  expect(final.evidence.samples.map(({ question, answer, sources, release, artifactId }) => ({ question, answer, sources, release, artifactId }))).toEqual([
+    { question: 'How long are backups kept?', answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], release: '2.0', artifactId: final.evidence.artifactId },
+    { question: 'Who provides support?', answer: 'Contact the training desk for support.', sources: ['training-support'], release: '2.0', artifactId: final.evidence.artifactId },
+  ])
   expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)), lab)).toBeTruthy()
   const pods = getDeploymentPods(run, target().clusterId, 'assistant', 'assistant-api')
   expect(pods).toHaveLength(3)
@@ -213,4 +219,61 @@ test('current final proof rejects stale info.version even when captured source a
   const info = routeServiceRequest(run, { origin: { kind: 'external', clusterId: target().clusterId }, hostname: '192.0.2.10', port: 80, method: 'GET', path: '/api/info' }, lab)
   expect(info.outcome).toMatchObject({ status: 200, body: { version: '1.0' } })
   expect(verifyReleaseState(run, lab, 'final-v2').passed).toBe(false)
+})
+
+test('full ordinary traversal rejects rebinding the support question to backups despite successful provenance', () => {
+  let run = initial()
+  const source = lab.solutionFiles['app.py'].replace('question = question.strip()', 'question = "How long are backups kept?"')
+  for (const task of lab.tasks) {
+    run = executeAksSolution(run, lab, { ...task, solution: { ...task.solution, steps: task.solution.steps
+      .filter(step => !['recovered-v2', 'final-v2'].includes(step.scenarioId))
+      .map(step => step.kind === 'file' && step.path === 'app.py' ? { ...step, content: source } : step) } })
+    if (['recovered-v2', 'final-v2'].includes(task.verification.scenarioId))
+      run = applyRunAction(run, { type: 'aks-request', scenarioId: task.verification.scenarioId }, lab).run
+  }
+  const support = state(run).rollouts.receipts.flatMap(receipt => receipt.samples)
+    .find(sample => sample.question === 'Who provides support?' && sample.release === '2.0')
+  expect(support).toMatchObject({ status: 200, answer: 'Training backups are kept for 30 days.', sources: ['training-backups'], integrationTrace: { sourceProvenance: 'rows' } })
+  expect(support.operations.map(operation => operation.status)).toEqual(['succeeded', 'succeeded', 'succeeded'])
+  expect(done(run, 2)).toBe(false)
+  expect(done(run, 4)).toBe(false)
+  expect(done(run, 5)).toBe(false)
+  expect(evaluateLab(lab, run).isComplete).toBe(false)
+  expect(verifyReleaseState(run, lab, 'final-v2').passed).toBe(false)
+})
+
+test('final live proof checks support separately even when backups and current v2 artifact are correct', () => {
+  let run = initial()
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: lab.solutionFiles['app.py'].replace('question = question.strip()', 'question = "How long are backups kept?"') }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksreleasesindependent --image assistant:release-v2 .' }).run
+  run = act(run, lab, { type: 'save-file', path: 'k8s/deployment.yaml', text: lab.solutionFiles['k8s/deployment.yaml'] }).run
+  for (const path of RELEASE_MANIFEST.kubernetesFiles) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  for (const path of RELEASE_MANIFEST.kubernetesFiles) run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  expect(getRolloutSummary(run, target())).toMatchObject({ complete: true, available: 3 })
+  const support = routeServiceRequest(run, { origin: { kind: 'external', clusterId: target().clusterId }, hostname: '192.0.2.10', port: 80,
+    method: 'POST', path: '/api/ask', body: { question: 'Who provides support?' } }, lab)
+  expect(support.outcome.status).toBe(200)
+  expect(support.outcome.body.release).toBe('2.0')
+  expect(support.outcome.dependencyTrace.map(operation => operation.status)).toEqual(['succeeded', 'succeeded', 'succeeded'])
+  expect(verifyReleaseState(run, lab, 'final-v2').passed).toBe(false)
+})
+
+test('correct terminal answers cannot erase earlier wrong successful release samples', () => {
+  let run = through(1)
+  const source = lab.solutionFiles['app.py'].replace('question = question.strip()', 'question = "How long are backups kept?"')
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: source }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksreleasesindependent --image assistant:release-v2 .' }).run
+  run = executeAksSolution(run, lab, { ...lab.tasks[2], solution: { steps: lab.tasks[2].solution.steps.filter(step => step.control !== 'finish') } })
+  run = act(run, lab, { type: 'save-file', path: 'app.py', text: lab.solutionFiles['app.py'] }).run
+  run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksreleasesindependent --image assistant:release-v2 .' }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  expect(state(run).rollouts.experiment.terminalSinceMs).not.toBeNull()
+  expect(state(run).rollouts.experiment.samples.some(sample => sample.question === 'Who provides support?' && sample.status === 200 && sample.answer === 'Training backups are kept for 30 days.')).toBe(true)
+  expect(state(run).rollouts.experiment.samples.slice(-2).map(sample => sample.answer)).toEqual(expect.arrayContaining(['Training backups are kept for 30 days.', 'Contact the training desk for support.']))
+  run = act(run, lab, { type: 'aks-release-finish', scenarioId: 'release-v2' }).run
+  expect(done(run, 2)).toBe(false)
 })

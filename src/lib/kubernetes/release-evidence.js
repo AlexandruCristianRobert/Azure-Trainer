@@ -1,4 +1,4 @@
-import { releaseDigest, captureReleaseSample, validReleaseScenario, releasePolicy, releasePolicyMeetsBrief } from './release-experiments.js'
+import { releaseDigest, captureReleaseSample, validReleaseScenario, releasePolicy, releasePolicyMeetsBrief, validReleaseFlow } from './release-experiments.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { projectSourceHash, selectBuildFiles } from '../project/build.js'
 import { parseKubernetesYaml } from './yaml.js'
@@ -173,11 +173,16 @@ export function verifyReleaseState(run, lab, scenarioId) {
     method: 'GET', path: '/api/info' }, null)
   if (!info.outcome.transport.ok || info.outcome.status !== 200 || info.outcome.body?.version !== scenario.expectedRelease
     || info.outcome.route.artifactId !== artifactId) return failed('Verify fresh /api/info version 2.0 through the intended current artifact.')
-  const { sample } = captureReleaseSample(info.run, target, run.runtime.simTimeMs, 0)
-  if (!sample.transport.ok || sample.status !== 200 || sample.release !== scenario.expectedRelease || !['embedding', 'postgres-query', 'answer'].every(operation => sample.operations.some(item => item.operation === operation && item.status === 'succeeded'))) return failed('Repair and verify a fresh embedding, PostgreSQL retrieval and answer flow.')
+  const samples = []; let current = info.run
+  for (const index of [0, 1]) {
+    const captured = captureReleaseSample(current, target, run.runtime.simTimeMs, index)
+    current = captured.run; samples.push(captured.sample)
+    if (!validReleaseFlow(captured.sample) || captured.sample.release !== scenario.expectedRelease || captured.sample.artifactId !== artifactId)
+      return failed('Repair and verify both known questions with their correct answers, retrieved source IDs and fresh three-stage flow through the intended current artifact.')
+  }
   return { passed: true, reason: 'Current saved source, applied objects and newly restarted Pods agree.', evidence: { clusterId: target.clusterId, namespace: target.namespace,
     deploymentUid: deployment.metadata.uid, sourceHash, artifactId, digest: artifact.digest, currentRevision: summary.currentRevision,
-    infoVersion: info.outcome.body.version, podUids: pods.map(pod => pod.metadata.uid), sample, witness: clone(proof) } }
+    infoVersion: info.outcome.body.version, podUids: pods.map(pod => pod.metadata.uid), sample: samples[0], samples, witness: clone(proof) } }
 }
 
 export function releaseDependencies(target, { historical = false, scenarioId = null, incidentEpoch = null } = {}) {
