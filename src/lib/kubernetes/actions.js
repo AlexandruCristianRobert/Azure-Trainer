@@ -31,7 +31,7 @@ function validConnectivityExpected(expected) {
 
 /** Shared declaration gate for Verify and fixture staging. */
 export function validAksRequestScenario(scenario, lab) {
-  const keys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout']
+  const keys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout', 'historicalProbeOf']
   if (!scenario || !isJsonValue(scenario) || Object.keys(scenario).some(key => !keys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1
     || !scenario.target || Object.keys(scenario.target).sort().join(',') !== 'clusterId,deploymentName,namespace,serviceName'
     || Object.values(scenario.target).some(value => typeof value !== 'string' || !value)
@@ -48,6 +48,7 @@ export function validAksRequestScenario(scenario, lab) {
     || ['expectedCurrentConfig', 'expectedCapturedConfig'].some(key => scenario[key] !== undefined && (!scenario[key] || typeof scenario[key] !== 'object'
       || Array.isArray(scenario[key]) || Object.values(scenario[key]).some(value => typeof value !== 'string')))
     || scenario.integrationProfile !== undefined && (lab?.capabilities?.kubernetesAiIntegration !== true || !integrationProfiles.has(scenario.integrationProfile))) return false
+  if (scenario.historicalProbeOf !== undefined && (lab?.id !== 'aks-diagnosis-troubleshooting' || scenario.historicalProbeOf !== 'route-observed')) return false
   const connectivity = scenario.connectivity
   if (connectivity === undefined) return true
   if (lab?.capabilities?.kubernetesConnectivity !== true || !connectivity || !Number.isInteger(connectivity.port) || connectivity.port < 1 || connectivity.port > 65535) return false
@@ -131,7 +132,7 @@ export function applyAksAction(run, action, lab) {
   if (lab.id === AI_TROUBLESHOOTING_LAB_ID && INTEGRATION_SCENARIO_PHASES[action.scenarioId] !== run.runtime.kubernetes?.integrationIncident?.phase) {
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_INCIDENT_NOT_READY', message: 'This assistant request belongs to a later incident phase.' }] }
   }
-  const scenarioKeys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout']
+  const scenarioKeys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout', 'historicalProbeOf']
   const target = scenario?.target; const request = scenario?.request; const expected = scenario?.expected
   if (!scenario || Object.keys(scenario).some(key => !scenarioKeys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1
     || !target || Object.keys(target).sort().join(',') !== 'clusterId,deploymentName,namespace,serviceName'
@@ -173,7 +174,7 @@ export function applyAksAction(run, action, lab) {
     const evidence = next.evidence.experimentsById[next.evidence.currentEvidenceByTask[task.id]]
     evidence.dependencyGenerations = Object.fromEntries(Object.keys(evidence.dependencyGenerations).map(key => [key, next.dependencyGenerations[key] ?? 0]))
     const measurements = assessed.result.measurements
-    return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
+    return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `${measurements.origin === 'incident-snapshot' ? 'Historical incident-snapshot probe: ' : ''}HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
       status: measurements.status, body: measurements.body, measurements }], portalEvents: [], diagnostics: [] }
   }
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })

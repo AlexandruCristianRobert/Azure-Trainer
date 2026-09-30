@@ -5,7 +5,7 @@ import { inspectDeploymentConsistency, releaseDependencies } from './release-evi
 import { getProjectManifest } from '../project/manifests.js'
 import { getDeploymentPods } from './reconcile.js'
 import { redactRequestValue, requestDiagnosticsEnabled } from './request-records.js'
-import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidence } from './diagnosis-incidents.js'
+import { validDiagnosisEvidenceRecord, diagnosisDigest, pendingDiagnosisCaptureEvidence, probeIncidentSnapshot } from './diagnosis-incidents.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { observeDiagnosisLifecycle } from './diagnosis-lifecycle.js'
 import { getRolloutSummary } from './rollouts.js'
@@ -54,6 +54,18 @@ export function verifyDiagnosis(run, lab, scenarioId) {
     || lab.tasks.filter(task => task.verification?.scenarioId === scenarioId && task.verification.scenarioVersion === scenario.version).length !== 1)
     return { run, result: result(false, { reason: 'Select one immutable declared diagnosis Task request.' }) }
   const response = simulateKubernetesRequest(run, { ...scenario, id: scenarioId })
+  if (scenario.historicalProbeOf && response.status !== scenario.expected.status) {
+    const incident = stateFor(run, scenario.target)?.diagnosis?.incident
+    const observation = incident?.observations.find(item => item.scenarioId === scenario.historicalProbeOf)
+    const probed = observation && probeIncidentSnapshot(run, observation.id, lab).snapshot
+    const passed = probed?.status === scenario.expected.status && same(probed.body, scenario.expected.body)
+      && same(probed.dependencyTrace.map(item => [item.operation, item.status]), [['embedding', 'failed']])
+    const measurements = { origin: 'incident-snapshot', historical: true, observationId: observation?.id ?? null,
+      requestId: probed?.requestId ?? null, status: probed?.status ?? null, body: probed?.body ?? null,
+      transport: probed?.transport ?? { ok: false, reason: 'NO_SNAPSHOT' }, dependencyTrace: probed?.dependencyTrace ?? [],
+      provenanceValid: passed === true }
+    return { run, result: result(passed, measurements) }
+  }
   const state = stateFor(response.run, scenario.target)
   const deployment = state?.resources[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]
   const request = response.run.runtime.kubernetes.requests.find(item => item.sequence === response.measurements.requestSequence && item.scenarioId === scenarioId)

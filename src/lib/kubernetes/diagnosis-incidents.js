@@ -39,7 +39,7 @@ const targetKeys = ['clusterId', 'namespace', 'deploymentName', 'serviceName']
 const stableKeys = [...targetKeys, 'deploymentUid', 'serviceUid']
 const secretKey = /password|secret|token|credential|api.?key|connection/i
 function validRequestScenario(request, target, lab) {
-  const allowed = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout']
+  const allowed = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile', 'observeLifecycle', 'requireCompleteRollout', 'historicalProbeOf']
   if (!validAksRequestScenario(request, lab) || !isPlainObject(request) || Object.keys(request).some(key => !allowed.includes(key)) || request.kind !== 'aks-request' || request.version !== 1 || !same(request.target, target)) return false
   const http = request.request, expected = request.expected, connectivity = request.connectivity
   if (!(exact(http, ['method', 'path']) && http.method === 'GET' && http.path === '/api/info'
@@ -127,10 +127,11 @@ export function validDiagnosisBaseline(run, lab, clusterId) {
 }
 
 function validScenario(scenario, lab) {
-  if (!isPlainObject(scenario) || !isJsonValue(scenario) || Object.keys(scenario).some(key => !['kind', 'version', 'target', 'investigationArea', 'phases', 'controlledProbe', 'baselineTaskId'].includes(key))
+  if (!isPlainObject(scenario) || !isJsonValue(scenario) || Object.keys(scenario).some(key => !['kind', 'version', 'target', 'investigationArea', 'phases', 'controlledProbe', 'baselineTaskId', 'initialFaults'].includes(key))
     || scenario.kind !== 'aks-diagnosis' || scenario.version !== 1 || !exact(scenario.target, targetKeys) || !Object.values(scenario.target).every(text)
     || !text(scenario.investigationArea) || !Array.isArray(scenario.phases) || scenario.phases.length < 1 || scenario.phases.length > 10
-    || new Set(scenario.phases.map(phase => phase?.id)).size !== scenario.phases.length) return false
+    || new Set(scenario.phases.map(phase => phase?.id)).size !== scenario.phases.length
+    || scenario.initialFaults !== undefined && (scenario.initialFaults !== true || scenario.phases.length !== 1 || scenario.baselineTaskId !== undefined)) return false
   if (scenario.baselineTaskId !== undefined) {
     const task = lab.tasks?.find(item => item.id === scenario.baselineTaskId)
     if (!text(scenario.baselineTaskId) || !task || !validRequestScenario(lab.scenarios[task.verification?.scenarioId], scenario.target, lab)
@@ -241,7 +242,9 @@ export function startDiagnosisIncident(run, scenarioId, lab) {
   if (!capturedBaselineReady(run, scenario, lab)) return reject(run, 'Capture authentic working baseline logs on the current saved source and deployed containers before diagnosis.')
   const baselineObjects = baselineObjectCoordinates(run, lab, scenario)
   if (!baselineObjects) return reject(run, 'The stable applied baseline must match the immutable healthy phase preconditions.')
-  const baselineHashes = fingerprints(run, target), applied = stage(run, scenario, scenario.phases[0], lab)
+  const baselineHashes = fingerprints(run, target), applied = scenario.initialFaults
+    ? { run: clone(run), lines: [{ kind: 'out', text: `Diagnosis investigation: ${scenario.investigationArea}. Initial faults were already saved and applied.` }], diagnostics: [] }
+    : stage(run, scenario, scenario.phases[0], lab)
   if (applied.diagnostics.length) return applied
   const candidate = applied.run, state = stateFor(candidate, target), epoch = candidate.nextSequence++
   state.diagnosis ??= { version: 1, incident: null, receipts: [] }
@@ -348,7 +351,7 @@ function healthyBaselineObjects(lab, scenario) {
   const files = { ...lab.initialProjectFiles }
   // A Guided learner may first publish and deploy logging. Every phase's
   // immutable before value describes that working incident baseline.
-  for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = edit.before
+  for (const phase of scenario.phases) for (const edit of phase.edits) files[edit.path] = scenario.initialFaults ? edit.after : edit.before
   return fixtureObjects({ initialProjectFiles: files }, { phases: [] })
 }
 function baselineObjectCoordinates(run, lab, scenario) {

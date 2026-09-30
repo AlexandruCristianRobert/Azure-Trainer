@@ -244,6 +244,42 @@ export function executeAksSolution(run, lab, task) {
   return run
 }
 
+/** Exercise Lab23 through ordinary learner edits, applies, restart and Verify actions. */
+export function executeDiagnosisRepair(run, lab, { targetPort = 'http', repairTogether = false, configFirst = false } = {}) {
+  const saveApply = (path, content) => {
+    run = act(run, lab, { type: 'save-file', path, text: content }).run
+    run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  }
+  const repairedService = path => lab.solutionFiles[path].replace('targetPort: http', `targetPort: ${targetPort}`)
+  if (repairTogether || configFirst) {
+    saveApply('k8s/configmap.yaml', lab.solutionFiles['k8s/configmap.yaml'])
+    if (configFirst) {
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+    }
+  }
+  for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml']) saveApply(path, repairedService(path))
+  if (repairTogether) {
+    run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'dependency-observed' }).run
+  if (!repairTogether && !configFirst) {
+    saveApply('k8s/configmap.yaml', lab.solutionFiles['k8s/configmap.yaml'])
+    run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+    run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  }
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'internal-recovered' }).run
+  run = act(run, lab, { type: 'aks-diagnosis-next', scenarioId: 'incident' }).run
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'external-recovered' }).run
+  for (const path of ['k8s/namespace.yaml', 'k8s/configmap.yaml', 'k8s/secret.yaml', 'k8s/deployment.yaml', 'k8s/service-internal.yaml', 'k8s/service-external.yaml'])
+    run = act(run, lab, { type: 'command', line: `kubectl apply -f ${path}` }).run
+  run = act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run
+  run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+  for (const scenarioId of ['internal-recovered', 'external-recovered', 'repeatable-repair']) run = act(run, lab, { type: 'aks-request', scenarioId }).run
+  return run
+}
+
 export function createAksTestRun(overrides = {}) {
   const lab = makeAksLab(overrides)
   return { lab, run: createBehavioralRun(lab, { attemptId: 'test-aks' }) }

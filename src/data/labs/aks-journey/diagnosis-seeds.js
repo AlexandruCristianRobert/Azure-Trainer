@@ -12,9 +12,14 @@ export const DIAGNOSIS_GUIDED_FILES = Object.freeze({ ...DIAGNOSIS_GUIDED_SOLUTI
   'app.py': DIAGNOSIS_GUIDED_SOLUTION_FILES['app.py'].replace('    log_event("request.started")\n', '').replace('    log_event("request.completed", response["status"])\n', ''),
   'k8s/deployment.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/deployment.yaml'].replace('assistant:diagnostics-v1', 'assistant:baseline-v2'),
 })
+export const DIAGNOSIS_TROUBLESHOOTING_FILES = Object.freeze({ ...DIAGNOSIS_GUIDED_SOLUTION_FILES,
+  'k8s/service-internal.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/service-internal.yaml'].replace('targetPort: http', 'targetPort: 8081'),
+  'k8s/service-external.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/service-external.yaml'].replace('targetPort: http', 'targetPort: 8081'),
+  'k8s/configmap.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/configmap.yaml'].replace('https://ai-training.example', 'https://ai-missing.example'),
+})
 
 /** Standalone setup builds and applies the supplied project through ordinary actions. */
-export function createDiagnosisSeed(lab, { run, group = DIAGNOSIS_GROUP, registry = DIAGNOSIS_REGISTRY, cluster = DIAGNOSIS_CLUSTER } = {}) {
+export function createDiagnosisSeed(lab, { run, incident = null, group = DIAGNOSIS_GROUP, registry = DIAGNOSIS_REGISTRY, cluster = DIAGNOSIS_CLUSTER } = {}) {
   let seeded = run
   const seedLab = { ...lab, tasks: [], scenarios: {} }
   const act = action => {
@@ -23,7 +28,7 @@ export function createDiagnosisSeed(lab, { run, group = DIAGNOSIS_GROUP, registr
     seeded = result.run
   }
   for (const line of [`az group create -n ${group} -l eastus`, `az acr create -g ${group} -n ${registry} --sku Basic`,
-    `az acr build --registry ${registry} --image assistant:baseline-v2 .`,
+    `az acr build --registry ${registry} --image assistant:${incident === 'port-and-endpoint' ? 'diagnostics-v1' : 'baseline-v2'} .`,
     `az aks create -g ${group} -n ${cluster} --enable-managed-identity --generate-ssh-keys --attach-acr ${registry}`,
     `az aks get-credentials -g ${group} -n ${cluster}`, ...DIAGNOSIS_MANIFEST.kubernetesFiles.map(path => `kubectl apply -f ${path}`)]) act({ type: 'command', line })
   const clusterId = seeded.sandbox.aksClusters.find(item => item.name === cluster).id
@@ -35,5 +40,12 @@ export function createDiagnosisSeed(lab, { run, group = DIAGNOSIS_GROUP, registr
     spec: { containers: [{ name: 'diagnostics', image: 'mcr.microsoft.com/aks-trainer/diagnostics:1', ports: [] }] }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } }
   state.connectivity.diagnosticPodUids = [uid]
   seeded = reconcileServices(seeded, clusterId)
+  if (incident === 'port-and-endpoint') {
+    const current = seeded.runtime.kubernetes.clusters[clusterId]
+    if (current.resources['Service/assistant/assistant-internal']?.spec.ports[0].targetPort !== 8081
+      || current.resources['Service/assistant/assistant-external']?.spec.ports[0].targetPort !== 8081
+      || Object.values(current.podSnapshots).filter(item => item.environment?.AI_ENDPOINT === 'https://ai-missing.example').length !== 2)
+      throw new Error('Diagnosis seed did not capture both declared initial faults.')
+  }
   return { sandbox: seeded.sandbox, artifacts: seeded.artifacts, runtime: seeded.runtime, nextSequence: seeded.nextSequence }
 }
