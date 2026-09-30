@@ -10,8 +10,25 @@ import { behavioralRepository } from './helpers/behavioralRepository.js'
 import { releaseTestRun } from './helpers/aks.js'
 import { lab, start, action } from './helpers/release-evidence.js'
 import { aksReleasesGuidedLab } from '../src/data/labs/aks-journey/releases-guided.lab.js'
+import { aksReleasesTroubleshootingLab } from '../src/data/labs/aks-journey/releases-troubleshooting.lab.js'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
+
+test('Troubleshooting current incident and native diagnosis controls expose safe event and missing-key proof', async () => {
+  const contentLab = aksReleasesTroubleshootingLab
+  let run = createBehavioralRun(contentLab, { attemptId: 'config-release-ui' })
+  for (const scenarioId of ['recover-v2', 'incident-observed', 'config-diagnosis'])
+    run = applyRunAction(run, { type: scenarioId === 'recover-v2' ? 'aks-release-start' : 'aks-request', scenarioId }, contentLab).run
+  const html = await render(AksExperimentPanel, run, { contentLab })
+  for (const scenarioId of ['incident-observed', 'config-diagnosis', 'recovered-v2'])
+    expect(html).toMatch(new RegExp(`<button[^>]*type="button"[^>]*aria-label="Verify release milestone: ${scenarioId}"`))
+  expect(html).toContain('CreateContainerConfigError')
+  expect(html).toContain('ANSWER_DEPLOYMENT_V2')
+  expect(html).toContain('ProgressDeadlineExceeded')
+  expect(html).not.toContain('training-only-password')
+  expect(JSON.stringify(Object.values(run.evidence.experimentsById))).not.toContain('training-only-password')
+  expect(JSON.stringify(run.runtime.kubernetes.clusters[contentLab.scenarios['recover-v2'].target.clusterId].events)).not.toContain('training-only-password')
+})
 
 async function render(component, behavioralRun, { readOnly = false, busy = false, contentLab = lab } = {}) {
   const pinia = createPinia(); setActivePinia(pinia)

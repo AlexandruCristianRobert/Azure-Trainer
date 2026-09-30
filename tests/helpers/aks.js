@@ -16,6 +16,7 @@ import { inspectResources } from '../../src/lib/kubernetes/resource-inspection.j
 import { RELEASE_FILES, RELEASE_MANIFEST, RELEASE_SOLUTION_FILES } from '../../src/data/templates/aks-python/releases.js'
 import { SUBSCRIPTION_ID } from '../../src/lib/sandbox/model.js'
 import { advanceKubernetesTime } from '../../src/lib/kubernetes/time.js'
+import { evaluateLab } from '../../src/lib/labEngine/evaluate.js'
 
 export const RELEASE_TARGET = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rgaksreleases/providers/Microsoft.ContainerService/managedClusters/aksreleases`, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
 export const RELEASE_TEST_LAB = makeAksLab({ manifestId: RELEASE_MANIFEST.id,
@@ -96,6 +97,23 @@ export function act(run, lab, action) {
   return result
 }
 
+/** Traverse learner actions only and fail at the exact Task boundary. */
+export function executeReleaseRecovery(run, lab, path) {
+  if (!['repair-reference', 'supply-key', 'undo-then-repair'].includes(path)) throw new Error(`Unknown release recovery path: ${path}`)
+  for (const [index, task] of lab.tasks.entries()) {
+    if (index === 2 && path === 'undo-then-repair') {
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout history deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout undo deployment/assistant-api -n assistant' }).run
+      run = act(run, lab, { type: 'aks-advance', seconds: 90 }).run
+      run = act(run, lab, { type: 'command', line: 'kubectl rollout status deployment/assistant-api -n assistant --watch=false' }).run
+    }
+    const selected = index === 2 && path === 'supply-key' ? { ...task, solution: task.solution.alternatives[0] } : task
+    run = executeAksSolution(run, lab, selected)
+    if (!evaluateLab(lab, run).tasks[index].done) throw new Error(`Recovery ${path} failed Task ${task.id}: ${evaluateLab(lab, run).tasks[index].reason}`)
+  }
+  return run
+}
+
 export function executeAksSolution(run, lab, task) {
   for (const step of task.solution?.steps ?? []) {
     if (step.kind === 'file') {
@@ -106,7 +124,12 @@ export function executeAksSolution(run, lab, task) {
         ? lab.solutionActionResolvers?.[step.resolver]?.(run, lab, task, step.resolver)
         : { type: 'command', line: step.line }
       if (!action) throw new Error(`Unknown AKS solution command resolver: ${step.resolver ?? '(missing)'}`)
-      run = act(run, lab, action).run
+      if (step.expectedFailure) {
+        const result = applyRunAction(run, action, lab)
+        if (result.diagnostics.length || !result.lines.some(line => line.kind === 'err' && line.text.includes(step.expectedFailure)))
+          throw new Error(`Expected observed command failure: ${step.expectedFailure}`)
+        run = result.run
+      } else run = act(run, lab, action).run
     } else if (step.kind === 'scenario') {
       if (lab.scenarios?.[step.scenarioId]?.kind === 'aks-release') {
         run = act(run, lab, { type: step.control === 'finish' ? 'aks-release-finish' : 'aks-release-start', scenarioId: step.scenarioId }).run

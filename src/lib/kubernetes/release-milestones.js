@@ -5,6 +5,7 @@ import { captureReleaseSample } from './release-experiments.js'
 import { getDeploymentPods } from './reconcile.js'
 import { getRolloutSummary } from './rollouts.js'
 import { routeServiceRequest } from './connectivity.js'
+import { configReleaseMilestonePassed, recordConfigReleaseMilestone } from './release-config-milestones.js'
 
 const recordFor = (context, scenarioId) => Object.values(context.evidence.currentEvidenceByTask).map(id => context.evidence.experimentsById[id])
   .find(record => record?.scenarioId === scenarioId && record.completed && record.outcome === 'passed')
@@ -12,7 +13,7 @@ const cluster = (context, target) => context.runtime.kubernetes.clusters[target.
 const deployment = (context, target) => cluster(context, target)?.resources[`Deployment/${target.namespace}/${target.deploymentName}`]
 const identity = (context, target, scenarioId) => {
   const state = cluster(context, target); const uid = deployment(context, target)?.metadata.uid ?? null
-  const e = scenarioId === 'failed-revision' ? state?.rollouts.experiment
+  const e = ['failed-revision', 'incident-observed', 'config-diagnosis'].includes(scenarioId) ? state?.rollouts.experiment
     : scenarioId === 'recovered-v2' ? [...(state?.rollouts.receipts ?? [])].reverse().find(item => item.scenarioId === 'recover-v2' && item.outcome === 'passed') : null
   const registry = deployment(context, target)?.spec.template.spec.containers[0].image.split('/')[0]
   const artifactId = context.artifacts.publishedTags[`${registry}/assistant:${scenarioId === 'baseline-v1' ? 'release-v1' : 'release-v2'}`] ?? null
@@ -54,9 +55,11 @@ export function releaseMilestonePassed(context, taskId, scenarioId, target) {
     if (proof?.infoVersion !== '1.0' || !validFlow(proof.sample)) return false
     if (scenarioId === 'baseline-v1' && record.measurements.identity.receiptId !== proof.sample.artifactId) return false
     if (scenarioId === 'published-v2' && (proof.artifact?.version !== '2.0' || record.measurements.identity.receiptId !== proof.artifact?.artifactId)) return false
+  } else if (proof?.incidentKind === 'missing-config-key') {
+    if (!configReleaseMilestonePassed(context, record, target)) return false
   } else if (proof?.experimentId !== record.measurements.identity.receiptId || !proof.incident?.deadline || !proof.incident.reasons?.includes('readiness')
     || scenarioId === 'recovered-v2' && (proof.outcome !== 'passed' || proof.terminalRevision <= proof.incident.revision)) return false
-  if (scenarioId === 'recovered-v2' && !diagnosisMatches(context.evidence.experimentsById[proof.diagnosisEvidenceId], {
+  if (scenarioId === 'recovered-v2' && proof?.incidentKind !== 'missing-config-key' && !diagnosisMatches(context.evidence.experimentsById[proof.diagnosisEvidenceId], {
     id: proof.experimentId, scenarioId: proof.experimentScenarioId, attemptId: record.attemptId,
     deploymentUid: record.measurements.identity.deploymentUid, incidentEpoch: record.measurements.identity.incidentEpoch,
     startedAtMs: proof.startedAtMs, endedAtMs: proof.endedAtMs, incident: proof.incident,
@@ -67,9 +70,10 @@ export function releaseMilestonePassed(context, taskId, scenarioId, target) {
 
 export function recordReleaseMilestone(input, lab, scenarioId) {
   const scenario = lab.scenarios[scenarioId]; const task = lab.tasks.find(item => item.verification?.scenarioId === scenarioId)
-  if (!task || scenario.kind !== 'aks-release-milestone' || !['baseline-v1', 'published-v2', 'failed-revision', 'recovered-v2'].includes(scenarioId))
+  if (!task || scenario.kind !== 'aks-release-milestone' || !['baseline-v1', 'published-v2', 'failed-revision', 'recovered-v2', 'incident-observed', 'config-diagnosis'].includes(scenarioId))
     return { run: input, diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Select a declared release milestone.' }] }
   const target = scenario.target; const state = cluster(input, target); const summary = getRolloutSummary(input, target)
+  if (scenario.incidentKind === 'missing-config-key') return recordConfigReleaseMilestone(input, lab, scenarioId, releaseMilestoneDependencies(target, scenarioId))
   const earned = recordFor(input, scenarioId)
   const preserveEarned = () => ({ run: input, diagnostics: [], lines: [{ kind: 'out', text: 'Historical release milestone already recorded.' }] })
   if (earned && (scenarioId !== 'failed-revision' || earned.measurements.diagnosis?.experimentId === state.rollouts.experiment?.id)) return preserveEarned()
