@@ -4,6 +4,7 @@ import { DIAGNOSIS_MANIFEST, DIAGNOSIS_SOLUTION_FILES } from '../../templates/ak
 
 export const DIAGNOSIS_GROUP = 'rg-aks-diagnosis-guided'
 export const DIAGNOSIS_REGISTRY = 'acraksdiagnosisguided'
+export const DIAGNOSIS_TROUBLESHOOTING_REGISTRY = 'acraksdiagnosistroubleshooting'
 export const DIAGNOSIS_CLUSTER = 'aks-diagnosis-guided'
 export const DIAGNOSIS_GUIDED_SOLUTION_FILES = Object.freeze(Object.fromEntries(Object.entries(DIAGNOSIS_SOLUTION_FILES).map(([path, text]) => [path,
   text.replaceAll('acraksreleasesguided', DIAGNOSIS_REGISTRY).replaceAll('assistant-public', 'assistant-external')
@@ -12,10 +13,12 @@ export const DIAGNOSIS_GUIDED_FILES = Object.freeze({ ...DIAGNOSIS_GUIDED_SOLUTI
   'app.py': DIAGNOSIS_GUIDED_SOLUTION_FILES['app.py'].replace('    log_event("request.started")\n', '').replace('    log_event("request.completed", response["status"])\n', ''),
   'k8s/deployment.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/deployment.yaml'].replace('assistant:diagnostics-v1', 'assistant:baseline-v2'),
 })
-export const DIAGNOSIS_TROUBLESHOOTING_FILES = Object.freeze({ ...DIAGNOSIS_GUIDED_SOLUTION_FILES,
-  'k8s/service-internal.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/service-internal.yaml'].replace('targetPort: http', 'targetPort: 8081'),
-  'k8s/service-external.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/service-external.yaml'].replace('targetPort: http', 'targetPort: 8081'),
-  'k8s/configmap.yaml': DIAGNOSIS_GUIDED_SOLUTION_FILES['k8s/configmap.yaml'].replace('https://ai-training.example', 'https://ai-missing.example'),
+export const DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES = Object.freeze(Object.fromEntries(Object.entries(DIAGNOSIS_GUIDED_SOLUTION_FILES)
+  .map(([path, text]) => [path, text.replaceAll(DIAGNOSIS_REGISTRY, DIAGNOSIS_TROUBLESHOOTING_REGISTRY)])))
+export const DIAGNOSIS_TROUBLESHOOTING_FILES = Object.freeze({ ...DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES,
+  'k8s/service-internal.yaml': DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES['k8s/service-internal.yaml'].replace('targetPort: http', 'targetPort: 8081'),
+  'k8s/service-external.yaml': DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES['k8s/service-external.yaml'].replace('targetPort: http', 'targetPort: 8081'),
+  'k8s/configmap.yaml': DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES['k8s/configmap.yaml'].replace('https://ai-training.example', 'https://ai-missing.example'),
 })
 
 /** Standalone setup builds and applies the supplied project through ordinary actions. */

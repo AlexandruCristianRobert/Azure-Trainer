@@ -174,7 +174,7 @@ export function applyAksAction(run, action, lab) {
     const evidence = next.evidence.experimentsById[next.evidence.currentEvidenceByTask[task.id]]
     evidence.dependencyGenerations = Object.fromEntries(Object.keys(evidence.dependencyGenerations).map(key => [key, next.dependencyGenerations[key] ?? 0]))
     const measurements = assessed.result.measurements
-    return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `${measurements.origin === 'incident-snapshot' ? 'Historical incident-snapshot probe: ' : ''}HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
+    return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `${measurements.origin === 'incident-snapshot' ? 'Historical incident-snapshot probe: ' : measurements.observationOrigin === 'observed-live-history' ? 'Historical observed-live request: ' : ''}HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
       status: measurements.status, body: measurements.body, measurements }], portalEvents: [], diagnostics: [] }
   }
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })

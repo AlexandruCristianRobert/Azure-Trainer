@@ -2,7 +2,7 @@ import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { DIAGNOSIS_MANIFEST } from '../../templates/aks-python/diagnosis.js'
 import { diagnosisTask } from './diagnosis-helpers.js'
-import { createDiagnosisSeed, DIAGNOSIS_GROUP, DIAGNOSIS_CLUSTER, DIAGNOSIS_TROUBLESHOOTING_FILES as initialFiles, DIAGNOSIS_GUIDED_SOLUTION_FILES as files } from './diagnosis-seeds.js'
+import { createDiagnosisSeed, DIAGNOSIS_GROUP, DIAGNOSIS_CLUSTER, DIAGNOSIS_TROUBLESHOOTING_REGISTRY, DIAGNOSIS_TROUBLESHOOTING_FILES as initialFiles, DIAGNOSIS_TROUBLESHOOTING_SOLUTION_FILES as files } from './diagnosis-seeds.js'
 
 const target = { clusterId: `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${DIAGNOSIS_GROUP}/providers/Microsoft.ContainerService/managedClusters/${DIAGNOSIS_CLUSTER}`,
   namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-internal' }
@@ -54,7 +54,7 @@ export const diagnosisTroubleshootingLab = {
   capabilities: { kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true, kubernetesAiIntegration: true,
     kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true, kubernetesDiagnostics: true, acrBuild: true },
   initialProjectFiles: initialFiles, solutionFiles: files,
-  initializeSimulation: run => createDiagnosisSeed(diagnosisTroubleshootingLab, { run, incident: 'port-and-endpoint' }),
+  initializeSimulation: run => createDiagnosisSeed(diagnosisTroubleshootingLab, { run, incident: 'port-and-endpoint', registry: DIAGNOSIS_TROUBLESHOOTING_REGISTRY }),
   stages: [{ id: 'investigate', title: 'Observe both causes', taskIds: ['route-observed', 'dependency-observed'] },
     { id: 'recover', title: 'Recover both routes', taskIds: ['internal-recovered', 'external-recovered'] },
     { id: 'prove', title: 'Prove repeatability', taskIds: ['repeatable-repair'] }],

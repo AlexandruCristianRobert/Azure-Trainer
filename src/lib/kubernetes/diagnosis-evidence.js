@@ -44,6 +44,30 @@ function requestProvenance(measurements, scenario) {
     && ['embedding', 'postgres-query', 'answer'].every(operation => operations.some(item => item.operation === operation && item.status === 'succeeded'))
 }
 
+function retainedLiveFailure(run, lab, scenarioId, scenario, incident) {
+  if (incident?.labId !== lab.id || incident.attemptId !== run.attemptId || !incident.observations.some(item => item.scenarioId === scenario.historicalProbeOf)) return null
+  const records = Object.values(run.evidence.experimentsById).sort((left, right) => right.sequence - left.sequence)
+  for (const record of records) {
+    const measured = record?.measurements, request = run.runtime.kubernetes.requests.find(item => item.id === measured?.requestId)
+    if (record.labId !== lab.id || record.attemptId !== run.attemptId || record.contentVersion !== run.contentVersion
+      || record.taskId !== scenarioId || record.scenarioId !== scenarioId || record.outcome !== 'passed' || record.completed !== true
+      || measured?.provenanceValid !== true || measured.origin?.kind !== 'pod' || measured.transport?.ok !== true
+      || measured.status !== scenario.expected.status || !same(measured.body, scenario.expected.body)
+      || !/^request-[1-9]\d*$/.test(measured.requestId) || !Number.isSafeInteger(measured.requestSequence)
+      || record.sequence !== measured.requestSequence + 1 || record.startedAtMs < incident.startedAtMs
+      || measured.deploymentUid !== incident.target.deploymentUid || measured.serviceUid !== incident.target.serviceUid
+      || measured.route?.serviceUid !== incident.target.serviceUid
+      || !Array.isArray(measured.dependencyTrace)
+      || !same(measured.dependencyTrace.map(item => [item.operation, item.status]), [['embedding', 'failed']])
+      || request && (request.scenarioId !== scenarioId || request.clusterId !== scenario.target.clusterId
+        || request.route?.serviceUid !== incident.target.serviceUid || request.simTimeMs < incident.startedAtMs
+        || request.sequence !== measured.requestSequence || request.status !== measured.status || !same(request.body, measured.body)
+        || !same(request.transport, measured.transport) || !same(request.dependencyTrace, measured.dependencyTrace))) continue
+    return structuredClone(measured)
+  }
+  return null
+}
+
 /** Executes only the immutable named request. The caller owns normal recordVerification. */
 export function verifyDiagnosis(run, lab, scenarioId) {
   const scenario = lab.scenarios?.[scenarioId], atMs = run.runtime.simTimeMs
@@ -56,6 +80,8 @@ export function verifyDiagnosis(run, lab, scenarioId) {
   const response = simulateKubernetesRequest(run, { ...scenario, id: scenarioId })
   if (scenario.historicalProbeOf && response.status !== scenario.expected.status) {
     const incident = stateFor(run, scenario.target)?.diagnosis?.incident
+    const live = retainedLiveFailure(run, lab, scenarioId, scenario, incident)
+    if (live) return { run, result: result(true, { ...live, observationOrigin: 'observed-live-history' }) }
     const observation = incident?.observations.find(item => item.scenarioId === scenario.historicalProbeOf)
     const probed = observation && probeIncidentSnapshot(run, observation.id, lab).snapshot
     const passed = probed?.status === scenario.expected.status && same(probed.body, scenario.expected.body)

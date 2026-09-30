@@ -35,6 +35,8 @@ test('standalone seed has two ready v2 Pods, both saved and captured faults, and
   expect(seed.project.savedFiles['k8s/service-internal.yaml']).toContain('targetPort: 8081')
   expect(seed.project.savedFiles['k8s/service-external.yaml']).toContain('targetPort: 8081')
   expect(seed.project.savedFiles['k8s/configmap.yaml']).toContain('https://ai-missing.example')
+  expect(seed.project.savedFiles['k8s/deployment.yaml']).toContain('acraksdiagnosistroubleshooting.azurecr.io/assistant:diagnostics-v1')
+  expect(seed.artifacts.publishedTags['acraksdiagnosistroubleshooting.azurecr.io/assistant:diagnostics-v1']).toBeTruthy()
   expect(pods(seed)).toHaveLength(2)
   expect(pods(seed).every(pod => state(seed).health.containers[pod.metadata.uid].ready)).toBe(true)
   expect(pods(seed).every(pod => state(seed).podSnapshots[pod.metadata.uid].environment.AI_ENDPOINT === 'https://ai-missing.example')).toBe(true)
@@ -93,6 +95,27 @@ test('ConfigMap-first repair leaves refused traffic until both Services are corr
   expect(evaluateLab(lab, run).isComplete).toBe(true)
   const second = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['dependency-observed']]
   expect(second.measurements).toMatchObject({ origin: 'incident-snapshot', status: 502, body: { code: 'AI_ENDPOINT' } })
+})
+
+test('re-Verify after recovery retains an earlier authentic live 502 instead of invoking the controlled probe', () => {
+  const recovered = executeDiagnosisRepair(structuredClone(routed), lab, { targetPort: 8080 })
+  const prior = recovered.evidence.experimentsById[recovered.evidence.currentEvidenceByTask['dependency-observed']]
+  expect(prior.measurements.origin.kind).toBe('pod')
+  const requests = recovered.runtime.kubernetes.requests.length
+  const again = verify(recovered, 'dependency-observed')
+  expect(again.run.runtime.kubernetes.requests).toHaveLength(requests)
+  expect(done(again.run, 'dependency-observed')).toBe(true)
+  const current = again.run.evidence.experimentsById[again.run.evidence.currentEvidenceByTask['dependency-observed']]
+  expect(current.measurements).toMatchObject({ observationOrigin: 'observed-live-history', requestId: prior.measurements.requestId,
+    status: 502, body: { code: 'AI_ENDPOINT' }, origin: { kind: 'pod' } })
+  expect(again.lines[0].text).toContain('Historical observed-live request')
+  expect(validateBehavioralRun(JSON.parse(JSON.stringify(again.run)), lab)).toBeTruthy()
+  const pruned = structuredClone(recovered)
+  pruned.runtime.kubernetes.requests = pruned.runtime.kubernetes.requests.filter(item => item.id !== prior.measurements.requestId)
+  expect(validateBehavioralRun(pruned, lab)).toBeTruthy()
+  const afterPruning = verify(pruned, 'dependency-observed')
+  const retained = afterPruning.run.evidence.experimentsById[afterPruning.run.evidence.currentEvidenceByTask['dependency-observed']]
+  expect(retained.measurements).toMatchObject({ observationOrigin: 'observed-live-history', requestId: prior.measurements.requestId })
 })
 
 test('authored Solutions grade at each Task, require final witness, survive reload and produce Result', async () => {
