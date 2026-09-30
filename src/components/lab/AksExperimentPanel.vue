@@ -8,11 +8,32 @@ import { inspectIntegration, INTEGRATION_PROFILE_LABELS } from '../../lib/kubern
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
 import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
+import { inspectDiagnosis } from '../../lib/kubernetes/diagnosis-inspection.js'
+import AksDiagnosisInspection from './AksDiagnosisInspection.vue'
 import { connectivityIncidentEvidenceForPhase, isConnectivityIncidentDraftClean, CONNECTIVITY_INCIDENT_PHASES } from '../../lib/kubernetes/connectivity-incidents.js'
 import { CONNECTIVITY_TROUBLESHOOTING_CLUSTER_ID, CONNECTIVITY_TROUBLESHOOTING_LAB_ID } from '../../data/labs/aks-journey/connectivity-troubleshooting-incidents.js'
 import { AI_TROUBLESHOOTING_LAB_ID, INTEGRATION_INCIDENT_PHASES } from '../../data/labs/aks-journey/integration-incidents.js'
 
 const run = useLabRunStore()
+const diagnosisRequestId = ref('')
+const diagnosisScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-diagnosis'))
+const diagnosisInspection = computed(() => {
+  if (!run.lab?.capabilities?.kubernetesDiagnostics || !run.behavioralRun) return null
+  const target = selectedScenario.value?.target ?? diagnosisScenarios.value[0]?.[1].target ?? (() => {
+    const [clusterId, state] = Object.entries(run.behavioralRun.runtime.kubernetes.clusters)[0] ?? []
+    const deployment = Object.values(state?.resources ?? {}).find(item => item.kind === 'Deployment')
+    return deployment ? { clusterId, namespace: deployment.metadata.namespace, deploymentName: deployment.metadata.name, serviceName: 'assistant-internal' } : null
+  })()
+  return target ? inspectDiagnosis(run.behavioralRun, { ...target, requestId: diagnosisRequestId.value || undefined }) : null
+})
+async function diagnosisAction(type, scenarioId) {
+  error.value = ''; statusMessage.value = 'Checking the declared diagnosis incident.'
+  try {
+    const result = await run.dispatchBehavioral({ type, scenarioId })
+    error.value = result?.effects?.diagnostics?.map(item => item.message).join(' ') ?? ''
+    statusMessage.value = error.value || 'Diagnosis incident action recorded.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'Diagnosis action failed.' }
+}
 const releaseChoice = ref('')
 const releaseScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-release'))
 const releaseFinalScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'aks-release-final'))
@@ -79,7 +100,7 @@ const canIntroduceConnectivityIncident = computed(() => {
     && !!connectivityIncidentEvidenceForPhase(run.behavioralRun, run.lab, 'recoveries', phase.phase)
 })
 const questionScenarios = computed(() => scenarios.value.filter(([, scenario]) => scenario.request?.method === 'POST' && scenario.request?.path === '/api/ask' && typeof scenario.request?.body?.question === 'string'))
-const integrationChoices = computed(() => scenarios.value.filter(([, scenario]) => INTEGRATION_PROFILE_LABELS[scenario.integrationProfile] || scenario.request?.path === '/api/work'))
+const integrationChoices = computed(() => scenarios.value.filter(([, scenario]) => run.lab?.capabilities?.kubernetesDiagnostics || INTEGRATION_PROFILE_LABELS[scenario.integrationProfile] || scenario.request?.path === '/api/work'))
 const canSend = computed(() => integrationCapable.value
   ? integrationChoices.value.some(([id]) => id === choice.value)
   : scenarios.value.some(([id]) => id === choice.value))
@@ -234,7 +255,17 @@ async function copyLogCommand(command) {
 <template>
   <section class="experiment-tool" aria-label="AKS experiment controls">
     <header><h2>{{ run.lab?.capabilities?.kubernetesRollouts ? 'Observe and verify a release' : 'Verify a Kubernetes service' }}</h2><p>Requests use the current Service and the Pods' captured image. {{ run.lab?.capabilities?.kubernetesRollouts ? 'Advance simulated time explicitly to observe rolling updates.' : 'Results transition immediately because this is a simulation.' }}</p></header>
-    <div v-if="scenarios.length" class="experiment-tool__controls">
+    <section v-if="run.lab?.capabilities?.kubernetesDiagnostics" aria-label="AKS diagnosis controls">
+      <h3>Diagnosis observation and recovery</h3>
+      <p>Each Verify control runs its declared request and records evidence for its own Task.</p>
+      <div v-for="[id] in diagnosisScenarios" :key="id" class="experiment-tool__controls">
+        <button type="button" class="btn" :disabled="locked || !!diagnosisInspection?.incident" :aria-label="`Start diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-start', id)">Start diagnosis incident</button>
+        <button type="button" class="btn" :disabled="locked || !diagnosisInspection?.incident?.active" :aria-label="`Advance diagnosis incident: ${id}`" @click="diagnosisAction('aks-diagnosis-next', id)">Continue after recovery</button>
+      </div>
+      <button v-for="[id] in scenarios" :key="id" type="button" class="btn" :disabled="locked" :aria-label="`Verify diagnosis case: ${id}`" @click="send(id)">Verify {{ id }}</button>
+      <AksDiagnosisInspection v-if="diagnosisInspection" :inspection="diagnosisInspection" :selected-id="diagnosisRequestId" @select="diagnosisRequestId = $event" />
+    </section>
+    <div v-if="scenarios.length && !run.lab?.capabilities?.kubernetesDiagnostics" class="experiment-tool__controls">
       <label>{{ integrationCapable ? 'Question and fixture profile' : 'Declared verification' }}<select v-model="choice" :disabled="locked || !(integrationCapable ? integrationChoices : scenarios).length"><option v-for="[id, scenario] in (integrationCapable ? integrationChoices : scenarios)" :key="id" :value="id">{{ integrationCapable && scenario.request.path !== '/api/work' ? `${INTEGRATION_PROFILE_LABELS[scenario.integrationProfile]} · ${scenario.request.body.question}` : `${scenario.request?.method ?? 'GET'} ${scenario.request?.path ?? id}` }}</option></select></label>
       <button class="btn btn--primary" type="button" :disabled="locked || !canSend" @click="send()">Send simulated request</button>
     </div>

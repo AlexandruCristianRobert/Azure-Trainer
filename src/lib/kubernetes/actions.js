@@ -14,6 +14,7 @@ import { startReleaseExperiment, finishReleaseExperiment, cancelReleaseExperimen
 import { recordFinalReleaseVerification } from './release-evidence.js'
 import { recordReleaseMilestone } from './release-milestones.js'
 import { startDiagnosisIncident, advanceDiagnosisIncident, captureDiagnosisObservation, replayDiagnosisObservation, diagnosisIncidentActive } from './diagnosis-incidents.js'
+import { verifyDiagnosis } from './diagnosis-evidence.js'
 
 const integrationProfiles = new Set(['healthy', 'embedding-throttle-once', 'postgres-unavailable-once', 'answer-unavailable-always', 'embedding-timeout-always', 'retry-after-too-long'])
 
@@ -159,6 +160,14 @@ export function applyAksAction(run, action, lab) {
     && item.verification?.scenarioVersion === scenario.version)
   if (!task) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'No Task verifies this AKS request scenario.' }] }
   const refreshed = refreshKubernetesDependencies(run, run, lab)
+  if (lab.capabilities?.kubernetesDiagnostics === true) {
+    const assessed = verifyDiagnosis(refreshed, lab, action.scenarioId)
+    let next = recordVerification(assessed.run, lab, task.id, assessed.result)
+    next = captureDiagnosisObservation(next, action.scenarioId, { requestId: assessed.result.measurements.requestId }, lab)
+    const measurements = assessed.result.measurements
+    return { run: next, lines: [{ kind: assessed.result.completed ? 'out' : 'err', text: `HTTP ${measurements.status} ${JSON.stringify(measurements.body)}`,
+      status: measurements.status, body: measurements.body, measurements }], portalEvents: [], diagnostics: [] }
+  }
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })
   if (lab.capabilities?.kubernetesDiagnostics === true || lab?.id === 'aks-connectivity-troubleshooting' || lab?.id === 'aks-ai-troubleshooting') {
     response.measurements.deploymentUid = response.run.runtime.kubernetes.clusters?.[target.clusterId]?.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]?.metadata?.uid ?? null

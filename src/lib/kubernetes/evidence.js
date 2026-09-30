@@ -2,6 +2,8 @@ import { canonicalize } from '../labEngine/evidence.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { parseKubernetesYaml } from './yaml.js'
 import { RESOURCE_FIXTURES } from '../../data/fixtures/aks/resources.js'
+export { verifyDiagnosis, diagnosisDependencies, diagnosisHistoricalEvidence } from './diagnosis-evidence.js'
+export { inspectDiagnosis } from './diagnosis-inspection.js'
 
 function digest(value) {
   let hash = 2166136261

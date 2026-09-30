@@ -12,6 +12,9 @@ import { routeServiceRequest } from './connectivity.js'
 const clone = value => structuredClone(value)
 const objectKey = object => `${object.kind}/${object.metadata.namespace ?? ''}/${object.metadata.name}`
 const resourcesFor = (run, target) => run.runtime.kubernetes.clusters[target.clusterId]?.resources ?? {}
+const consistencyLab = { capabilities: { kubernetesRollouts: true, kubernetesConfiguration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesConnectivity: true } }
+const proofTargets = lab => Object.values(lab.scenarios ?? {}).filter(scenario => ['aks-release', 'aks-release-final'].includes(scenario.kind)
+  || lab.capabilities?.kubernetesDiagnostics === true && scenario.kind === 'aks-request' && scenario.requireTwoReplicas === true).map(scenario => scenario.target)
 
 function desired(object) {
   if (!object) return null
@@ -92,7 +95,7 @@ function proofState(run, target, lab, { trackObjects = false } = {}) {
 /** Called at the successful apply boundary, including genuine no-op apply. */
 export function noteReleaseReapply(run, clusterId, object, lab) {
   if (!lab.capabilities?.kubernetesRollouts || !['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object.kind)) return run
-  const targets = Object.values(lab.scenarios ?? {}).filter(scenario => ['aks-release', 'aks-release-final'].includes(scenario.kind) && scenario.target.clusterId === clusterId && scenario.target.namespace === object.metadata.namespace).map(scenario => scenario.target)
+  const targets = proofTargets(lab).filter(target => target.clusterId === clusterId && target.namespace === object.metadata.namespace)
   for (const target of targets) {
     const view = proofState(run, target, lab, { trackObjects: true }); if (!view) continue
     const key = objectKey(object); const saved = view.fingerprint.savedObjects.find(item => item.key === key)
@@ -112,7 +115,7 @@ export function refreshReleaseProofs(run, lab, { restarted = false, previous = n
   if (!lab.capabilities?.kubernetesRollouts) return run
   for (const state of Object.values(run.runtime.kubernetes.clusters)) for (const uid of Object.keys(state.rollouts?.proofs ?? {}))
     if (!Object.values(state.resources).some(item => item.kind === 'Deployment' && item.metadata.uid === uid)) delete state.rollouts.proofs[uid]
-  const targets = Object.values(lab.scenarios ?? {}).filter(scenario => ['aks-release', 'aks-release-final'].includes(scenario.kind)).map(scenario => scenario.target)
+  const targets = proofTargets(lab)
   const visited = new Set()
   for (const target of targets) {
     const view = proofState(run, target, lab); if (!view || visited.has(view.uid)) continue
@@ -131,6 +134,41 @@ export function refreshReleaseProofs(run, lab, { restarted = false, previous = n
   return run
 }
 
+/** Pure shared saved/build/live alignment. Witnesses are written only by apply/restart boundaries. */
+export function inspectDeploymentConsistency(input, target, manifest = getProjectManifest(input.project.manifestId), lab = consistencyLab) {
+  const run = JSON.parse(JSON.stringify(input))
+  const state = run.runtime.kubernetes.clusters[target.clusterId]
+  const deployment = resourcesFor(run, target)[`Deployment/${target.namespace}/${target.deploymentName}`]
+  const reasons = []
+  const summary = getRolloutSummary(run, target)
+  if (!deployment || !summary?.complete) reasons.push('Complete the intended rollout; inspect every new Pod, events and rollout status.')
+  if (!deployment || !state?.rollouts) return { consistent: false, reasons, witness: null }
+  const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, manifest))
+  const artifactId = run.artifacts.publishedTags[deployment.spec.template.spec.containers[0].image]
+  const artifact = run.artifacts.buildsById[artifactId]
+  if (artifact?.sourceHash !== sourceHash) reasons.push('Rebuild and publish an image from the current saved build files.')
+  const pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName)
+  if (pods.length !== deployment.spec.replicas || pods.some(pod => state.podSnapshots[pod.metadata.uid]?.artifactId !== artifactId)) reasons.push('Deploy or restart the intended published artifact on every desired Pod.')
+  const { docs, diagnostics } = releaseSavedObjects(run, target, lab)
+  const savedDeployment = docs.find(item => item.key === objectKey(deployment))
+  if (!savedDeployment || releaseDigest(desired(savedDeployment.object)) !== releaseDigest(desired(deployment))) reasons.push('Repair the saved Deployment to match the desired live spec and apply it.')
+  if (diagnostics.length || new Set(docs.map(item => item.key)).size !== docs.length
+    || Object.values(state.resources).some(object => object.metadata.namespace === target.namespace && ['ConfigMap', 'Secret', 'Service'].includes(object.kind) && !docs.some(item => item.key === objectKey(object)))) reasons.push('Repair saved configuration/Services so every required live object has a valid saved manifest, then apply them.')
+  if (docs.filter(item => item.object.kind !== 'Deployment').some(item => releaseDigest(desired(item.object)) !== releaseDigest(desired(state.resources[item.key])))) reasons.push('Repair saved configuration/Services and apply them to match live objects.')
+  if (pods.some(pod => (state.podSnapshots[pod.metadata.uid]?.configRefs ?? []).some(ref => {
+    const object = state.resources[`${ref.kind}/${ref.namespace}/${ref.name}`]
+    return !object || ref.uid !== object.metadata.uid || ref.resourceVersion !== object.metadata.resourceVersion
+  }))) reasons.push('Captured configuration is stale; restart Pods after applying the final configuration.')
+  const fingerprint = releaseFingerprint(run, target, lab); const hash = releaseDigest(fingerprint)
+  const proof = state.rollouts.proofs?.[deployment.metadata.uid]
+  if (!proof?.reapply || !proof.restart || proof.hash !== hash || proof.reapply.hash !== hash || proof.restart.generation !== proof.generation
+    || proof.reapply.objectGenerations !== undefined && canonicalize(proof.reapply.objectGenerations)
+      !== canonicalize(Object.fromEntries(fingerprint.savedObjects.map(item => [item.key, proof.objectStates?.[item.key]?.generation ?? -1])))
+    || proof.restart.atMs < proof.reapply.atMs || proof.restart.rsUid !== state.rollouts.deployments[deployment.metadata.uid]?.currentRsUid
+    || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid))) reasons.push('Reapply all final files, then rollout restart and wait for successful completion.')
+  return { consistent: reasons.length === 0, reasons, witness: proof ? clone(proof) : null }
+}
+
 export function verifyReleaseState(run, lab, scenarioId) {
   const scenario = lab.scenarios?.[scenarioId]
   const failed = reason => ({ passed: false, reason, evidence: {} })
@@ -147,26 +185,9 @@ export function verifyReleaseState(run, lab, scenarioId) {
   if (artifact?.sourceHash !== sourceHash) return failed('Rebuild and publish an image from the current saved build files.')
   if (artifact.appSpec.version !== scenario.expectedRelease) return failed('Set saved source version to 2.0, rebuild and deploy that artifact.')
   const pods = getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName)
-  if (pods.length !== deployment.spec.replicas || pods.some(pod => state.podSnapshots[pod.metadata.uid]?.artifactId !== artifactId)) return failed('Deploy or restart the intended published artifact on every desired Pod.')
-  const { docs, diagnostics } = releaseSavedObjects(run, target, lab)
-  const savedDeployment = docs.find(item => item.key === objectKey(deployment))
-  if (!savedDeployment || releaseDigest(desired(savedDeployment.object)) !== releaseDigest(desired(deployment))) return failed('Repair the saved Deployment to match the desired live spec and apply it.')
-  if (diagnostics.length || new Set(docs.map(item => item.key)).size !== docs.length
-    || Object.values(state.resources).some(object => object.metadata.namespace === target.namespace && ['ConfigMap', 'Secret', 'Service'].includes(object.kind) && !docs.some(item => item.key === objectKey(object)))) return failed('Repair saved configuration/Services so every required live object has a valid saved manifest, then apply them.')
-  for (const item of docs.filter(item => item.object.kind !== 'Deployment')) {
-    if (releaseDigest(desired(item.object)) !== releaseDigest(desired(state.resources[item.key]))) return failed('Repair saved configuration/Services and apply them to match live objects.')
-  }
-  for (const pod of pods) for (const ref of state.podSnapshots[pod.metadata.uid]?.configRefs ?? []) {
-    const object = state.resources[`${ref.kind}/${ref.namespace}/${ref.name}`]
-    if (!object || ref.uid !== object.metadata.uid || ref.resourceVersion !== object.metadata.resourceVersion) return failed('Captured configuration is stale; restart Pods after applying the final configuration.')
-  }
-  const fingerprint = releaseFingerprint(run, target, lab); const hash = releaseDigest(fingerprint)
-  const proof = state.rollouts.proofs?.[deployment.metadata.uid]
-  if (!proof?.reapply || !proof.restart || proof.hash !== hash || proof.reapply.hash !== hash || proof.restart.generation !== proof.generation
-    || proof.reapply.objectGenerations !== undefined && canonicalize(proof.reapply.objectGenerations)
-      !== canonicalize(Object.fromEntries(fingerprint.savedObjects.map(item => [item.key, proof.objectStates?.[item.key]?.generation ?? -1])))
-    || proof.restart.atMs < proof.reapply.atMs || proof.restart.rsUid !== state.rollouts.deployments[deployment.metadata.uid].currentRsUid
-    || pods.some(pod => !proof.restart.podUids.includes(pod.metadata.uid) || proof.restart.beforePodUids.includes(pod.metadata.uid))) return failed('Reapply all final files, then rollout restart and wait for successful completion.')
+  const consistency = inspectDeploymentConsistency(run, target, manifest, lab)
+  if (!consistency.consistent) return failed(consistency.reasons[0])
+  const proof = consistency.witness
   const service = state.resources[`Service/${target.namespace}/${target.serviceName}`]
   const info = routeServiceRequest(run, { origin: { kind: 'external', clusterId: target.clusterId },
     hostname: service?.status.loadBalancer?.ingress?.[0]?.ip ?? 'unassigned', port: service?.spec.ports[0].port ?? 80,

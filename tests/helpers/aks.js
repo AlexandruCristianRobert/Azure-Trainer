@@ -33,10 +33,16 @@ export function diagnosisIntegrationCase({ files = DIAGNOSIS_SOLUTION_FILES, que
 
 export function seedDiagnosisTest({ fault = 'none', profile = 'training' } = {}) {
   const files = structuredClone(DIAGNOSIS_SOLUTION_FILES)
+  if (fault === 'review-audience') profile = 'review'
   files['k8s/configmap.yaml'] = files['k8s/configmap.yaml'].replaceAll('training', profile)
+  if (profile === 'review') {
+    files['k8s/configmap.yaml'] = files['k8s/configmap.yaml'].replace('employee', 'partner')
+    files['k8s/secret.yaml'] = files['k8s/secret.yaml'].replaceAll('training-only-password', 'review-only-password')
+  }
+  if (fault === 'review-audience') files['app.py'] = files['app.py'].replace('"audience": cfg["audience"]', '"audience": "employee"')
   if (fault === 'target-port') for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml'])
     files[path] = files[path].replace('targetPort: http', 'targetPort: 8081')
-  if (!['none', 'target-port'].includes(fault)) throw new Error(`Unknown diagnosis fault: ${fault}`)
+  if (!['none', 'target-port', 'review-audience'].includes(fault)) throw new Error(`Unknown diagnosis fault: ${fault}`)
   const lab = makeAksLab({ manifestId: DIAGNOSIS_MANIFEST.id, initialProjectFiles: files,
     capabilities: { acrBuild: true, kubernetes: true, kubernetesConfiguration: true, kubernetesConnectivity: true,
       kubernetesAiIntegration: true, kubernetesProbes: true, kubernetesResources: true, kubernetesRollouts: true,

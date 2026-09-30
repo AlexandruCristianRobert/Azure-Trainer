@@ -9,12 +9,20 @@ import { inspectPodConfiguration } from '../../lib/kubernetes/configuration-insp
 import { inspectProbes } from '../../lib/kubernetes/probe-inspection.js'
 import { inspectResources } from '../../lib/kubernetes/resource-inspection.js'
 import { inspectRelease } from '../../lib/kubernetes/release-inspection.js'
+import { inspectDiagnosis } from '../../lib/kubernetes/diagnosis-inspection.js'
+import AksDiagnosisInspection from '../lab/AksDiagnosisInspection.vue'
 import BladeHeader from './BladeHeader.vue'
 import EssentialsGrid from './EssentialsGrid.vue'
 import EntityTable from './EntityTable.vue'
 
 const props = defineProps({ resourceGroup: String, name: String })
 const run = useLabRunStore(); const portal = usePortalStore(); const namespace = ref(''); const bladeTab = ref('overview')
+const diagnosisRequestId = ref('')
+const diagnosisInspection = computed(() => {
+  if (!run.lab?.capabilities?.kubernetesDiagnostics || !cluster.value) return null
+  const deployment = view.value.deployments.find(item => item.metadata.namespace === namespace.value)
+  return inspectDiagnosis(run.behavioralRun, { clusterId: cluster.value.id, namespace: namespace.value, deploymentName: deployment?.metadata.name, serviceName: 'assistant-internal', requestId: diagnosisRequestId.value || undefined })
+})
 const cluster = computed(() => run.sandbox.aksClusters?.find(item => item.resourceGroup.toLowerCase() === props.resourceGroup.toLowerCase() && item.name.toLowerCase() === props.name.toLowerCase()) ?? null)
 const view = computed(() => projectKubernetesInspection(run.behavioralRun, cluster.value?.id))
 const namespaces = computed(() => view.value.namespaces.map(item => item.metadata.name))
@@ -65,6 +73,7 @@ const releaseViews = computed(() => run.lab?.capabilities?.kubernetesRollouts &&
       <button id="aks-services-tab" role="tab" type="button" :tabindex="bladeTab === 'services' ? 0 : -1" :aria-selected="bladeTab === 'services'" aria-controls="aks-services-panel" @click="bladeTab = 'services'" @keydown.right.prevent="selectBladeTab('overview')" @keydown.left.prevent="selectBladeTab('overview')">Services</button>
     </div>
     <div v-if="bladeTab === 'overview'" id="aks-overview-panel" role="tabpanel" aria-labelledby="aks-overview-tab">
+    <AksDiagnosisInspection v-if="diagnosisInspection" :inspection="diagnosisInspection" :selected-id="diagnosisRequestId" @select="diagnosisRequestId = $event" />
     <h3 class="blade__section-title">Nodes</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'vmSize', label: 'VM size' }]" :rows="view.nodes" empty-text="No nodes are modeled" />
     <h3 class="blade__section-title">Deployments</h3><EntityTable :columns="[{ key: 'name', label: 'Name' }, { key: 'status', label: 'Replicas' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="deploymentRows" empty-text="No deployments in this namespace" />
     <h3 class="blade__section-title">Pods</h3><EntityTable :columns="[{ key: 'name', label: 'Name', grow: 1.5 }, { key: 'status', label: 'Status' }, { key: 'image', label: 'Image', grow: 2 }]" :rows="podRows" empty-text="No Pods in this namespace" />
