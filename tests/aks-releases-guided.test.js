@@ -20,6 +20,33 @@ const through = index => {
   run = executeAksSolution(run, lab, lab.tasks[index]); checkpoints.set(index, run)
   return structuredClone(run)
 }
+let unverifiedIncident
+const withoutDiagnosis = () => {
+  if (!unverifiedIncident) {
+    const task = lab.tasks[3]
+    unverifiedIncident = executeAksSolution(through(2), lab, { ...task, solution: {
+      steps: task.solution.steps.filter(step => step.scenarioId !== 'failed-revision'),
+    } })
+  }
+  return structuredClone(unverifiedIncident)
+}
+let recoveredWithoutDiagnosis
+const skippedDiagnosisRecovery = () => {
+  recoveredWithoutDiagnosis ??= executeAksSolution(withoutDiagnosis(), lab, lab.tasks[4])
+  return structuredClone(recoveredWithoutDiagnosis)
+}
+let retriedIncident
+const freshRetryIncident = () => {
+  if (!retriedIncident) {
+    let run = through(3)
+    run = act(run, lab, { type: 'aks-release-cancel' }).run
+    run = act(run, lab, lab.solutionActionResolvers['previous-healthy-release'](run)).run
+    run = act(run, lab, { type: 'aks-advance', seconds: 45 }).run
+    const task = lab.tasks[3]
+    retriedIncident = executeAksSolution(run, lab, { ...task, solution: { steps: task.solution.steps.filter(step => step.scenarioId !== 'failed-revision') } })
+  }
+  return structuredClone(retriedIncident)
+}
 
 test('registered standalone Lab19 starts with two Available captured v1 Pods and complete learner help', () => {
   const run = initial()
@@ -74,6 +101,56 @@ test('failed exercise observes real new-Pod readiness and deadline while healthy
   expect(done(run, 3)).toBe(true)
   expect(done(run, 4)).toBe(false)
   expect(done(run, 2)).toBe(true)
+})
+
+test('skipping failed-revision Verify blocks normal recovery grading despite a successful completed receipt', () => {
+  const input = withoutDiagnosis()
+  expect(done(input, 3)).toBe(false)
+  const run = skippedDiagnosisRecovery()
+  expect(state(run).rollouts.receipts.at(-1)).toMatchObject({ scenarioId: 'recover-v2', status: 'finished', outcome: 'passed' })
+  expect(done(run, 3)).toBe(false)
+  expect(done(run, 4)).toBe(false)
+})
+
+test('first diagnosis cannot be backfilled from a finished recovery receipt', () => {
+  const run = act(skippedDiagnosisRecovery(), lab, { type: 'aks-request', scenarioId: 'failed-revision' }).run
+  expect(done(run, 3)).toBe(false)
+  expect(done(run, 4)).toBe(false)
+})
+
+test('first diagnosis cannot use an old stalled incident after active rollback changes the current revision', () => {
+  let run = withoutDiagnosis()
+  run = act(run, lab, lab.solutionActionResolvers['previous-healthy-release'](run)).run
+  expect(state(run).rollouts.experiment.status).toBe('active')
+  expect(getRolloutSummary(run, target()).currentRevision).toBeGreaterThan(state(run).rollouts.experiment.incident.revision)
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'failed-revision' }).run
+  expect(done(run, 3)).toBe(false)
+})
+
+test('fresh recovery cannot reuse a diagnosis earned for the previous incident epoch', () => {
+  let run = freshRetryIncident()
+  expect(done(run, 3)).toBe(true)
+  run = executeAksSolution(run, lab, lab.tasks[4])
+  expect(state(run).rollouts.receipts.at(-1).outcome).toBe('passed')
+  expect(done(run, 4)).toBe(false)
+})
+
+test('matching active diagnosis survives reload and allows recovery on a legitimate fresh retry', () => {
+  let run = freshRetryIncident()
+  const original = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['failed-revision']]
+  const e = state(run).rollouts.experiment
+  run = act(run, lab, { type: 'aks-request', scenarioId: 'failed-revision' }).run
+  const diagnosis = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['failed-revision']]
+  expect(diagnosis.measurements.identity).toEqual(original.measurements.identity)
+  expect(diagnosis.measurements.diagnosis).toMatchObject({ experimentId: e.id, experimentScenarioId: 'recover-v2', incidentEpoch: e.incidentEpoch })
+  run = JSON.parse(JSON.stringify(run)); expect(validateBehavioralRun(run, lab)).toBeTruthy()
+  expect(done(run, 3)).toBe(true)
+  run = executeAksSolution(run, lab, lab.tasks[4])
+  const recovered = run.evidence.experimentsById[run.evidence.currentEvidenceByTask['recover-v2']]
+  expect(recovered.measurements.proof.diagnosisEvidenceId).toBe(diagnosis.id)
+  expect(recovered.measurements.identity).toMatchObject({ receiptId: e.id, incidentEpoch: e.incidentEpoch })
+  expect(done(run, 3)).toBe(true)
+  expect(done(run, 4)).toBe(true)
 })
 
 test('premature recovery finish fails and live undo does not repair the saved readiness manifest', () => {

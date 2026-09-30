@@ -33,6 +33,17 @@ const validFlow = sample => sample?.transport.ok && sample.status === 200 && sam
   && sample.integrationTrace?.sourceProvenance === 'rows'
   && ['embedding', 'postgres-query', 'answer'].every(operation => sample.operations.some(item => item.operation === operation && item.status === 'succeeded'))
 
+function diagnosisMatches(record, expected, target) {
+  const diagnosis = record?.measurements?.diagnosis
+  return record?.scenarioId === 'failed-revision' && record.completed && record.outcome === 'passed'
+    && record.attemptId === expected.attemptId && record.measurements.attemptId === expected.attemptId
+    && record.measurements.clusterId === target.clusterId && record.measurements.namespace === target.namespace
+    && diagnosis?.experimentId === expected.id && diagnosis.experimentScenarioId === expected.scenarioId
+    && diagnosis.deploymentUid === expected.deploymentUid && diagnosis.incidentEpoch === expected.incidentEpoch
+    && diagnosis.atMs === record.endedAtMs && diagnosis.atMs >= expected.startedAtMs && diagnosis.atMs <= expected.endedAtMs
+    && diagnosis.revision === expected.incident?.revision && canonicalize(diagnosis.incident) === canonicalize(expected.incident)
+}
+
 export function releaseMilestonePassed(context, taskId, scenarioId, target) {
   const record = context.evidence.experimentsById[context.evidence.currentEvidenceByTask[taskId]]
   if (!record || record.taskId !== taskId || record.scenarioId !== scenarioId || record.outcome !== 'passed' || !record.completed
@@ -45,6 +56,11 @@ export function releaseMilestonePassed(context, taskId, scenarioId, target) {
     if (scenarioId === 'published-v2' && (proof.artifact?.version !== '2.0' || record.measurements.identity.receiptId !== proof.artifact?.artifactId)) return false
   } else if (proof?.experimentId !== record.measurements.identity.receiptId || !proof.incident?.deadline || !proof.incident.reasons?.includes('readiness')
     || scenarioId === 'recovered-v2' && (proof.outcome !== 'passed' || proof.terminalRevision <= proof.incident.revision)) return false
+  if (scenarioId === 'recovered-v2' && !diagnosisMatches(context.evidence.experimentsById[proof.diagnosisEvidenceId], {
+    id: proof.experimentId, scenarioId: proof.experimentScenarioId, attemptId: record.attemptId,
+    deploymentUid: record.measurements.identity.deploymentUid, incidentEpoch: record.measurements.identity.incidentEpoch,
+    startedAtMs: proof.startedAtMs, endedAtMs: proof.endedAtMs, incident: proof.incident,
+  }, target)) return false
   return Object.entries(releaseMilestoneDependencies(target, scenarioId)).every(([key, select]) => canonicalize(record.dependencyValues[key]) === canonicalize(record.measurements.identity)
     && canonicalize(record.dependencyValues[key]) === canonicalize(select(context)))
 }
@@ -53,9 +69,11 @@ export function recordReleaseMilestone(input, lab, scenarioId) {
   const scenario = lab.scenarios[scenarioId]; const task = lab.tasks.find(item => item.verification?.scenarioId === scenarioId)
   if (!task || scenario.kind !== 'aks-release-milestone' || !['baseline-v1', 'published-v2', 'failed-revision', 'recovered-v2'].includes(scenarioId))
     return { run: input, diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'Select a declared release milestone.' }] }
-  if (recordFor(input, scenarioId)) return { run: input, diagnostics: [], lines: [{ kind: 'out', text: 'Historical release milestone already recorded.' }] }
   const target = scenario.target; const state = cluster(input, target); const summary = getRolloutSummary(input, target)
-  let run = input; let passed = false; let reason = ''; let proof = {}
+  const earned = recordFor(input, scenarioId)
+  const preserveEarned = () => ({ run: input, diagnostics: [], lines: [{ kind: 'out', text: 'Historical release milestone already recorded.' }] })
+  if (earned && (scenarioId !== 'failed-revision' || earned.measurements.diagnosis?.experimentId === state.rollouts.experiment?.id)) return preserveEarned()
+  let run = input; let passed = false; let reason = ''; let proof = {}; let diagnosis = null
   if (['baseline-v1', 'published-v2'].includes(scenarioId)) {
     const service = state.resources[`Service/${target.namespace}/${target.serviceName}`]
     const info = routeServiceRequest(run, { origin: { kind: 'external', clusterId: target.clusterId },
@@ -83,15 +101,32 @@ export function recordReleaseMilestone(input, lab, scenarioId) {
       && e?.scenarioId === scenario.experimentScenarioId && e?.incidentSeen && e?.deadlineSeen && incident?.deadline
       && incident.reasons.includes('readiness') && e.samples.some(sample => sample.status === 200 && sample.release === '2.0'
         && sample.rollout.currentRevision === incident.revision && !sample.rollout.complete)
-    if (scenarioId === 'recovered-v2') passed &&= e.status === 'finished' && e.outcome === 'passed'
-      && e.samples.at(-1).rollout.complete && e.samples.at(-1).rollout.currentRevision > incident.revision
-      && e.samples.at(-1).backends.every(item => e.baseline.artifactIds.includes(item.artifactId))
-    proof = e ? { experimentId: e.id, incident, baselineRevision: e.baselineRevision, terminalRevision: e.samples.at(-1).rollout.currentRevision, outcome: e.outcome ?? null } : {}
-    reason = scenarioId === 'failed-revision' ? 'Observe the new revision readiness failures and ProgressDeadlineExceeded while old v2 serves.'
-      : 'Undo to retained healthy v2, wait for completion and ten stable seconds, then finish recover-v2.'
+    let diagnosisEvidence = null
+    if (scenarioId === 'failed-revision') {
+      const currentRsUid = state.rollouts.deployments[e?.deploymentUid]?.currentRsUid
+      passed &&= e.status === 'active' && summary?.currentRevision === incident.revision && !summary.complete
+        && summary.conditions.some(condition => condition.reason === 'ProgressDeadlineExceeded')
+        && getDeploymentPods(run, target.clusterId, target.namespace, target.deploymentName).some(pod => !pod.metadata.deletionTimestamp
+          && pod.metadata.ownerReferences?.some(owner => owner.uid === currentRsUid)
+          && incident.podUids.includes(pod.metadata.uid) && !pod.status.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'))
+      if (passed) diagnosis = { experimentId: e.id, experimentScenarioId: e.scenarioId, deploymentUid: e.deploymentUid,
+        incidentEpoch: e.incidentEpoch, atMs: run.runtime.simTimeMs, revision: summary.currentRevision, incident: structuredClone(incident) }
+      else if (earned) return preserveEarned()
+    } else {
+      diagnosisEvidence = e && Object.values(run.evidence.experimentsById).find(record => diagnosisMatches(record, e, target))
+      passed &&= e.status === 'finished' && e.outcome === 'passed' && !!diagnosisEvidence
+        && e.samples.at(-1).rollout.complete && e.samples.at(-1).rollout.currentRevision > incident.revision
+        && e.samples.at(-1).backends.every(item => e.baseline.artifactIds.includes(item.artifactId))
+    }
+    proof = e ? { experimentId: e.id, experimentScenarioId: e.scenarioId, incident, baselineRevision: e.baselineRevision,
+      terminalRevision: e.samples.at(-1).rollout.currentRevision, outcome: e.outcome ?? null,
+      startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs, diagnosisEvidenceId: diagnosisEvidence?.id ?? null } : {}
+    reason = scenarioId === 'failed-revision' ? 'Verify the diagnosis while recover-v2 is active and its current failed revision is still stalled.'
+      : 'Earn failed-revision diagnosis for this incident before undo, then finish and verify the matching recovery receipt.'
   }
   run = recordVerification(run, lab, task.id, { scenarioId, scenarioVersion: 1, outcome: passed ? 'passed' : 'failed', completed: !!passed,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs,
-    measurements: { attemptId: run.attemptId, clusterId: target.clusterId, namespace: target.namespace, identity: identity(run, target, scenarioId), proof, reason } })
+    measurements: { attemptId: run.attemptId, clusterId: target.clusterId, namespace: target.namespace,
+      identity: earned?.measurements.identity ?? identity(run, target, scenarioId), proof: earned?.measurements.proof ?? proof, diagnosis, reason } })
   return { run, diagnostics: [], lines: [{ kind: 'out', text: passed ? 'Release milestone observed and recorded.' : reason }] }
 }
