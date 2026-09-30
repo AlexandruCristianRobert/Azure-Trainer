@@ -25,6 +25,7 @@ import { evaluateLab } from './evaluate.js'
 import { MAX_SOURCE_SAVES, sourceTextHash } from './sourceJournal.js'
 import { emptyClusterState, validateKubernetesRuntime } from '../kubernetes/state.js'
 import { applyAksAction } from '../kubernetes/actions.js'
+import { applyDataAction } from '../kubernetes/data-actions.js'
 import { observeReleaseTimestamp, cancelChangedReleaseExperiments, activeRelease, cancelReleaseExperiment } from '../kubernetes/release-experiments.js'
 import { refreshReleaseProofs } from '../kubernetes/release-evidence.js'
 import { refreshKubernetesDependencies } from '../kubernetes/evidence.js'
@@ -587,6 +588,13 @@ export function applyRunAction(run, action, lab) {
     if (lab.capabilities?.kubernetesRollouts) aks.run = refreshReleaseProofs(aks.run, lab)
     const refreshed = finalizeAksVerification(run, refreshKubernetesDependencies(run, aks.run, lab), lab)
     const result = { ...aks, run: refreshed }
+    validateBehavioralRun(result.run, lab)
+    return result
+  }
+  if (action.type === 'data-request' || action.type === 'data-worker') {
+    const data = applyDataAction(run, action, lab)
+    const refreshed = refreshKubernetesDependencies(run, data.run, lab)
+    const result = { ...data, run: refreshed }
     validateBehavioralRun(result.run, lab)
     return result
   }

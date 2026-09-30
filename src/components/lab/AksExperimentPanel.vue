@@ -256,6 +256,27 @@ async function introduceIntegrationIncident() {
     statusMessage.value = error.value ? 'The assistant incident did not advance.' : 'The next assistant incident is ready.'
   } catch (reason) { error.value = reason.message; statusMessage.value = 'The assistant incident did not advance.' }
 }
+const dataCosmosCapable = computed(() => run.lab?.capabilities?.dataCosmos === true)
+const dataScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'data-request' || scenario.kind === 'data-worker'))
+const dataChoice = ref('')
+watch(dataScenarios, values => { if (!values.some(([id]) => id === dataChoice.value)) dataChoice.value = values[0]?.[0] ?? '' }, { immediate: true })
+const dataTask = computed(() => run.lab?.tasks?.find(task => task.verification?.scenarioId === dataChoice.value))
+const dataEvidence = computed(() => {
+  const id = dataTask.value && run.behavioralRun?.evidence.currentEvidenceByTask[dataTask.value.id]
+  return id ? run.behavioralRun.evidence.experimentsById[id] : null
+})
+async function sendData(scenarioId = dataChoice.value) {
+  const scenario = run.lab?.scenarios?.[scenarioId]
+  if (!scenario) return
+  dataChoice.value = scenarioId
+  error.value = ''
+  statusMessage.value = 'Sending the declared simulated data request.'
+  try {
+    const result = await run.dispatchBehavioral({ type: scenario.kind, scenarioId })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+    statusMessage.value = error.value ? 'Request finished with a diagnostic.' : 'Simulated data request completed.'
+  } catch (reason) { error.value = reason.message; statusMessage.value = 'Simulated data request failed.' }
+}
 async function copyLogCommand(command) {
   try { await navigator.clipboard.writeText(command); statusMessage.value = 'Supported log command copied.' }
   catch { statusMessage.value = 'Select and copy the displayed log command.' }
@@ -386,7 +407,28 @@ async function copyLogCommand(command) {
       <p>Current phase: {{ integrationIncident.phase }}. {{ integrationIncidentMessage }}</p>
       <button type="button" class="btn" :disabled="locked || integrationIncident.phase === 'retry'" @click="introduceIntegrationIncident">Introduce next assistant fault</button>
     </section>
-    <p v-if="!scenarios.length && !probeScenarios.length && !resourceScenarios.length && !releaseScenarios.length && !releaseFinalScenarios.length && !releaseMilestones.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
+    <section v-if="dataCosmosCapable" class="aks-probe-controls" aria-label="Cosmos DB experiment controls">
+      <h3>Cosmos DB requests</h3>
+      <p>Requests run against the captured assistant-api/feedback-worker image. RU charges are simulated estimates.</p>
+      <div v-if="dataScenarios.length" class="experiment-tool__controls">
+        <label>Declared verification<select v-model="dataChoice" :disabled="locked"><option v-for="[id] in dataScenarios" :key="id" :value="id">{{ id }}</option></select></label>
+        <button class="btn btn--primary" type="button" :disabled="locked || !dataChoice" @click="sendData()">Send simulated request</button>
+      </div>
+      <p v-else class="experiment-tool__empty">This Lab has no declared Cosmos DB verification scenarios.</p>
+      <section class="experiment-tool__response">
+        <h3>Latest Cosmos DB result</h3>
+        <p v-if="!dataEvidence">No request has been recorded for this declared verification.</p>
+        <template v-else>
+          <strong>HTTP {{ dataEvidence.measurements.status }}</strong>
+          <p>RU charge per call <small>(Simulated estimate — not an Azure guarantee.)</small></p>
+          <ul><li v-for="(call, index) in dataEvidence.measurements.calls" :key="index">{{ call.call }} on {{ call.container }}: {{ call.charge }} RU{{ call.stale ? ' (stale)' : '' }}</li></ul>
+          <p>Total charge: {{ dataEvidence.measurements.totalCharge }} RU <small>(Simulated estimate — not an Azure guarantee.)</small></p>
+          <p>Stale: {{ dataEvidence.measurements.stale ? 'Yes' : 'No' }}</p>
+          <pre>{{ JSON.stringify(dataEvidence.measurements.value, null, 2) }}</pre>
+        </template>
+      </section>
+    </section>
+    <p v-if="!scenarios.length && !probeScenarios.length && !resourceScenarios.length && !releaseScenarios.length && !releaseFinalScenarios.length && !releaseMilestones.length && !dataScenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="statusMessage" role="status" aria-live="polite">{{ statusMessage }}</p>
     <section class="experiment-tool__response"><h3>Latest result</h3><p v-if="!latestEvidence">No request has been recorded for this declared verification.</p><template v-else><p v-if="latestEvidence.measurements?.transport">Transport: {{ latestEvidence.measurements.transport.ok ? 'Succeeded' : `Failed (${latestEvidence.measurements.transport.reason})` }}</p><strong v-if="latestEvidence.measurements?.status != null">HTTP {{ latestEvidence.measurements?.status }}</strong><p v-else>No HTTP response was received.</p><p v-if="latestEvidence.measurements?.diagnosticCode" role="status">Diagnostic: {{ latestEvidence.measurements.diagnosticCode }}</p><pre>{{ JSON.stringify(latestEvidence.measurements?.body, null, 2) }}</pre><p>Evidence: {{ latestEvidence.id }} · {{ latestEvidence.outcome }}</p><template v-if="latestEvidence.measurements?.dependencyTrace?.length"><h4>Redacted operation trace</h4><pre>{{ JSON.stringify(latestEvidence.measurements.dependencyTrace, null, 2) }}</pre></template></template></section>

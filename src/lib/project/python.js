@@ -3,6 +3,7 @@ import { parsePythonIntegration } from './python-integration.js'
 import { parsePythonHealth } from './python-health.js'
 import { parsePythonWorkload } from './python-workload.js'
 import { parsePythonDiagnostics, diagnosticsCoreFiles } from './python-diagnostics.js'
+import { parseDataApp } from '../data/python-sdk.js'
 
 const diag = (code, message, path = 'app.py', text = '', from = 0) => {
   const prefix = text.slice(0, from)
@@ -137,6 +138,7 @@ function parseAssistantProject(files, manifest, text, tree) {
     assistant: { adapter: 'knowledge-fixture-v1', settingsFunction: 'settings', helperValid: true } }, diagnostics: [] }
 }
 export function parsePythonProject(files, manifest = {}) {
+  if (manifest.dataApp) return parseDataApp(files, manifest)
   if (manifest.integration) {
     const logging = parsePythonDiagnostics(files, manifest)
     if (logging.diagnostics.length) return { appSpec: null, diagnostics: logging.diagnostics }

@@ -61,13 +61,16 @@ function configurationReference(value, root, kind) {
   return null
 }
 
-function validateContainer(container, root, configuration, probes, resources) {
-  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env', ...(configuration ? ['volumeMounts'] : []), ...(probes ? ['startupProbe', 'readinessProbe', 'livenessProbe'] : []), ...(resources ? ['resources'] : [])]), root)
+function validateContainer(container, root, configuration, probes, resources, dataCosmos) {
+  let issue = allowed(container, new Set(['name', 'image', 'imagePullPolicy', 'ports', 'env', ...(configuration ? ['volumeMounts'] : []), ...(probes ? ['startupProbe', 'readinessProbe', 'livenessProbe'] : []), ...(resources ? ['resources'] : []), ...(dataCosmos ? ['command'] : [])]), root)
   if (issue) return issue
   issue = named(container?.name, root, 'container name')
   if (issue) return issue
   if (typeof container.image !== 'string' || !container.image.includes(':')) return diag('INVALID_IMAGE', container?.image, root, 'A tagged container image is required.')
   if (container.imagePullPolicy !== 'Always') return diag('INVALID_IMAGE_PULL_POLICY', container?.imagePullPolicy, root, 'imagePullPolicy must be Always.')
+  if (dataCosmos && container.command !== undefined && (!Array.isArray(container.command) || !container.command.length || container.command.length > 5 || container.command.some(item => typeof item !== 'string' || !item))) {
+    return diag('INVALID_CONTAINER_COMMAND', 'command', root, 'command must be a non-empty list of non-empty strings.')
+  }
   if (!Array.isArray(container.ports) || container.ports.length !== 1) return diag('INVALID_CONTAINER_PORTS', 'ports', root, 'Exactly one container port is required.')
   const port = container.ports[0]
   issue = allowed(port, new Set(['name', 'containerPort']), root)
@@ -118,7 +121,7 @@ function validateContainer(container, root, configuration, probes, resources) {
   return null
 }
 
-function validateDeployment(value, root, configuration, probes, resources, rollouts) {
+function validateDeployment(value, root, configuration, probes, resources, rollouts, dataCosmos) {
   let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template', ...(rollouts ? ['strategy', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit'] : [])]), root)
   if (issue) return issue
   if ((!resources && value.spec?.replicas === undefined) || (value.spec?.replicas !== undefined && (!Number.isInteger(value.spec.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)))) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
@@ -136,7 +139,7 @@ function validateDeployment(value, root, configuration, probes, resources, rollo
   if (issue || !Array.isArray(value.spec.template.spec?.containers) || value.spec.template.spec.containers.length !== 1) return issue ?? diag('INVALID_CONTAINERS', 'containers', root, 'Exactly one container is required.')
   if (probes && value.spec.template.spec.terminationGracePeriodSeconds !== undefined && (!Number.isInteger(value.spec.template.spec.terminationGracePeriodSeconds) || value.spec.template.spec.terminationGracePeriodSeconds < 1 || value.spec.template.spec.terminationGracePeriodSeconds > 30)) return diag('INVALID_TERMINATION_GRACE_PERIOD', value.spec.template.spec.terminationGracePeriodSeconds, root, 'terminationGracePeriodSeconds must be an integer from 1 to 30.')
   if (probes && value.spec.template.spec.restartPolicy !== undefined && value.spec.template.spec.restartPolicy !== 'Always') return diag('INVALID_RESTART_POLICY', value.spec.template.spec.restartPolicy, root, 'Deployment restartPolicy must be Always.')
-  issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes, resources)
+  issue = validateContainer(value.spec.template.spec.containers[0], root, configuration, probes, resources, dataCosmos)
   if (issue) return issue
   if (rollouts) {
     const strategy = Object.hasOwn(value.spec, 'strategy') ? value.spec.strategy : {}
@@ -209,6 +212,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   const probes = capabilities.kubernetesProbes === true
   const resources = capabilities.kubernetesResources === true
   const rollouts = capabilities.kubernetesRollouts === true
+  const dataCosmos = capabilities.dataCosmos === true
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
@@ -225,7 +229,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   } else if (input.kind === 'ConfigMap') { if (input.spec !== undefined || input.type !== undefined || input.stringData !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateConfigMap(input, root) }
   else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
-  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts)
+  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts, dataCosmos)
   else if (input.kind === 'HorizontalPodAutoscaler') {
     if (rollouts && capabilities.aksCapstoneHpa !== true) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root, 'HPA creation requires the active capstone resilience checkpoint and a settled deployment; release Labs use fixed replicas.')] }
     if (!resources) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }
