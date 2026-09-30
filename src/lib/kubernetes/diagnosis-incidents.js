@@ -226,14 +226,16 @@ function declaredInitialUnready(run, scenario, lab) {
       && state.podSnapshots?.[pod.metadata.uid]?.environment?.AUDIENCE === 'partner')
 }
 function stage(run, scenario, phase, lab) {
-  if (!draftsAgree(run) || !phase.edits.every(edit => run.project.savedFiles[edit.path] === edit.before)) return reject(run, 'Save all drafts and restore the declared fixture preconditions before introducing this phase.')
+  if (!draftsAgree(run) || !phase.edits.every(edit => run.project.savedFiles[edit.path] === edit.before
+    || lab.capabilities?.aksCapstone === true && /^k8s\/service-(internal|external)\.yaml$/.test(edit.path)
+      && run.project.savedFiles[edit.path] === edit.before.replace('targetPort: http', 'targetPort: 8080'))) return reject(run, 'Save all drafts and restore the declared fixture preconditions before introducing this phase.')
   let candidate = clone(run); const lines = [{ kind: 'out', text: `Diagnosis investigation: ${scenario.investigationArea}` }]
   try {
     for (const edit of phase.edits) {
       const saved = applyRunAction(candidate, { type: 'save-file', path: edit.path, text: edit.after }, lab)
       if (saved.diagnostics.length) return reject(run, 'The declared fixture file could not be saved.')
       candidate = saved.run
-      lines.push({ kind: 'out', text: `Saved declared diagnosis edit: ${edit.path}`, change: { path: edit.path, before: redactRequestValue(edit.before, stateFor(run, scenario.target)), after: redactRequestValue(edit.after, stateFor(candidate, scenario.target)) } })
+      lines.push({ kind: 'out', text: `Saved declared diagnosis edit: ${edit.path}`, change: { path: edit.path, before: redactRequestValue(run.project.savedFiles[edit.path], stateFor(run, scenario.target)), after: redactRequestValue(edit.after, stateFor(candidate, scenario.target)) } })
     }
     for (const command of phase.commands) {
       const applied = applyRunAction(candidate, { type: 'command', line: command }, lab)
@@ -388,7 +390,20 @@ function healthyBaselineObjects(lab, scenario) {
 }
 function baselineObjectCoordinates(run, lab, scenario) {
   const objects = fixtureObjects(lab, scenario), declared = healthyBaselineObjects(lab, scenario)
-  const actual = fixtureObjects({ initialProjectFiles: run.project.savedFiles }, { phases: [] })
+  const actual = clone(fixtureObjects({ initialProjectFiles: run.project.savedFiles }, { phases: [] }))
+  if (lab.capabilities?.aksCapstone === true) {
+    // Only the two supported aliases are normalized. The complete remaining
+    // fixture shape and source-backed deployed publication must still match.
+    const publication = lab.aksCapstone.currentV2Publication(run)
+    if (!publication) return null
+    for (const object of actual) {
+      if (object.kind === 'Deployment') {
+        if (object.spec.template.spec.containers[0].image !== publication.image) return null
+        object.spec.template.spec.containers[0].image = declared.find(item => item.kind === 'Deployment').spec.template.spec.containers[0].image
+      }
+      if (object.kind === 'Service' && object.spec.ports[0].targetPort === 8080) object.spec.ports[0].targetPort = 'http'
+    }
+  }
   if (!same(actual, declared)) return null
   const coordinates = actual.map(object => objects.findIndex(candidate => same(candidate, object)))
   return coordinates.every(index => index >= 0) ? coordinates : null
@@ -443,7 +458,10 @@ function capsuleCoordinates(run, target, capsule, scenario, lab) {
   const pod = Object.values(state.resources).find(object => object.kind === 'Pod' && object.metadata.uid === capsule.podUid)
   if (!snapshot || !pod) return null
   const deployment = objects.findIndex(object => object.kind === 'Deployment' && object.metadata.namespace === target.namespace && object.metadata.name === target.deploymentName
-    && object.spec.template.spec.containers[0].image === pod.spec.containers[0].image
+    && (object.spec.template.spec.containers[0].image === pod.spec.containers[0].image
+      || lab.capabilities?.aksCapstone === true && lab.aksCapstone.matchesV2Artifact(run.artifacts.buildsById[snapshot.artifactId])
+        && run.artifacts.publishedTags[pod.spec.containers[0].image] === snapshot.artifactId
+        && run.artifacts.buildsById[snapshot.artifactId].sourceHash === projectSourceHash(selectBuildFiles(run.project.savedFiles, getProjectManifest(run.project.manifestId))))
     && same(podConfigurationShape(object.spec.template.spec), podConfigurationShape(pod.spec)))
   if (deployment < 0) return null
   const configs = []
@@ -617,7 +635,7 @@ export function validDurableDiagnosisEvidence(evidence, proof, run, lab) {
     || provenance.declarationHash !== diagnosisDigest({ scenario: request, incident: scenario, files: lab.aksCapstone.incidentFiles })
     || !lab.tasks.some(task => task.stageId === 'incident' && task.id === evidence.taskId && task.verification.scenarioId === evidence.scenarioId)) return false
   const measurements = evidence.measurements, artifact = run.artifacts.buildsById[anchor.geometry?.artifactId]
-  if (!artifact || artifact.appSpec?.version !== '2.0' || artifact.sourceHash !== anchor.sourceHash || !run.artifacts.sourceSnapshotsByHash[anchor.sourceHash]
+  if (!lab.aksCapstone.matchesV2Artifact(artifact) || artifact.sourceHash !== anchor.sourceHash || !run.artifacts.sourceSnapshotsByHash[anchor.sourceHash]
     || !exact(anchor.geometry, ['podUid', 'containerId', 'artifactId']) || !/^kube-[1-9]\d*$/.test(anchor.geometry.podUid)
     || !/^container-[1-9]\d*$/.test(anchor.geometry.containerId) || Number(anchor.geometry.podUid.slice(5)) >= evidence.sequence - 1
     || Number(anchor.geometry.containerId.slice(10)) >= evidence.sequence - 1 || !measurements.selectedPods?.some(pod => pod.uid === anchor.geometry.podUid)

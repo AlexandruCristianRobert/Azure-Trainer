@@ -58,6 +58,7 @@ const contains = (live, desired) => desired === null || typeof desired !== 'obje
 export function releaseBaselineReady(run) {
   const live = capstoneLive(run)
   if (!live.sourceBuilt || !live.configured || !live.routed || activeAksExperiment(run)
+    || !verifyCapstoneSource(run.project.savedFiles, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).passed
     || !getRolloutSummary(run, CAPSTONE_TARGET)?.complete
     || Object.values(live.state.resources).some(item => item.kind === 'HorizontalPodAutoscaler')
     || run.project.savedFiles['k8s/hpa.yaml']?.trim() !== CAPSTONE_HPA_DISABLED.trim()) return false

@@ -3,14 +3,14 @@ import { sourceTextHash, sourceVersionsAt } from '../../labEngine/sourceJournal.
 import { evaluateLab } from '../../labEngine/evaluate.js'
 import { activeAksExperiment } from './stages.js'
 import { aksResourceInventory, aksProtectedRefs, validateAksOwnership } from './ownership.js'
-import { stableAksCapstoneV2, stableAksCapstoneV2Dependencies, CAPSTONE_V2_IMAGE } from './incident.js'
+import { stableAksCapstoneV2, stableAksCapstoneV2Dependencies } from './incident.js'
 import { inspectDeploymentConsistency } from '../release-evidence.js'
 import { simulateKubernetesRequest } from '../requests.js'
 import { inspectRequestRecords } from '../request-records.js'
 import { resolveServiceDns } from '../connectivity.js'
 import { tokenize } from '../../az/tokenize.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
-import { CAPSTONE_TARGET } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_TARGET, capstonePublication } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 
 export const AKS_FINAL_TASKS = Object.freeze(['final-internal', 'final-external', 'final-invalid', 'final-no-match', 'final-timeout'])
@@ -40,7 +40,7 @@ export function aksFinalContractMatches(run) {
   const imageProofId = run.stages.sealedStages[1]?.evidenceIds.find(id => run.evidence.experimentsById[id]?.taskId === 'image-v1')
   const tuple = run.evidence.aksCapstoneReceipts[`aks-proof-${imageProofId}`]?.artifacts[0]
   const demonstrated = run.artifacts.buildsById[tuple?.buildId]?.appSpec
-  const current = run.artifacts.buildsById[run.artifacts.publishedTags[CAPSTONE_V2_IMAGE]]?.appSpec
+  const current = capstonePublication(run, '2.0', { deployed: true })?.build.appSpec
   return !!current && !!demonstrated && same(current.health, demonstrated.health) && same(current.workload, demonstrated.workload)
 }
 export function aksFinalReady(run, lab) {
@@ -218,7 +218,7 @@ export function verifyAksFinal(run, lab, scenarioId) {
   const completed = logs.some(log => log.requestId === requestId && log.podUid === measured.podUid && log.artifactId === measured.artifactId
     && log.sourceFields?.event === 'request.completed' && log.sourceFields.request_id === requestId && log.sourceFields.status === response.status
     && log.sourceBindings?.request_id === 'request-id' && log.sourceBindings.status === 'result-status')
-  const passed = response.outcome && measured.transport?.ok === true && measured.podUid && measured.artifactId === run.artifacts.publishedTags[CAPSTONE_V2_IMAGE]
+  const passed = response.outcome && measured.transport?.ok === true && measured.podUid && measured.artifactId === capstonePublication(run, '2.0', { deployed: true })?.buildId
     && started && completed && trace?.fixtureVersion === INTEGRATION_FIXTURES.version
     && (!dns || dns.ok && dns.serviceKey === 'Service/assistant/assistant-internal' && dns.address === stateFor(run).resources[dns.serviceKey].spec.clusterIP)
     && (id === 'final-invalid' ? operations.length === 0 && trace.inputDisposition === 'rejected'

@@ -4,7 +4,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { getAksCapstonePolicy } from '../src/lib/kubernetes/capstone/policy.js'
-import { CAPSTONE_TARGET } from '../src/data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_TARGET, capstoneLive } from '../src/data/labs/aks-journey/capstone-helpers.js'
 import { CAPSTONE_SOLUTION_FILES } from '../src/data/templates/aks-python/capstone.js'
 import { measuredMilestone, releaseBaselineReady } from '../src/lib/kubernetes/capstone/resilience.js'
 import { getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
@@ -40,6 +40,16 @@ describe('AKS capstone resilience', () => {
     expect(validateBehavioralRun(JSON.parse(JSON.stringify(next.run)), lab)).toEqual(next.run)
     expect(getAksCapstonePolicy(next.run, lab).allowHpa).toBe(false)
   })
+  it('rejects a rebuilt deployed workload regression at the current release handoff', () => {
+    let run = act(structuredClone(complete), save('app.py', complete.project.savedFiles['app.py'].replace('WORK_UNITS = 20', 'WORK_UNITS = 1')))
+    run = act(run, command('az acr build --registry acrakscapstone --image assistant:capstone-v1 .'))
+    run = act(run, command('kubectl rollout restart deployment/assistant-api -n assistant'))
+    run = act(run, { type: 'aks-advance', seconds: 45 })
+    expect(capstoneLive(run)).toMatchObject({ sourceBuilt: true, configured: true, routed: true })
+    expect(releaseBaselineReady(run)).toBe(false)
+    expect(verifyAksCapstone(run, lab, 'capstone-release-baseline').result.outcome).toBe('failed')
+    expect(applyRunAction(run, { type: 'aks-advance-stage' }, lab).diagnostics.length).toBeGreaterThan(0)
+  }, 60000)
   it('recreates exactly two age-zero Pods under the same ReplicaSet and measures all three probe criteria', () => {
     const before = pods(baseline), after = pods(coldStart)
     expect(after).toHaveLength(2)

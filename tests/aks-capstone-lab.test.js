@@ -80,10 +80,12 @@ describe('AKS capstone delivery', () => {
   })
 })
 
-it('accepts create-time ACR attachment and numeric Service targetPorts through deployment', () => {
+it('accepts alternative v1 tags, create-time ACR attachment and numeric Service targetPorts through deployment', () => {
   const { lab, run: provision } = seedAksProductionAt('provision')
   let run = provision
   const act = action => {
+    if (action.type === 'command') action.line = action.line.replaceAll('capstone-v1', 'learner-v1')
+    if (action.type === 'save-file') action.text = action.text.replaceAll('capstone-v1', 'learner-v1')
     const result = applyRunAction(run, action, lab)
     expect(result.diagnostics).toEqual([])
     expect(result.lines.filter(line => line.kind === 'err')).toEqual([])

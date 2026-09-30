@@ -1,11 +1,11 @@
 import { CAPSTONE_FILES, CAPSTONE_MANIFEST, CAPSTONE_SOLUTION_FILES } from '../../templates/aks-python/capstone.js'
 import { CAPSTONE_CLUSTER_ID, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, CAPSTONE_IMAGE,
-  capstoneLive, capstoneCommand as command, capstoneFile as file, capstoneVerify as verify,
+  capstoneLive, capstonePublication, capstoneArtifactMatches, capstoneCommand as command, capstoneFile as file, capstoneVerify as verify,
   capstoneSolution as solution, capstoneAdvance as advance } from './capstone-helpers.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { HEALTH_FIXTURES } from '../../fixtures/aks/health.js'
 import { CAPSTONE_HPA_DISABLED, measuredMilestone, milestoneDependencies, releaseBaselineReady } from '../../../lib/kubernetes/capstone/resilience.js'
-import { CAPSTONE_INCIDENT_FILES, CAPSTONE_INCIDENT_ID, CAPSTONE_RELEASE_REQUIREMENTS, CAPSTONE_V2_IMAGE,
+import { CAPSTONE_INCIDENT_FILES, CAPSTONE_INCIDENT_ID, CAPSTONE_RELEASE_REQUIREMENTS,
   publishedAksCapstoneV2, stableAksCapstoneV2, stableAksCapstoneV2Dependencies, capstoneReleaseProof, capstoneReleaseDependencies,
   capstoneIncidentIdentity, validateCapstoneReleaseStart, validateCapstoneReleaseFinish, validateAksCapstoneDiagnosis } from '../../../lib/kubernetes/capstone/incident.js'
 import { aksFinalReady, aksFinalDependencyHash, aksCleanupEligibility, validateAksCleanupCheckpoint,
@@ -37,7 +37,7 @@ const live = run => capstoneLive(run)
 const group = run => !!live(run).group && !!live(run).registry
 const image = run => !!live(run).build && live(run).build.sourceHash === sourceHash(run)
   && live(run).build.image?.loginServer === CAPSTONE_IMAGE.split('/')[0]
-  && live(run).build.image?.repository === 'assistant' && live(run).build.image?.tag === 'capstone-v1'
+  && live(run).build.image?.repository === 'assistant'
   && live(run).build.appSpec?.version === '1.0'
 const connected = run => live(run).clusterReady && !!live(run).grant && live(run).context?.clusterId === CAPSTONE_CLUSTER_ID
 const configured = run => !!live(run).namespace && !!live(run).config && !!live(run).secret
@@ -45,9 +45,9 @@ const configured = run => !!live(run).namespace && !!live(run).config && !!live(
 const deployed = run => configured(run) && connected(run) && live(run).sourceBuilt && live(run).currentPods
 const routed = run => deployed(run) && live(run).routed
 const sourceVersions = { 'capstone-source': run => Object.fromEntries(CAPSTONE_MANIFEST.buildFiles.map(path => [path, run.project.fileVersions[path] ?? 0])) }
-const published = { 'capstone-published': run => ({ image: CAPSTONE_IMAGE,
-  buildId: run.artifacts.publishedTags[CAPSTONE_IMAGE] ?? null,
-  sourceHash: run.artifacts.buildsById[run.artifacts.publishedTags[CAPSTONE_IMAGE]]?.sourceHash ?? null }) }
+const published = { 'capstone-published': run => ({ image: capstonePublication(run, '1.0')?.image ?? null,
+  buildId: capstonePublication(run, '1.0')?.buildId ?? null,
+  sourceHash: capstonePublication(run, '1.0')?.sourceHash ?? null }) }
 const infrastructure = { 'capstone-infra': run => ({ groupId: live(run).group?.id ?? null,
   registryId: live(run).registry?.id ?? null, clusterId: live(run).cluster?.id ?? null,
   grant: !!live(run).grant, context: run.runtime.kubernetes.currentContext }) }
@@ -77,7 +77,7 @@ const authored = {
   'image-v1': {
     text: 'Build assistant:capstone-v1 in the registry from the saved v1 application and SQL.', check: image,
     dependencies: { ...sourceVersions, ...published },
-    hints: ['Save the source before building; ACR captures saved files.', 'Use the capstone-v1 tag in acrakscapstone.'],
+    hints: ['Save the source before building; ACR captures saved files.', 'Use, for example, the capstone-v1 tag in acrakscapstone; other supported version tags are accepted.'],
     solution: solution(command('az acr build --registry acrakscapstone --image assistant:capstone-v1 .'), verify('image-v1')),
     examNote: 'A published tag is a build artifact; it is not evidence of a running Pod.',
   },
@@ -176,8 +176,8 @@ const currentTask = (run, id) => run.evidence.experimentsById[run.evidence.curre
 const incidentHistory = { 'capstone-incident': capstoneIncidentIdentity }
 authored['published-v2'] = {
   text: 'Set SERVICE_VERSION to 2.0, include release from that binding in successful answers, and publish assistant:capstone-v2 from saved source.',
-  check: publishedAksCapstoneV2, aksHistorical: true, dependencies: { ...sourceVersions, 'capstone-v2-artifact': run => run.artifacts.publishedTags[CAPSTONE_V2_IMAGE] ?? null },
-  hints: ['Keep the complete AI, SQL, health, logging and work behavior while updating the successful answer formatter.', 'Save app.py and build a distinct capstone-v2 tag; publishing alone does not update Pods.'],
+  check: publishedAksCapstoneV2, aksHistorical: true, dependencies: { ...sourceVersions, 'capstone-v2-artifact': run => capstonePublication(run, '2.0')?.buildId ?? null },
+  hints: ['Keep the complete AI, SQL, health, logging and work behavior while updating the successful answer formatter.', 'Save app.py and build a distinct tag, for example capstone-v2; publishing alone does not update Pods.'],
   solution: solution(file('app.py', 'v2'), command('az acr build --registry acrakscapstone --image assistant:capstone-v2 .'), verify('published-v2')),
   examNote: 'An image publication proves a source snapshot, not rollout completion or service availability.',
 }
@@ -316,6 +316,8 @@ export const aksCapstoneLab = {
     kubernetesRollouts: true, kubernetesDiagnostics: true, aksCapstone: true, acrBuild: true },
   stages, tasks, scenarios, releaseRequirements: CAPSTONE_RELEASE_REQUIREMENTS,
   aksCapstone: { incidentFiles: CAPSTONE_INCIDENT_FILES,
+    currentV2Publication: run => capstonePublication(run, '2.0', { deployed: true }),
+    matchesV2Artifact: artifact => capstoneArtifactMatches(artifact, '2.0'),
     cleanupEligibility: run => aksCleanupEligibility(run, aksCapstoneLab),
     validateCleanupCheckpoint: validateAksCleanupCheckpoint,
     cleanupReady: run => aksCleanupReady(run, aksCapstoneLab),

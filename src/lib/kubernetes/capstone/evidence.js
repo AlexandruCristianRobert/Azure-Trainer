@@ -5,15 +5,15 @@ import { resolveServiceDns } from '../connectivity.js'
 import { inspectRequestRecords } from '../request-records.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { CAPSTONE_MANIFEST } from '../../../data/templates/aks-python/capstone.js'
-import { CAPSTONE_IMAGE, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, capstoneLive } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_IMAGE, CAPSTONE_TARGET, CAPSTONE_EXTERNAL, capstoneLive, capstonePublication } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { RESILIENCE_MILESTONES, measuredMilestone, releaseBaselineReady } from './resilience.js'
-import { publishedAksCapstoneV2, capstoneReleaseProof, verifyAksCapstoneIncident, CAPSTONE_V2_IMAGE } from './incident.js'
+import { publishedAksCapstoneV2, capstoneReleaseProof, verifyAksCapstoneIncident } from './incident.js'
 
 const checks = {
   'registry-created': live => !!live.group && !!live.registry,
   'image-v1': live => !!live.build && live.build.sourceHash === live.sourceHash
     && live.build.image?.loginServer === `${CAPSTONE_IMAGE.split('/')[0]}`
-    && live.build.image?.repository === 'assistant' && live.build.image?.tag === 'capstone-v1'
+    && live.build.image?.repository === 'assistant'
     && live.build.appSpec?.version === '1.0',
   'cluster-connected': live => live.clusterReady && !!live.grant && live.context?.clusterId === CAPSTONE_TARGET.clusterId,
   'config-applied': live => !!live.namespace && !!live.config && !!live.secret && live.config.data?.APP_ENV === 'training'
@@ -36,7 +36,7 @@ export function verifyAksCapstone(run, lab, scenarioId) {
   if (task.stageId === 'final-cleanup') return verifyAksFinal(run, lab, scenarioId)
   if (task.stageId === 'incident') return verifyAksCapstoneIncident(run, lab, scenarioId)
   if (id === 'published-v2') return { run, result: result(publishedAksCapstoneV2(run), { kind: 'capstone-publication',
-    artifactId: run.artifacts.publishedTags[CAPSTONE_V2_IMAGE] ?? null, reason: 'Publish a distinct v2 artifact from the complete saved source.' }) }
+    artifactId: capstonePublication(run, '2.0')?.buildId ?? null, reason: 'Publish a distinct v2 artifact from the complete saved source.' }) }
   if (['release-v2', 'rollback-recovered'].includes(id)) {
     const measured = capstoneReleaseProof(run, id)
     return { run, result: result(!!measured, { kind: 'capstone-measured-release', receiptId: measured?.proof.id ?? null,
@@ -55,7 +55,7 @@ export function verifyAksCapstone(run, lab, scenarioId) {
       fixtureVersion: preview.measurements.fixtureVersion,
       cases: Object.fromEntries(Object.entries(preview.measurements.cases).map(([name, item]) =>
         [name, { status: item.status, sources: item.body?.sources ?? [], dependencyTrace: item.dependencyTrace }])),
-      health: Object.fromEntries(Object.entries(preview.measurements.health).map(([name, item]) => [name, item.status])),
+      health: Object.fromEntries(Object.entries(preview.measurements.health).filter(([, item]) => Number.isInteger(item.status)).map(([name, item]) => [name, item.status])),
       workload: preview.measurements.workload, diagnostics: preview.diagnostics }) }
   }
   const live = capstoneLive(run)

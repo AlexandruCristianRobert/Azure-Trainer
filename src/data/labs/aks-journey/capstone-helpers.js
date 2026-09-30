@@ -20,6 +20,30 @@ export const capstoneVerify = id => ({ kind: 'scenario', action: { type: 'aks-re
 export const capstoneAdvance = seconds => ({ kind: 'scenario', action: { type: 'aks-advance', seconds } })
 export const capstoneSolution = (...steps) => ({ steps })
 
+export function capstoneArtifactMatches(build, version) {
+  return !!build && build.image?.loginServer === `${CAPSTONE_REGISTRY}.azurecr.io`
+    && build.image.repository === 'assistant' && typeof build.image.tag === 'string'
+    && build.appSpec?.version === version
+}
+export function capstonePublication(run, version, { deployed = false } = {}) {
+  const desired = run.runtime.kubernetes.clusters[CAPSTONE_CLUSTER_ID]?.resources['Deployment/assistant/assistant-api']?.spec.template.spec.containers[0].image
+  const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, CAPSTONE_MANIFEST))
+  const references = deployed ? [desired] : [desired, ...Object.keys(run.artifacts.publishedTags).reverse()]
+  const v1EvidenceId = version === '2.0' && run.stages.sealedStages.find(stage => stage.stageId === 'provision')?.evidenceIds
+    .find(id => run.evidence.experimentsById[id]?.taskId === 'image-v1')
+  const v1Tuple = v1EvidenceId && run.evidence.aksCapstoneReceipts[`aks-proof-${v1EvidenceId}`]?.artifacts[0]
+  const v1 = v1Tuple && run.artifacts.buildsById[v1Tuple.buildId]
+  for (const image of references) {
+    const buildId = run.artifacts.publishedTags[image], build = run.artifacts.buildsById[buildId]
+    if (version === '2.0' && (!v1 || v1.sourceHash !== v1Tuple.sourceHash || v1.digest !== v1Tuple.digest
+      || build?.id === v1.id || build?.image?.tag === v1.image.tag || build?.digest === v1.digest || build?.sourceHash === v1.sourceHash)) continue
+    if (capstoneArtifactMatches(build, version) && build.sourceHash === sourceHash
+      && image === `${build.image.loginServer}/${build.image.repository}:${build.image.tag}`)
+      return { image, buildId, build, sourceHash }
+  }
+  return null
+}
+
 /** Current source and the image captured by each desired Pod must agree. */
 export function capstoneLive(run, { replicas = 2 } = {}) {
   const cluster = run.sandbox.aksClusters.find(item => item.id === CAPSTONE_CLUSTER_ID)
@@ -30,8 +54,8 @@ export function capstoneLive(run, { replicas = 2 } = {}) {
   const deployment = resources['Deployment/assistant/assistant-api']
   const container = deployment?.spec?.template?.spec?.containers?.[0]
   const image = container?.image
-  const buildId = run.artifacts.publishedTags[CAPSTONE_IMAGE]
-  const build = buildId && run.artifacts.buildsById[buildId]
+  const publication = capstonePublication(run, '1.0')
+  const buildId = publication?.buildId, build = publication?.build
   const sourceHash = projectSourceHash(selectBuildFiles(run.project.savedFiles, CAPSTONE_MANIFEST))
   const pods = state && getDeploymentPods(run, CAPSTONE_CLUSTER_ID, 'assistant', 'assistant-api') || []
   const grant = cluster && registry && run.sandbox.roleAssignments.some(item => item.scope?.toLowerCase() === registry.id.toLowerCase()
@@ -69,12 +93,12 @@ export function capstoneLive(run, { replicas = 2 } = {}) {
         && resources[`${ref.kind}/${ref.namespace}/${ref.name}`]?.metadata?.resourceVersion === ref.resourceVersion
         && (ref.kind === 'Secret' || snapshot.environment[key] === resources[`ConfigMap/${ref.namespace}/${ref.name}`]?.data?.[ref.key])))
   })
-  const serviceReady = service => service?.spec?.ports?.[0]?.port === 80 && service.spec.ports[0].targetPort === 'http'
+  const serviceReady = service => service?.spec?.ports?.[0]?.port === 80 && ['http', 8080].includes(service.spec.ports[0].targetPort)
     && service.spec.selector?.app === 'assistant'
   return { cluster, registry, context, state, deployment, buildId, build, sourceHash, pods,
     group: run.sandbox.resourceGroups.find(item => item.name === CAPSTONE_GROUP), grant, clusterReady, namespace, config, secret,
     internal, external, image, container, currentPods,
-    sourceBuilt: !!build && build.sourceHash === sourceHash && image === CAPSTONE_IMAGE,
+    sourceBuilt: !!build && build.sourceHash === sourceHash && image === publication.image,
     configured: !!config && !!secret && !!deployment && probes && sized && releasePolicy && currentPods,
     routed: currentPods && serviceReady(internal) && serviceReady(external) && external?.spec?.type === 'LoadBalancer'
       && !!external.status?.loadBalancer?.ingress?.[0]?.ip }

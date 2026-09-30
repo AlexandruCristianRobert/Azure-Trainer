@@ -5,7 +5,7 @@ import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { CAPSTONE_TARGET } from '../src/data/labs/aks-journey/capstone-helpers.js'
 import { CAPSTONE_SOLUTION_FILES } from '../src/data/templates/aks-python/capstone.js'
-import { startAksCapstoneIncident, stableAksCapstoneV2 } from '../src/lib/kubernetes/capstone/incident.js'
+import { startAksCapstoneIncident, stableAksCapstoneV2, publishedAksCapstoneV2 } from '../src/lib/kubernetes/capstone/incident.js'
 
 const state = run => run.runtime.kubernetes.clusters[CAPSTONE_TARGET.clusterId]
 const command = line => ({ type: 'command', line })
@@ -41,6 +41,34 @@ describe('AKS capstone release and incident', () => {
     expect(reload(recovered)).toEqual(recovered)
     expect(evaluateLab(lab, recovered).isComplete).toBe(false)
     expect(recovered.stages.sealedStages[5]).toEqual(incident.stages.sealedStages[5])
+  })
+  it('accepts an alternative source-backed v2 tag and numeric ports through native incident capture', () => {
+    let run = act(structuredClone(beforeInjection), command('az acr build --registry acrakscapstone --image assistant:learner-v2 .'))
+    run = act(run, save('k8s/deployment.yaml', run.project.savedFiles['k8s/deployment.yaml'].replace('capstone-v2', 'learner-v2')))
+    run = act(run, command('kubectl apply -f k8s/deployment.yaml'))
+    for (const path of ['k8s/service-internal.yaml', 'k8s/service-external.yaml']) {
+      run = act(run, save(path, run.project.savedFiles[path].replace('targetPort: http', 'targetPort: 8080')))
+      run = act(run, command(`kubectl apply -f ${path}`))
+    }
+    run = act(run, { type: 'aks-advance', seconds: 45 })
+    expect(stableAksCapstoneV2(run, lab)).toBe(true)
+    run = act(run, { type: 'aks-capstone-incident' })
+    run = act(run, { type: 'aks-advance', seconds: 90 })
+    run = act(run, verify('fault-route'))
+    expect(run.evidence.experimentsById[run.evidence.currentEvidenceByTask['fault-route']].measurements.diagnosisCapture).toBeDefined()
+    expect(reload(run)).toEqual(run)
+  }, 90000)
+  it('requires a distinct v2 tag and current saved source rather than a matching tag name', () => {
+    let run = act(structuredClone(baseline), save('app.py', CAPSTONE_SOLUTION_FILES.v2['app.py']))
+    run = act(run, command('az acr build --registry acrakscapstone --image assistant:capstone-v1 .'))
+    expect(publishedAksCapstoneV2(run)).toBe(false)
+    run = act(run, command('az acr build --registry acrakscapstone --image assistant:learner-v2 .'))
+    expect(publishedAksCapstoneV2(run)).toBe(true)
+    run = act(run, save('app.py', run.project.savedFiles['app.py'] + '\n# unpublished source\n'))
+    expect(publishedAksCapstoneV2(run)).toBe(false)
+    run = act(run, save('app.py', run.project.savedFiles['app.py'].replace('WORK_UNITS = 20', 'WORK_UNITS = 1')))
+    run = act(run, command('az acr build --registry acrakscapstone --image assistant:learner-v2 .'))
+    expect(publishedAksCapstoneV2(run)).toBe(false)
   })
   it('injects both declared faults atomically, captures the endpoint and repeats idempotently', () => {
     expect(state(injected).resources['Service/assistant/assistant-internal'].spec.ports[0].targetPort).toBe(8081)

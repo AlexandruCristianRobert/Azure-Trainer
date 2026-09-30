@@ -1,4 +1,4 @@
-import { CAPSTONE_TARGET, CAPSTONE_IMAGE, CAPSTONE_HPA_DISABLED } from '../../../data/labs/aks-journey/capstone-helpers.js'
+import { CAPSTONE_TARGET, CAPSTONE_IMAGE, CAPSTONE_HPA_DISABLED, capstonePublication } from '../../../data/labs/aks-journey/capstone-helpers.js'
 import { CAPSTONE_MANIFEST, CAPSTONE_SOLUTION_FILES } from '../../../data/templates/aks-python/capstone.js'
 import { INTEGRATION_FIXTURES } from '../../../data/fixtures/aks/integration.js'
 import { projectSourceHash, selectBuildFiles } from '../../project/build.js'
@@ -22,9 +22,14 @@ const stateFor = run => run.runtime.kubernetes.clusters[CAPSTONE_TARGET.clusterI
 const error = message => ({ code: 'AKS_CAPSTONE_INCIDENT', message })
 
 export function publishedAksCapstoneV2(run) {
-  const id = run.artifacts.publishedTags[CAPSTONE_V2_IMAGE], artifact = run.artifacts.buildsById[id]
-  const v1 = run.artifacts.buildsById[run.artifacts.publishedTags[CAPSTONE_IMAGE]]
+  const artifact = capstonePublication(run, '2.0')?.build
+  const evidenceId = run.stages.sealedStages.find(stage => stage.stageId === 'provision')?.evidenceIds
+    .find(id => run.evidence.experimentsById[id]?.taskId === 'image-v1')
+  const tuple = run.evidence.aksCapstoneReceipts[`aks-proof-${evidenceId}`]?.artifacts[0]
+  const v1 = run.artifacts.buildsById[tuple?.buildId]
   return !!artifact && !!v1 && artifact.id !== v1.id && artifact.digest !== v1.digest && artifact.appSpec?.version === '2.0'
+    && v1.appSpec?.version === '1.0' && artifact.image.tag !== v1.image.tag && artifact.sourceHash !== v1.sourceHash
+    && v1.sourceHash === tuple.sourceHash && v1.digest === tuple.digest
     && artifact.sourceHash === projectSourceHash(selectBuildFiles(run.project.savedFiles, CAPSTONE_MANIFEST))
     && verifyCapstoneSource(run.project.savedFiles, CAPSTONE_MANIFEST, INTEGRATION_FIXTURES).passed
 }
@@ -33,7 +38,7 @@ export function publishedAksCapstoneV2(run) {
  * Final cleanup may additionally require the native reapply/restart witness. */
 export function stableAksCapstoneV2(run, lab, { requireRestart = false } = {}) {
   const state = stateFor(run), deployment = state?.resources['Deployment/assistant/assistant-api']
-  if (!deployment || !publishedAksCapstoneV2(run) || deployment.spec.template.spec.containers[0].image !== CAPSTONE_V2_IMAGE
+  if (!deployment || !publishedAksCapstoneV2(run) || !capstonePublication(run, '2.0', { deployed: true })
     || Object.values(state.resources).some(object => object.kind === 'HorizontalPodAutoscaler')
     || run.project.savedFiles['k8s/hpa.yaml']?.trim() !== CAPSTONE_HPA_DISABLED.trim()
     || !releasePolicyMeetsBrief(releasePolicy(run, CAPSTONE_TARGET), CAPSTONE_RELEASE_REQUIREMENTS)
@@ -145,7 +150,7 @@ export function verifyAksCapstoneIncident(run, lab, scenarioId) {
     const internal = simulateKubernetesRequest(run, { id: `${scenarioId}-internal`, target: CAPSTONE_TARGET, request: scenario.request, expected: scenario.expected })
     const measured = internal.measurements
     if (!dns.ok || dns.serviceKey !== 'Service/assistant/assistant-internal' || !internal.outcome
-      || measured.artifactId !== run.artifacts.publishedTags[CAPSTONE_V2_IMAGE]
+      || measured.artifactId !== capstonePublication(run, '2.0', { deployed: true })?.buildId
       || measured.dependencyTrace.map(item => `${item.operation}:${item.status}`).join() !== 'embedding:succeeded,postgres-query:succeeded,answer:succeeded'
       || measured.integrationTrace?.vectorProvenance !== 'embedding' || measured.integrationTrace?.sourceProvenance !== 'rows')
       return failed('Verify the repaired internal Service and full source-backed answer flow.')
