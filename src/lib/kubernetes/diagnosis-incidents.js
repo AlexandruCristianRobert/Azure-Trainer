@@ -8,6 +8,8 @@ import { inspectRequestRecords, redactRequestValue, requestDiagnosticsEnabled, v
 import { simulateIntegration } from './integration.js'
 import { INTEGRATION_FIXTURES } from '../../data/fixtures/aks/integration.js'
 import { validIntegrationTrace } from './state.js'
+import { validAksRequestScenario } from './actions.js'
+import { resolvePodConfiguration } from './configuration.js'
 
 const clone = value => structuredClone(value)
 const exact = (value, keys) => isPlainObject(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',')
@@ -22,7 +24,7 @@ const stableKeys = [...targetKeys, 'deploymentUid', 'serviceUid']
 const secretKey = /password|secret|token|credential|api.?key|connection/i
 function validRequestScenario(request, target, lab) {
   const allowed = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile']
-  if (!isPlainObject(request) || Object.keys(request).some(key => !allowed.includes(key)) || request.kind !== 'aks-request' || request.version !== 1 || !same(request.target, target)) return false
+  if (!validAksRequestScenario(request, lab) || !isPlainObject(request) || Object.keys(request).some(key => !allowed.includes(key)) || request.kind !== 'aks-request' || request.version !== 1 || !same(request.target, target)) return false
   const http = request.request, expected = request.expected, connectivity = request.connectivity
   if (!(exact(http, ['method', 'path']) && http.method === 'GET' && http.path === '/api/info'
     || exact(http, ['method', 'path', 'body']) && http.method === 'POST' && http.path === '/api/ask' && exact(http.body, ['question'])
@@ -198,6 +200,153 @@ function capsuleFor(run, target, request) {
   return redactRequestValue({ podUid, containerId, artifactId: snapshot.artifactId, environment, files, authProfile,
     ports: ports.map(port => ({ name: port.name ?? null, containerPort: port.containerPort })) }, state)
 }
+
+// These coordinates point into immutable Lab declarations, never saved caller
+// state. Decoded Secret values exist only in this temporary reconstruction.
+const declarationCache = new WeakMap()
+function fixtureObjects(lab, scenario) {
+  const signature = canonicalize({ files: lab.initialProjectFiles ?? {}, phases: scenario.phases })
+  const cached = declarationCache.get(lab)
+  if (cached?.signature === signature) return cached.objects
+  const files = Object.entries(lab.initialProjectFiles ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  for (const phase of scenario.phases) for (const edit of phase.edits) files.push([edit.path, edit.before], [edit.path, edit.after])
+  const objects = files.flatMap(([path, source]) => /^k8s\/.*\.ya?ml$/.test(path) ? parseKubernetesYaml(source, path).documents : [])
+    .filter(object => object && ['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object.kind)).map(object => {
+      const value = clone(object)
+      if (value.kind === 'Secret') value.data = { ...value.data, ...Object.fromEntries(Object.entries(value.stringData ?? {}).map(([key, content]) =>
+        [key, btoa(Array.from(new TextEncoder().encode(content), byte => String.fromCharCode(byte)).join(''))])) }
+      return value
+    })
+  declarationCache.set(lab, { signature, objects, captures: new Map() })
+  return objects
+}
+function historicalContext(objects) {
+  return { resources: Object.fromEntries(objects.filter(object => object.kind === 'Secret').map((object, index) => [`retained-${index}`, object])), podSnapshots: {} }
+}
+function declaredCaptureObjects(lab, scenario, snapshot) {
+  fixtureObjects(lab, scenario)
+  const cached = declarationCache.get(lab), key = `${snapshot.phaseId}/${snapshot.kind}`
+  if (cached.captures.has(key)) return cached.captures.get(key)
+  const files = { ...lab.initialProjectFiles }
+  const phase = scenario.phases.find(item => item.id === snapshot.phaseId)
+  for (const edit of phase.edits) files[edit.path] = snapshot.kind === 'failure' ? edit.after : edit.before
+  const objects = fixtureObjects({ initialProjectFiles: files }, { phases: [] })
+  cached.captures.set(key, objects)
+  return objects
+}
+function podConfigurationShape(spec) {
+  return { env: spec.containers[0].env ?? [], ports: (spec.containers[0].ports ?? []).map(port => ({ name: port.name ?? null, containerPort: port.containerPort })),
+    volumes: spec.volumes ?? [], mounts: spec.containers[0].volumeMounts ?? [] }
+}
+function reconstructedCapsule(geometry, coordinates, objects) {
+  if (!exact(coordinates, ['deployment', 'configs', 'redactions']) || !Number.isInteger(coordinates.deployment) || coordinates.deployment < 0
+    || !Array.isArray(coordinates.configs) || coordinates.configs.length > 20 || !Array.isArray(coordinates.redactions)
+    || !same(coordinates.redactions, objects.flatMap((object, index) => object.kind === 'Secret' ? [index] : []))
+    || !coordinates.configs.every(index => Number.isInteger(index) && index >= 0 && ['ConfigMap', 'Secret'].includes(objects[index]?.kind))
+    || new Set(coordinates.configs).size !== coordinates.configs.length) return null
+  const deployment = objects[coordinates.deployment]
+  if (deployment?.kind !== 'Deployment' || !deployment.spec?.template?.spec) return null
+  const resources = Object.fromEntries(coordinates.configs.map(index => {
+    const object = objects[index]; return [`${object.kind}/${object.metadata.namespace}/${object.metadata.name}`, object]
+  }))
+  if (Object.keys(resources).length !== coordinates.configs.length) return null
+  const resolved = resolvePodConfiguration(resources, deployment.metadata.namespace, deployment.spec.template.spec)
+  if (resolved.diagnostics.length) return null
+  const environment = Object.fromEntries(Object.entries(resolved.environment).filter(([key]) => !secretKey.test(key)
+    && !resolved.configRefs.some(ref => ref.kind === 'Secret' && ref.mode === 'env' && ref.target === key)))
+  const authProfile = Object.entries(INTEGRATION_FIXTURES.profiles).find(([, profile]) => resolved.environment.PGPASSWORD === profile.PGPASSWORD)?.[0] ?? null
+  return redactRequestValue({ ...geometry, environment, files: resolved.files, authProfile,
+    ports: podConfigurationShape(deployment.spec.template.spec).ports }, historicalContext(objects))
+}
+function capsuleCoordinates(run, target, capsule, scenario, lab) {
+  if (!capsule) return null
+  const objects = fixtureObjects(lab, scenario), state = stateFor(run, target), snapshot = state.podSnapshots[capsule.podUid]
+  const pod = Object.values(state.resources).find(object => object.kind === 'Pod' && object.metadata.uid === capsule.podUid)
+  if (!snapshot || !pod) return null
+  const deployment = objects.findIndex(object => object.kind === 'Deployment' && object.metadata.namespace === target.namespace && object.metadata.name === target.deploymentName
+    && same(podConfigurationShape(object.spec.template.spec), podConfigurationShape(pod.spec)))
+  if (deployment < 0) return null
+  const configs = []
+  for (const ref of snapshot.configRefs ?? []) {
+    if (configs.some(index => objects[index].kind === ref.kind && objects[index].metadata.namespace === ref.namespace && objects[index].metadata.name === ref.name)) continue
+    const refs = snapshot.configRefs.filter(other => other.kind === ref.kind && other.namespace === ref.namespace && other.name === ref.name)
+    const index = objects.findIndex(object => object.kind === ref.kind && object.metadata.namespace === ref.namespace && object.metadata.name === ref.name
+      && refs.every(item => Object.hasOwn(object.data ?? {}, item.key) && (ref.kind === 'Secret'
+        ? new TextDecoder().decode(Uint8Array.from(atob(object.data[item.key]), character => character.charCodeAt(0))) : object.data[item.key])
+          === (item.mode === 'file' ? snapshot.files[item.target] : snapshot.environment[item.target])))
+    if (index < 0) return null
+    if (!configs.includes(index)) configs.push(index)
+  }
+  const coordinates = { deployment, configs: configs.sort((a, b) => a - b), redactions: objects.flatMap((object, index) => object.kind === 'Secret' ? [index] : []) }
+  const geometry = Object.fromEntries(['podUid', 'containerId', 'artifactId'].map(key => [key, capsule[key]]))
+  return same(capsule, reconstructedCapsule(geometry, coordinates, objects)) ? coordinates : null
+}
+function captureAnchor(snapshot, coordinates, run) {
+  const geometry = snapshot.capsule && Object.fromEntries(['podUid', 'containerId', 'artifactId'].map(key => [key, snapshot.capsule[key]]))
+  return { version: 1, observationId: snapshot.id, incidentId: snapshot.incidentId, epoch: snapshot.epoch, target: clone(snapshot.target), phaseId: snapshot.phaseId,
+    requestId: snapshot.records.request.id, evidenceId: snapshot.evidenceId, coordinates, geometry,
+    sourceHash: geometry ? run.artifacts.buildsById[geometry.artifactId].sourceHash : null,
+    capsuleDigest: diagnosisDigest(snapshot.capsule), recordsDigest: diagnosisDigest(snapshot.records) }
+}
+
+/** Independently authenticate the anchor in the normal evidence validator. */
+export function validDiagnosisEvidenceRecord(evidence, run, lab) {
+  const anchor = evidence.measurements?.diagnosisCapture
+  if (anchor === undefined) return true
+  if (lab?.capabilities?.kubernetesDiagnostics !== true || !exact(anchor, ['version', 'observationId', 'incidentId', 'epoch', 'target', 'phaseId', 'requestId', 'evidenceId', 'coordinates', 'geometry', 'sourceHash', 'capsuleDigest', 'recordsDigest'])
+    || anchor.version !== 1 || !exact(anchor.target, stableKeys) || anchor.evidenceId !== evidence.id || evidence.labId !== run.labId || evidence.attemptId !== run.attemptId
+    || evidence.scenarioVersion !== 1 || evidence.contentVersion !== run.contentVersion || evidence.outcome !== 'passed' || evidence.completed !== true) return false
+  const incident = stateFor(run, anchor.target)?.diagnosis?.incident
+  const entry = incident && Object.entries(lab.scenarios ?? {}).find(([id]) => incident.id === `diagnosis-${id}-${incident.epoch}`)
+  const scenario = entry && scenarioFor(run, entry[0], lab)
+  const snapshot = incident && Array.isArray(incident.observations) && Array.isArray(incident.recoveries)
+    && [...incident.observations, ...incident.recoveries].find(item => item?.id === anchor.observationId)
+  if (!snapshot || !scenario || anchor.incidentId !== incident.id || anchor.epoch !== incident.epoch || !same(anchor.target, incident.target)
+    || !isPlainObject(snapshot.records?.request) || !scenario.phases.some(phase => phase.id === snapshot.phaseId)
+    || anchor.phaseId !== snapshot.phaseId || snapshot.evidenceId !== evidence.id || snapshot.scenarioId !== evidence.scenarioId
+    || !lab.tasks.some(task => task.id === evidence.taskId && task.verification?.scenarioId === evidence.scenarioId)
+    || snapshot.records.request.id !== anchor.requestId || evidence.sequence !== snapshot.records.request.sequence + 1
+    || Number(snapshot.id.slice(22)) !== evidence.sequence + 1 || evidence.startedAtMs !== snapshot.simTimeMs || evidence.endedAtMs !== snapshot.simTimeMs
+    || evidence.measurements.requestSequence !== snapshot.records.request.sequence) return false
+  const request = snapshot.records.request, measurements = evidence.measurements, declaration = lab.scenarios[evidence.scenarioId]
+  if (!declaration || !requestKeys.every(key => Object.hasOwn(request, key)) || !isPlainObject(measurements.route)
+    || measurements.deploymentUid !== anchor.target.deploymentUid || measurements.serviceUid !== anchor.target.serviceUid
+    || !['origin', 'status', 'body', 'transport', 'dependencyTrace', 'integrationTrace'].every(key => isJsonValue(measurements[key]))
+    || declaration.connectivity.origin.kind === 'diagnostic' && request.hostname !== declaration.connectivity.hostname
+    || request.status !== declaration.expected.status || !same(request.body, declaration.expected.body)
+    || !same(request.transport, declaration.expected.transport ?? { ok: true, reason: null })
+    || request.hostname !== measurements.hostname || request.port !== declaration.connectivity.port
+    || !same(request.origin, measurements.origin) || !same(request.request, declaration.request)
+    || !same(request.status, measurements.status) || !same(request.body, measurements.body) || !same(request.transport, measurements.transport)
+    || !partial(Object.fromEntries(Object.entries(measurements.route).filter(([key]) => key !== 'address')), request.route)
+    || request.route.address !== measurements.address || !same(request.dependencyTrace, measurements.dependencyTrace)
+    || !same(request.integrationTrace, measurements.integrationTrace)) return false
+  const live = run.runtime.kubernetes.requests.find(item => item.id === anchor.requestId)
+  if (live && !same(live, request)) return false
+  const actualRecords = inspectRequestRecords(run, { clusterId: anchor.target.clusterId, requestId: anchor.requestId })
+  if (!Array.isArray(snapshot.records.application) || actualRecords.application.some(record => !snapshot.records.application.some(saved => same(saved, record)))
+    || actualRecords.application.length > 0 && live && actualRecords.truncated.application === snapshot.records.truncated?.application
+      && !same(actualRecords.application, snapshot.records.application)) return false
+  if (anchor.geometry === null) return snapshot.capsule === null && anchor.coordinates === null && anchor.sourceHash === null
+    && anchor.capsuleDigest === diagnosisDigest(null) && anchor.recordsDigest === diagnosisDigest(snapshot.records)
+  const geometry = anchor.geometry, artifact = run.artifacts.buildsById[geometry.artifactId]
+  if (!exact(geometry, ['podUid', 'containerId', 'artifactId']) || !/^kube-[1-9]\d*$/.test(geometry.podUid) || !/^container-[1-9]\d*$/.test(geometry.containerId)
+    || Number(geometry.podUid.slice(5)) >= request.sequence || Number(geometry.containerId.slice(10)) >= request.sequence
+    || !artifact || artifact.sourceHash !== anchor.sourceHash || !run.artifacts.sourceSnapshotsByHash[anchor.sourceHash]
+    || !Array.isArray(measurements.selectedPods) || !measurements.selectedPods.some(pod => pod?.uid === geometry.podUid)) return false
+  const expected = reconstructedCapsule(geometry, anchor.coordinates, fixtureObjects(lab, scenario))
+  if (!expected || !same(snapshot.capsule, expected) || anchor.capsuleDigest !== diagnosisDigest(expected) || anchor.recordsDigest !== diagnosisDigest(snapshot.records)) return false
+  const objects = fixtureObjects(lab, scenario), declared = declaredCaptureObjects(lab, scenario, snapshot)
+  if (![anchor.coordinates.deployment, ...anchor.coordinates.configs].every(index => declared.some(object => same(object, objects[index])))) return false
+  const state = stateFor(run, anchor.target), container = state.health?.containers?.[geometry.podUid]
+  if (container && (container.containerId === geometry.containerId || container.previous?.containerId === geometry.containerId)) {
+    const actual = capsuleFor(run, anchor.target, request)
+    // Mounted files can legitimately be projected after capture without a new
+    // container. Immutable environment/ports/identity must still match exactly.
+    if (container.containerId === geometry.containerId && !same({ ...actual, files: {} }, { ...expected, files: {} })) return false
+  }
+  return true
+}
 export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   const outcomeKeys = ['requestId', 'podUid', 'containerId', 'artifactId', 'transport', 'status', 'body', 'route', 'dependencyTrace', 'integrationTrace', 'diagnostic', 'appLogRecords', 'workload']
   if (!isPlainObject(outcome) || !isJsonValue(outcome) || Object.keys(outcome).some(key => !outcomeKeys.includes(key)) || typeof outcome.requestId !== 'string') return run
@@ -225,6 +374,10 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   const snapshot = { id: `diagnosis-observation-${candidate.nextSequence++}`, incidentId: incident.id, epoch: incident.epoch, labId: run.labId, attemptId: run.attemptId,
     target: clone(incident.target), phaseId: phase.id, scenarioId, simTimeMs: request.simTimeMs, historical: true, kind,
     records, capsule: capsuleFor(run, incident.target, request), fingerprint: fingerprints(run, incident.target), evidenceId: evidence.id }
+  const coordinates = capsuleCoordinates(run, incident.target, snapshot.capsule, found.scenario, lab)
+  if (snapshot.capsule && !coordinates) return run
+  if (!coordinates) snapshot.capsule = null
+  candidate.evidence.experimentsById[evidence.id].measurements.diagnosisCapture = captureAnchor(snapshot, coordinates, candidate)
   snapshot.hash = diagnosisDigest(snapshot)
   // Keep the first observation of each phase; repeated investigation cannot
   // evict a required earlier phase when ordinary histories rotate.
@@ -236,8 +389,11 @@ export function captureDiagnosisObservation(run, scenarioId, outcome, lab) {
   const slots = 10 - primary.length
   next[list] = [...primary, ...(slots > 0 ? rest.slice(-slots) : [])].sort((a, b) => Number(a.id.slice(22)) - Number(b.id.slice(22)))
   const retainedIds = new Set([...next.observations, ...next.recoveries].map(item => item.id))
+  for (const record of Object.values(candidate.evidence.experimentsById)) if (record.measurements.diagnosisCapture?.incidentId === incident.id
+    && !retainedIds.has(record.measurements.diagnosisCapture.observationId)) delete record.measurements.diagnosisCapture
   for (const item of stateFor(candidate, incident.target).diagnosis.receipts) if (item.observationId !== null && !retainedIds.has(item.observationId)) item.observationId = null
   receipt(candidate, next, kind, next[list].some(item => item.id === snapshot.id) ? snapshot.id : null)
+  if (!validDiagnosisEvidenceRecord(candidate.evidence.experimentsById[evidence.id], candidate, lab)) return run
   return candidate
 }
 
@@ -270,7 +426,7 @@ function retained(run, observationId, lab) {
 }
 export function replayDiagnosisObservation(run, observationId, lab) {
   const found = retained(run, observationId, lab)
-  return found ? { snapshot: found.snapshot, diagnostics: [] } : { snapshot: null, diagnostics: [error('Select a retained observation from this Lab attempt, incident epoch and target.')] }
+  return found ? { snapshot: redactRequestValue(found.snapshot, historicalContext(fixtureObjects(lab, found.scenario))), diagnostics: [] } : { snapshot: null, diagnostics: [error('Select a retained observation from this Lab attempt, incident epoch and target.')] }
 }
 export function probeIncidentSnapshot(run, observationId, lab) {
   const found = retained(run, observationId, lab), probe = found?.scenario.controlledProbe, snapshot = found?.snapshot
@@ -291,7 +447,7 @@ export function probeIncidentSnapshot(run, observationId, lab) {
     lab.scenarios[snapshot.scenarioId].integrationProfile ?? 'healthy')
   return { snapshot: redactRequestValue({ historical: true, observationId, requestId, backendPort, status: result.status, body: result.body,
     transport: { ok: true, reason: null }, correctedServicePort: probe.servicePort, dependencyTrace: result.dependencyTrace, integrationTrace: result.integrationTrace ?? null,
-    application: result.appLogRecords ?? [] }, stateFor(run, snapshot.target)), diagnostics: [] }
+    application: result.appLogRecords ?? [] }, historicalContext(fixtureObjects(lab, found.scenario))), diagnostics: [] }
 }
 
 const validHashes = value => exact(value, ['saved', 'applied']) && Object.values(value).every(hash => /^[a-f0-9]{8}$/.test(hash))
@@ -307,7 +463,10 @@ function validSnapshot(value, incident, scenario, run, lab) {
   if (!phase || value.scenarioId !== (value.kind === 'failure' ? phase.observationScenarioId : phase.recoveryScenarioId)) return false
   const { hash, ...payload } = value
   if (hash !== diagnosisDigest(payload) || !exact(value.records, ['request', 'application', 'dependency', 'truncated'])) return false
+  const evidence = run.evidence.experimentsById[value.evidenceId]
+  if (!evidence?.measurements?.diagnosisCapture || !validDiagnosisEvidenceRecord(evidence, run, lab)) return false
   const records = value.records, request = records.request, state = stateFor(run, incident.target)
+  const historicalSecrets = historicalContext(fixtureObjects(lab, scenario))
   if (!isPlainObject(request) || Object.keys(request).some(key => ![...requestKeys, 'workload'].includes(key)) || !requestKeys.every(key => Object.hasOwn(request, key))
     || request.connectivity !== true || !exact(request.transport, ['ok', 'reason']) || typeof request.transport.ok !== 'boolean' || request.transport.reason !== null && !text(request.transport.reason)
     || !isPlainObject(request.origin) || !isPlainObject(request.route) || Object.keys(request.route).some(key => !routeKeys.includes(key))
@@ -317,7 +476,7 @@ function validSnapshot(value, incident, scenario, run, lab) {
     || request.integrationTrace !== null && !validIntegrationTrace(request.integrationTrace)
     || request.status !== null && (!Number.isInteger(request.status) || request.status < 100 || request.status > 599)
     || request.simTimeMs !== value.simTimeMs || !Number.isSafeInteger(request.sequence) || request.sequence >= run.nextSequence || request.sequence <= incident.epoch
-    || !same(records, redactRequestValue(records, state)) || !Array.isArray(records.application) || records.application.length > 100
+    || !same(records, redactRequestValue(redactRequestValue(records, state), historicalSecrets)) || !Array.isArray(records.application) || records.application.length > 100
     || !same(records.dependency, request.dependencyRecords) || !exact(records.truncated, ['requests', 'application', 'dependency']) || !Object.values(records.truncated).every(clock)
     || value.kind === 'failure' && request.transport?.ok && !(request.status >= 400)
     || value.kind === 'recovery' && (!request.transport?.ok || request.status !== 200)) return false
@@ -334,7 +493,7 @@ function validSnapshot(value, incident, scenario, run, lab) {
     || !same(capsule, redactRequestValue(capsule, state)))) return false
   if (request.transport.ok && (!capsule || ['podUid', 'containerId', 'artifactId'].some(key => capsule[key] !== request[key]))) return false
   if (!request.transport.ok) return records.application.length === 0
-  historicalState.resources = { ...state.resources, [`Pod/${request.namespace}/retained`]: { kind: 'Pod', metadata: { uid: request.podUid, namespace: request.namespace } } }
+  historicalState.resources = { ...state.resources, ...historicalSecrets.resources, [`Pod/${request.namespace}/retained`]: { kind: 'Pod', metadata: { uid: request.podUid, namespace: request.namespace } } }
   historicalState.podSnapshots = { ...state.podSnapshots, [request.podUid]: { artifactId: request.artifactId,
     environment: { PGPASSWORD: capsule.authProfile ? INTEGRATION_FIXTURES.profiles[capsule.authProfile].PGPASSWORD : '' },
     configRefs: [{ kind: 'Secret', mode: 'env', target: 'PGPASSWORD' }] } }

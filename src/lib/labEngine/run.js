@@ -7,6 +7,7 @@ import { capstoneStages, validateStageLab, validateStageState } from './stages.j
 import { validateCapstoneIncident } from './incident.js'
 import { projectSourceHash } from '../project/build.js'
 import { sourceTextHash } from './sourceJournal.js'
+import { validDiagnosisEvidenceRecord } from '../kubernetes/diagnosis-incidents.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -213,6 +214,7 @@ export function validateBehavioralRun(run, lab = null) {
     if (run.labId !== lab.id || run.contentVersion !== lab.contentVersion) {
       fail('INCOMPATIBLE_CONTENT', 'The run does not match this Lab content.', { labId: run.labId, contentVersion: run.contentVersion })
     }
+    if (!evidenceRecords.every(record => validDiagnosisEvidenceRecord(record, run, lab))) fail('INVALID_RUN', 'Kubernetes diagnosis evidence provenance is missing or malformed.')
     if (lab.capabilities?.kubernetes === true) {
       const candidate = migrateMissingRolloutState(run, lab)
       if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')

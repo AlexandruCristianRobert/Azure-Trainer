@@ -28,6 +28,34 @@ function validConnectivityExpected(expected) {
     && Number.isInteger(expected.route.selectedCount) && expected.route.selectedCount >= 0
 }
 
+/** Shared declaration gate for Verify and fixture staging. */
+export function validAksRequestScenario(scenario, lab) {
+  const keys = ['kind', 'version', 'target', 'request', 'expected', 'connectivity', 'requireReplacement', 'requireTwoReplicas', 'expectedCurrentConfig', 'expectedCapturedConfig', 'integrationProfile']
+  if (!scenario || !isJsonValue(scenario) || Object.keys(scenario).some(key => !keys.includes(key)) || scenario.kind !== 'aks-request' || scenario.version !== 1
+    || !scenario.target || Object.keys(scenario.target).sort().join(',') !== 'clusterId,deploymentName,namespace,serviceName'
+    || Object.values(scenario.target).some(value => typeof value !== 'string' || !value)
+    || !scenario.request || !['GET', 'POST'].includes(scenario.request.method)
+    || scenario.request.method === 'GET' && (Object.keys(scenario.request).sort().join(',') !== 'method,path' || !['/api/info', '/api/work'].includes(scenario.request.path)
+      || scenario.request.path === '/api/work' && lab?.capabilities?.kubernetesResources !== true)
+    || scenario.request.method === 'POST' && (scenario.request.path !== '/api/ask' || !isJsonValue(scenario.request.body)
+      || Object.keys(scenario.request).some(key => !['method', 'path', 'body'].includes(key)))
+    || !scenario.expected || (scenario.connectivity !== undefined ? !validConnectivityExpected(scenario.expected)
+      : Object.keys(scenario.expected).sort().join(',') !== 'body,status' || !Number.isInteger(scenario.expected.status) || !isJsonValue(scenario.expected.body))
+    || ['requireReplacement', 'requireTwoReplicas'].some(key => scenario[key] !== undefined && typeof scenario[key] !== 'boolean')
+    || ['expectedCurrentConfig', 'expectedCapturedConfig'].some(key => scenario[key] !== undefined && (!scenario[key] || typeof scenario[key] !== 'object'
+      || Array.isArray(scenario[key]) || Object.values(scenario[key]).some(value => typeof value !== 'string')))
+    || scenario.integrationProfile !== undefined && (lab?.capabilities?.kubernetesAiIntegration !== true || !integrationProfiles.has(scenario.integrationProfile))) return false
+  const connectivity = scenario.connectivity
+  if (connectivity === undefined) return true
+  if (lab?.capabilities?.kubernetesConnectivity !== true || !connectivity || !Number.isInteger(connectivity.port) || connectivity.port < 1 || connectivity.port > 65535) return false
+  return Object.keys(connectivity).sort().join(',') === 'hostname,origin,port' && typeof connectivity.hostname === 'string'
+    && connectivity.origin && Object.keys(connectivity.origin).sort().join(',') === 'kind,name,namespace'
+    && connectivity.origin.kind === 'diagnostic' && connectivity.origin.name === 'diagnostics' && connectivity.origin.namespace === 'diagnostics'
+    || Object.keys(connectivity).sort().join(',') === 'origin,port,service' && connectivity.origin && Object.keys(connectivity.origin).join(',') === 'kind'
+      && connectivity.origin.kind === 'external' && connectivity.service && Object.keys(connectivity.service).sort().join(',') === 'name,namespace'
+      && typeof connectivity.service.name === 'string' && typeof connectivity.service.namespace === 'string'
+}
+
 export function applyAksAction(run, action, lab) {
   if (['aks-diagnosis-start', 'aks-diagnosis-next', 'aks-diagnosis-replay'].includes(action.type)) {
     const replay = action.type === 'aks-diagnosis-replay'
@@ -96,6 +124,7 @@ export function applyAksAction(run, action, lab) {
   if (lab.capabilities?.kubernetesRollouts && lab.scenarios?.[action.scenarioId]?.kind === 'aks-release-final') return { ...recordFinalReleaseVerification(run, lab, action.scenarioId), portalEvents: [] }
   if (lab.capabilities?.kubernetesRollouts && lab.scenarios?.[action.scenarioId]?.kind === 'aks-release-milestone') return { ...recordReleaseMilestone(run, lab, action.scenarioId), portalEvents: [] }
   const scenario = lab.scenarios?.[action.scenarioId]
+  if (!validAksRequestScenario(scenario, lab)) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'The declared AKS request scenario is invalid.' }] }
   if (lab.id === AI_TROUBLESHOOTING_LAB_ID && INTEGRATION_SCENARIO_PHASES[action.scenarioId] !== run.runtime.kubernetes?.integrationIncident?.phase) {
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'AKS_INCIDENT_NOT_READY', message: 'This assistant request belongs to a later incident phase.' }] }
   }
@@ -131,7 +160,7 @@ export function applyAksAction(run, action, lab) {
   if (!task) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_AKS_ACTION', message: 'No Task verifies this AKS request scenario.' }] }
   const refreshed = refreshKubernetesDependencies(run, run, lab)
   const response = simulateKubernetesRequest(refreshed, { ...scenario, id: action.scenarioId })
-  if (lab?.id === 'aks-connectivity-troubleshooting' || lab?.id === 'aks-ai-troubleshooting') {
+  if (lab.capabilities?.kubernetesDiagnostics === true || lab?.id === 'aks-connectivity-troubleshooting' || lab?.id === 'aks-ai-troubleshooting') {
     response.measurements.deploymentUid = response.run.runtime.kubernetes.clusters?.[target.clusterId]?.resources?.[`Deployment/${target.namespace}/${target.deploymentName}`]?.metadata?.uid ?? null
   }
   let next = recordVerification(response.run, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version,

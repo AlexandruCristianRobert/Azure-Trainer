@@ -3,6 +3,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { validateBehavioralRun } from '../src/lib/labEngine/run.js'
 import { routeServiceRequest } from '../src/lib/kubernetes/connectivity.js'
 import { applyAksAction } from '../src/lib/kubernetes/actions.js'
+import { parseKubernetesYaml } from '../src/lib/kubernetes/yaml.js'
 import { act, seedDiagnosisIncidentTest, advanceHealth } from './helpers/aks.js'
 
 const api = await import('../src/lib/kubernetes/diagnosis-incidents.js').catch(() => ({}))
@@ -152,6 +153,7 @@ describe('retained AKS diagnosis incidents', () => {
   it('strictly validates optional diagnosis state while accepting older saves without it', () => {
     const { run, lab, clusterId } = seedDiagnosisIncidentTest()
     expect(reload(run, lab)).toBeTruthy()
+    expect(validateBehavioralRun(JSON.parse(JSON.stringify(run)))).toBeTruthy()
     const live = verify(start(run, lab).run, lab, 'observe-port').run
     for (const alter of [
       value => { value.version = 2 }, value => { value.receipts = Array(41).fill(value.receipts[0]) },
@@ -188,8 +190,13 @@ describe('retained AKS diagnosis incidents', () => {
     const started = start(run, lab).run, observed = applyAksAction(started, { type: 'aks-request', scenarioId: 'observe-port' }, lab).run
     const actual = observed.runtime.kubernetes.requests.at(-1)
     const uncaptured = structuredClone(observed)
+    const original = state(uncaptured, clusterId).incident.observations[0]
     state(uncaptured, clusterId).incident.observations = []
     state(uncaptured, clusterId).receipts = state(uncaptured, clusterId).receipts.filter(item => item.kind === 'started')
+    // Recreate the ordinary post-Verify/pre-capture boundary, not a forged
+    // later history with its authenticated snapshot silently removed.
+    delete uncaptured.evidence.experimentsById[original.evidenceId].measurements.diagnosisCapture
+    uncaptured.nextSequence = Number(original.id.slice(22))
     const captured = api.captureDiagnosisObservation(uncaptured, 'observe-port', { requestId: actual.id, status: actual.status, body: actual.body, transport: actual.transport, route: actual.route }, lab)
     expect(state(captured, clusterId).incident.observations).toHaveLength(1)
     expect(api.captureDiagnosisObservation(captured, 'observe-port', { requestId: actual.id }, lab)).toEqual(captured)
@@ -316,5 +323,92 @@ describe('retained AKS diagnosis incidents', () => {
     expect(state(live, clusterId).receipts.at(-1).kind).toBe('target-deleted')
     expect(api.replayDiagnosisObservation(live, id, lab).diagnostics).toEqual([])
     expect(reload(live, lab)).toBeTruthy()
+  })
+
+  it('review R1 retains historical redaction after ordinary Namespace and Secret deletion', () => {
+    const { run: initial, lab } = seedDiagnosisIncidentTest({ multiCause: true })
+    let run = act(initial, lab, { type: 'save-file', path: 'app.py', text: initial.project.savedFiles['app.py'].replace('log_event("request.started")', 'log_event("training-only-password")') }).run
+    run = act(run, lab, { type: 'command', line: 'az acr build --registry acraksreleasesguided -t assistant:release-v2 .' }).run
+    run = advanceHealth(act(run, lab, { type: 'command', line: 'kubectl rollout restart deployment/assistant-api -n assistant' }).run, lab, 90)
+    run = verify(advanceHealth(start(run, lab).run, lab, 90), lab, 'observe-port').run
+    const clusterId = run.sandbox.aksClusters[0].id, observationId = state(run, clusterId).incident.observations[0].id
+    expect(JSON.stringify(api.probeIncidentSnapshot(run, observationId, lab))).not.toContain('training-only-password')
+    run = advanceHealth(act(run, lab, { type: 'command', line: 'kubectl delete namespace assistant' }).run, lab, 90)
+    const before = JSON.stringify(run)
+    const result = api.probeIncidentSnapshot(run, observationId, lab)
+    expect(result.diagnostics).toEqual([])
+    expect(result.snapshot.application[0].event).toBe('[REDACTED]')
+    expect(JSON.stringify(result)).not.toContain('training-only-password')
+    expect(JSON.stringify(api.replayDiagnosisObservation(run, observationId, lab))).not.toContain('training-only-password')
+    expect(JSON.stringify(run)).toBe(before)
+    expect(reload(run, lab)).toBeTruthy()
+  })
+
+  it('review R2 rejects recomputed snapshot tampering against real capture provenance before and after pruning', () => {
+    const { run, lab, clusterId } = seedDiagnosisIncidentTest({ multiCause: true })
+    const observed = verify(advanceHealth(start(run, lab).run, lab, 90), lab, 'observe-port').run
+    let pruned = observed
+    for (let index = 0; index < 101; index++) pruned = routeServiceRequest(pruned, { origin: { kind: 'external', clusterId }, hostname: 'unknown.example.test', port: 80, method: 'POST', path: '/api/ask', body: { question: 'How long are backups kept?' } }, null).run
+    pruned = advanceHealth(act(pruned, lab, { type: 'command', line: 'kubectl delete namespace assistant' }).run, lab, 90)
+    for (const baseline of [observed, pruned]) for (const alter of [
+      snapshot => { snapshot.capsule.environment.PGHOST = 'pg-training.example' },
+      snapshot => { snapshot.capsule.podUid = 'kube-9999' },
+      snapshot => { snapshot.capsule.containerId = 'container-9999' },
+      snapshot => { snapshot.records.request.hostname = 'fake.example.test' },
+      snapshot => { snapshot.records.request.port = 8088 },
+      snapshot => { snapshot.records.request.body = { invented: true } },
+      snapshot => { snapshot.evidenceId = 'evidence-forged' },
+    ]) {
+      const corrupt = structuredClone(baseline), snapshot = state(corrupt, clusterId).incident.observations[0]
+      alter(snapshot); const { hash, ...payload } = snapshot; snapshot.hash = api.diagnosisDigest(payload)
+      expect(() => reload(corrupt, lab)).toThrow(/Kubernetes|evidence|envelope/)
+      expect(api.replayDiagnosisObservation(corrupt, snapshot.id, lab).snapshot).toBeNull()
+      expect(api.probeIncidentSnapshot(corrupt, snapshot.id, lab).snapshot).toBeNull()
+    }
+    const corrupt = structuredClone(pruned), snapshot = state(corrupt, clusterId).incident.observations[0]
+    snapshot.capsule.environment.PGHOST = 'pg-training.example'
+    const anchor = corrupt.evidence.experimentsById[snapshot.evidenceId].measurements.diagnosisCapture
+    if (anchor) anchor.capsuleDigest = api.diagnosisDigest(snapshot.capsule)
+    const { hash, ...payload } = snapshot; snapshot.hash = api.diagnosisDigest(payload)
+    expect(() => reload(corrupt, lab)).toThrow(/Kubernetes|evidence|envelope/)
+    const fixtureFiles = Object.entries(lab.initialProjectFiles).sort(([a], [b]) => a.localeCompare(b))
+    for (const phase of lab.scenarios.incident.phases) for (const edit of phase.edits) fixtureFiles.push([edit.path, edit.before], [edit.path, edit.after])
+    const fixtureObjects = fixtureFiles
+      .flatMap(([path, source]) => /^k8s\/.*\.ya?ml$/.test(path) ? parseKubernetesYaml(source, path).documents : [])
+      .filter(object => ['Deployment', 'ConfigMap', 'Secret', 'Service'].includes(object?.kind))
+    const configIndex = fixtureObjects.findIndex(object => object.kind === 'ConfigMap')
+    anchor.coordinates.configs = anchor.coordinates.configs.map(index => fixtureObjects[index].kind === 'ConfigMap' ? configIndex : index)
+    expect(() => reload(corrupt, lab)).toThrow(/Kubernetes|evidence/)
+    for (const alter of [value => { value.extra = true }, value => { value.coordinates.redactions = [] },
+      value => { value.sourceHash = 'invented' }, value => { value.requestId = 'request-9999' }]) {
+      const malformed = structuredClone(pruned), retained = state(malformed, clusterId).incident.observations[0]
+      alter(malformed.evidence.experimentsById[retained.evidenceId].measurements.diagnosisCapture)
+      expect(() => reload(malformed, lab)).toThrow(/Kubernetes|evidence/)
+      expect(api.replayDiagnosisObservation(malformed, retained.id, lab).snapshot).toBeNull()
+    }
+    const wrongTarget = structuredClone(pruned), incident = state(wrongTarget, clusterId).incident, retained = incident.observations[0]
+    incident.target.deploymentUid = retained.target.deploymentUid = 'kube-9999'
+    wrongTarget.evidence.experimentsById[retained.evidenceId].measurements.diagnosisCapture.target.deploymentUid = 'kube-9999'
+    const { hash: ignored, ...targetPayload } = retained; retained.hash = api.diagnosisDigest(targetPayload)
+    expect(() => reload(wrongTarget, lab)).toThrow(/Kubernetes|evidence/)
+    expect(api.replayDiagnosisObservation(wrongTarget, retained.id, lab).snapshot).toBeNull()
+  })
+
+  it('review R3 rejects every invalid typed or extra request declaration before staging any fault', () => {
+    const { run, lab } = seedDiagnosisIncidentTest()
+    for (const patch of [{ kind: 'invalid' }, { version: '1' }, { target: null }, { request: null }, { expected: null }, { connectivity: null },
+      { requireReplacement: 'yes' }, { requireTwoReplicas: 2 }, { integrationProfile: 'caller-choice' },
+      { expectedCurrentConfig: 'invalid' }, { expectedCapturedConfig: [] }, { expectedCurrentConfig: { APP_ENV: false } },
+      { expectedCapturedConfig: { APP_ENV: 1 } }, { extra: true },
+      { target: { ...lab.scenarios['observe-port'].target, extra: true } },
+      { request: { ...lab.scenarios['observe-port'].request, extra: true } },
+      { connectivity: { ...lab.scenarios['observe-port'].connectivity, extra: true } },
+      { expected: { ...lab.scenarios['observe-port'].expected, extra: true } }]) {
+      const scoped = { ...lab, scenarios: { ...lab.scenarios, 'observe-port': { ...lab.scenarios['observe-port'], ...patch } } }
+      const before = JSON.stringify(run), result = start(run, scoped)
+      expect(result.diagnostics.length).toBeGreaterThan(0)
+      expect(JSON.stringify(result.run)).toBe(before)
+      expect(JSON.stringify(run)).toBe(before)
+    }
   })
 })
