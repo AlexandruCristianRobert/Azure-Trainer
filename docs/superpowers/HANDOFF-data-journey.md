@@ -4,7 +4,7 @@ Current PostgreSQL branch: `codex/data-postgres`, based on `e059e55`, in `.super
 
 ## PostgreSQL status — 2026-10-01
 
-Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete; final whole-branch review is in progress. Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
+Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete. Final whole-branch review found four Important issues; one fix wave addressed all four. Its scoped re-review found one new Important issue, documented below. **Not merge-ready yet.** Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
 
 Validation is intentionally bounded: named Data files only, no existing AKS/Container Apps suites, full suite or browser tests. Lab replay/build checks have taken seconds, not the 30-minute per-lab limit. Real Azure deployment and real Python/SQL execution are outside this simulator's scope. The existing Vite bundle-size advisory remains.
 
@@ -18,7 +18,13 @@ Validation is intentionally bounded: named Data files only, no existing AKS/Cont
 
 Shared support includes `src/lib/data/pg-sql.js`, `pg-engine.js`, `pg-plan.js`, `pg-pool.js`, `psql.js`, PostgreSQL SDK/runtime lowering, Flexible Server CLI/portal state, and the PostgreSQL template/data pipeline. Six-replica validation is gated to PostgreSQL labs; legacy replica limits are preserved.
 
-The latest explicit `tests/data-postgres-labs.test.js` run passes five solution replays. Builds pass with the existing bundle advisory. Browser walkthroughs and excluded journey suites have not been run. Thresholds and connection/vector estimates are teaching models, not Azure guarantees. The independent v3 extension uses its own protected manifest and loader and preserves the base corpus.
+Final code commit: `22982f2`. The latest explicit four-file Data run passes 32 tests: SQL10, plan7, SDK10 and five Lab solution replays. Build passes with the existing bundle advisory. Browser walkthroughs and excluded journey suites have not been run. Thresholds and connection/vector estimates are teaching models, not Azure guarantees. The independent v3 extension uses its own protected manifest and loader and preserves the base corpus.
+
+### Remaining issue before integration
+
+`src/lib/kubernetes/data-actions.js:213–217` identifies actual module-pool use by lifetime and max_size but not pool identity. Two actively used pools of max_size5 each are modeled as one pool: six replicas on max_connections50 report peak30/zero failures instead of combined reservation60/6500 modeled failures/peak47. The single-pool authored Solutions and direct PgBouncer path pass, but this alternate combination can produce false-success load evidence.
+
+Follow-up: trace distinct used pool identities and either reject unsupported multi-pool combinations or sum their reservations. Unused globals must remain irrelevant, direct PgBouncer must remain accepted, and guided application-pool provenance must remain strict. Verify with one focused runtime core regression and disposable two-used-pools load probe, then the named Data files/build only. Do not merge/push until this is resolved. The SDD final one-wave cap was reached; scratch and worktree are preserved for continuation. See `data-postgres-final-findings.md` and `data-postgres-final-fix-report.md`.
 
 ## Status — 2026-10-01: Labs 1–4 (Cosmos DB) complete
 
