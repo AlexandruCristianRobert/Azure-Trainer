@@ -199,13 +199,22 @@ export function createCosmosContainer(sandbox, { resourceGroup, account, databas
   const desired = { partitionKeyPath, ...resolvedThroughput, vectorEmbeddingPolicy: validatedEmbeddingPolicy, indexingPolicy: validatedIndexingPolicy }
   const existing = parent.database.containers.find((item) => item.name === name)
   if (existing) {
+    // A Sandbox saved before compositeIndexes/vectorIndexes existed on this
+    // schema may have an indexingPolicy missing those keys entirely, while a
+    // freshly validated policy always includes them (as [] at minimum) -
+    // normalize both to [] here so an identical re-create doesn't Conflict
+    // on a saved-progress Lab Result (review fix: saved-progress regression).
     const existingConfig = {
       partitionKeyPath: existing.partitionKeyPath,
       throughputMode: existing.throughputMode ?? 'manual',
       throughput: existing.throughput,
       maxThroughput: existing.maxThroughput ?? null,
       vectorEmbeddingPolicy: existing.vectorEmbeddingPolicy,
-      indexingPolicy: existing.indexingPolicy,
+      indexingPolicy: existing.indexingPolicy ? {
+        ...existing.indexingPolicy,
+        compositeIndexes: existing.indexingPolicy.compositeIndexes ?? [],
+        vectorIndexes: existing.indexingPolicy.vectorIndexes ?? [],
+      } : existing.indexingPolicy,
     }
     if (!sameJson(existingConfig, desired)) {
       throw new AzError('Conflict', `SQL container '${name}' already exists with immutable configuration. To change its configuration, delete and recreate it.`, { kind: 'cli' })
