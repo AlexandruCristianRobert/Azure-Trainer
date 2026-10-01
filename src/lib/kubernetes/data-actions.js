@@ -208,16 +208,18 @@ function runLoad(run, lab, manifest, scenario) {
       : connections[0] === 'pooled' && port === 5432 ? 'pool'
         : connections[0] === 'new' && port === 5432 ? 'per-request' : null
     : null
-  const pools = Object.values(appSpec?.data?.postgres?.globals ?? {}).filter(expr => expr.kind === 'call-sdk' && expr.call === 'postgres.pool.ConnectionPool' && expr.lifetime === 'module')
-  const maximums = pools.map(pool => pool.args?.max_size?.kind === 'literal' ? pool.args.max_size.value : null)
-  const poolMaxSize = pools.length === 1 && Number.isInteger(maximums[0]) && maximums[0] > 0 ? maximums[0] : null
-  // Port 6432 alone also supports direct psycopg.connect(). A declaration
-  // of an unused global pool must not vouch for actual reusable app clients.
-  const usesCapturedPool = poolMaxSize !== null && sqlCalls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === poolMaxSize)
+  // Only the pool used by actual SQL can vouch for reusable app clients.
+  // Direct PgBouncer SQL has no app pool, even if an unused global exists.
+  const usedMaximum = sqlCalls[0]?.poolMaxSize
+  const usesModulePool = Number.isInteger(usedMaximum) && usedMaximum > 0
+    && sqlCalls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === usedMaximum)
+  const usesDirectClients = sqlCalls.every(call => call.poolLifetime === null && call.poolMaxSize === null)
+  const poolMaxSize = usesModulePool ? usedMaximum : usesDirectClients ? 0 : null
   const deployment = run.runtime.kubernetes?.clusters?.[scenario.target.clusterId]?.resources?.[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]
   const replicas = deployment?.spec?.replicas
   const server = request.sandbox.postgresServers?.find(server => server.name === lab.dataTarget.server && server.resourceGroup === lab.dataTarget.resourceGroup)
-  if (request.status !== 200 || !sqlCalls.length || !mode || !server || ((mode === 'pool' || mode === 'pgbouncer') && !usesCapturedPool)) {
+  if (request.status !== 200 || !sqlCalls.length || !mode || !server
+    || mode === 'pool' && !usesModulePool || mode === 'pgbouncer' && !usesModulePool && !usesDirectClients) {
     return { ...request, status: request.status === 200 ? 400 : request.status, load: { served: 0, failed: Math.round(scenario.requestsPerSecond * scenario.seconds), p95Ms: 0, throughputRps: 0, peakServerConnections: 0, errors: [request.error?.message ?? request.value?.error ?? 'Not supported by the simulator: load requires a successful SQL request and a recognized deployed connection configuration.'], mode } }
   }
   const load = simulatePoolLoad({ replicas, requestsPerSecond: scenario.requestsPerSecond, seconds: scenario.seconds, mode, poolMaxSize: poolMaxSize ?? 0, server })

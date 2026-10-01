@@ -324,12 +324,14 @@ function evalPgCall(expr, values, locals, ctx) {
   if (call.endsWith('.fetchone')) return target.rows[target.position++] ?? null
   if (call.endsWith('.execute')) {
     const params = values.params ?? []
-    if (!Array.isArray(params)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL params must be a tuple or list')
-    const adapted = params.map(value => {
+    const named = params !== null && typeof params === 'object' && !Array.isArray(params) && !ctx.jsonbValues.has(params)
+    if (!Array.isArray(params) && !named) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL params must be a tuple, list or dictionary')
+    const adapt = value => {
       if (value !== null && typeof value === 'object' && ctx.jsonbValues.has(value)) return value.value
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) return fail('ProgrammingError', "cannot adapt type 'dict' using placeholder '%s'; wrap JSON data in Jsonb")
       return value
-    })
+    }
+    const adapted = named ? Object.fromEntries(Object.entries(params).map(([key, value]) => [key, adapt(value)])) : params.map(adapt)
     const executed = executePg(ctx.sandboxBox.value, { ...conn.ref, sql: values.query, params: adapted, session: conn.session, nowMs: ctx.nowMs })
     ctx.sandboxBox.value = executed.sandbox; conn.session = executed.session
     const cursor = target.pgKind === 'cursor' ? target : { pgKind: 'cursor', connection: conn, rowFactory: conn.rowFactory, closed: false }

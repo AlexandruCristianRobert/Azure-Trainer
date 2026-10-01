@@ -29,7 +29,10 @@ export function parseDataApp(files, manifest = {}) {
   if (typeof files?.['clients.py'] !== 'string') { missing('clients.py'); return { appSpec: null, diagnostics } }
   if (typeof files?.['app.py'] !== 'string') { missing('app.py'); return { appSpec: null, diagnostics } }
 
-  const postgresManifest = Object.values(manifest.receivers ?? {}).some(type => type.startsWith('pg-'))
+  const receiverTypes = Object.values(manifest.receivers ?? {})
+  const manifestBackend = manifest.dataBackend ?? (receiverTypes.some(type => type.startsWith('pg-')) ? 'postgres'
+    : receiverTypes.some(type => type.startsWith('cosmos-')) ? 'cosmos' : null)
+  const postgresManifest = manifestBackend === 'postgres'
   const runtimeFiles = postgresManifest ? manifest.runtimeFiles ?? [] : []
   for (const path of runtimeFiles) {
     if (typeof path !== 'string' || typeof manifest.fixedFiles?.[path] !== 'string' || files[path] !== manifest.fixedFiles[path]) {
@@ -60,7 +63,15 @@ export function parseDataApp(files, manifest = {}) {
 
   // Captured client constants and pool constructors are immutable build data.
   // Cosmos wiring is deliberately left on its existing manifest path.
-  const pg = Object.values(manifest.receivers ?? {}).some(type => type.startsWith('pg-')) || filePaths.some(path => /\b(psycopg|ConnectionPool)\b/.test(files[path]))
+  const pg = manifestBackend ? postgresManifest : filePaths.some(path => kids(trees[path].topNode).some(node => {
+    if (node.name !== 'ImportStatement') return false
+    const imported = kids(node)
+    const from = imported[0]?.name === 'from'
+    const module = from ? imported.slice(1, imported.findIndex(part => part.name === 'import')).map(part => raw(part, files[path])).join('') : null
+    return from ? /^(psycopg(?:\.[a-z_]+)*|psycopg_pool|pgvector\.psycopg)$/.test(module)
+      : imported[0]?.name === 'import' && imported.some((part, index) => part.name === 'VariableName'
+        && ['import', ','].includes(imported[index - 1]?.name) && ['psycopg', 'psycopg_pool'].includes(raw(part, files[path])))
+  }))
   const globalConstants = pg ? { ...fileCtx['clients.py'].topConstants } : {}
   const globalTypes = { ...(manifest.receivers ?? {}) }
   const globals = {}

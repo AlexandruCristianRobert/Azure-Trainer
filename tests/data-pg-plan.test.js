@@ -8,6 +8,17 @@ const knn = (op = '<=>') => ({ kind: 'select', table: 'chunks', where: [], order
 const hnsw = (opclass) => ({ name: 'h', table: 'chunks', method: 'hnsw', columns: [{ name: 'embedding', opclass }], with: {} })
 
 describe('pg plan model', () => {
+  it('models direct PgBouncer clients from active query demand without an application pool', () => {
+    const s = { ...server, parameters: { ...server.parameters, max_connections: '50', 'pgbouncer.enabled': 'true', 'pgbouncer.default_pool_size': '20' } }
+    const direct = simulatePoolLoad({ replicas: 6, requestsPerSecond: 1000, seconds: 30, mode: 'pgbouncer', poolMaxSize: 0, server: s })
+    expect(direct).toMatchObject({ served: 30000, failed: 0, p95Ms: 5, throughputRps: 1000, peakServerConnections: 4, errors: [] })
+    const capped = simulatePoolLoad({ replicas: 6, requestsPerSecond: 1000, seconds: 30, mode: 'pgbouncer', poolMaxSize: 0,
+      server: { ...s, parameters: { ...s.parameters, 'pgbouncer.default_pool_size': '2' } } })
+    expect(capped).toMatchObject({ served: 15000, failed: 15000, p95Ms: 9, throughputRps: 500, peakServerConnections: 2 })
+    expect(simulatePoolLoad({ replicas: 6, requestsPerSecond: 1000, seconds: 30, mode: 'pool', poolMaxSize: 0, server: s }).errors[0]).toContain('positive integer')
+    expect(simulatePoolLoad({ replicas: 6, requestsPerSecond: 1000, seconds: 30, mode: 'pgbouncer', poolMaxSize: 0,
+      server: { ...s, parameters: { ...s.parameters, 'pgbouncer.enabled': 'false' } } }).errors[0]).toContain('not enabled')
+  })
   it('uses HNSW only when the operator matches the opclass', () => {
     expect(planSelect(db([hnsw('vector_cosine_ops')]), knn('<=>'), {}, server).node).toMatch(/hnsw|Index Scan using h/)
     expect(planSelect(db([hnsw('vector_l2_ops')]), knn('<=>'), {}, server).node).toBe('Seq Scan')

@@ -96,10 +96,12 @@ function scaleStable(context) {
     || m.errors.length || m.throughputRps < 1000 || m.served !== 30000) return false
   const port = pgDsnPort(pgDeployedArtifact(context, PG_TARGET)?.appSpec)
   const calls = step.calls.filter(call => typeof call.sql === 'string')
-  const pooled = calls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === m.poolMaxSize)
+  const pooled = Number.isInteger(m.poolMaxSize) && m.poolMaxSize > 0
+    && calls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === m.poolMaxSize)
+  const direct = m.poolMaxSize === 0 && calls.every(call => call.poolLifetime === null && call.poolMaxSize === null)
   return port === 5432 && m.mode === 'pool' && pooled && calls.every(call => call.connection === 'pooled')
     || port === 6432 && m.mode === 'pgbouncer' && server(context).parameters['pgbouncer.enabled'] === 'true'
-      && calls.every(call => call.connection === 'bouncer') && pooled
+      && calls.every(call => call.connection === 'bouncer') && (pooled || direct)
 }
 const tables = ['pg:table:chunks', 'pg:table:documents', 'pg:rows:chunks', 'pg:rows:documents']
 const connection = ['images:assistant-api', 'code:assistant-api:connect', 'dsnPort:assistant-api', 'pg:param:pgbouncer.enabled']
@@ -132,7 +134,7 @@ export const postgresIndependentLab = {
       fields: metadata, verification: { scenarioId: 'audience-indexed', scenarioVersion: 1 }, check: audienceIndexed,
       solution: { steps: [...ready, scenario('v3-retrieval'), scenario('audience-indexed')] } }),
     pgTask({ id: 'scale-stable', stageId: 'load', text: 'Sustain 1000rps at six explicit replicas with zero failures.',
-      explanation: 'Measured load must come from the deployed module pool or PgBouncer connection used by actual SQL. The Solution applies a two-replica manifest, then explicitly scales to six and refreshes earlier proofs. ' + PG_ESTIMATE_LABEL,
+      explanation: 'Measured load must come from the deployed module pool or PgBouncer connection used by actual SQL. Direct PgBouncer clients are also valid: the teaching model estimates active client demand as ceil(RPS × 4ms), without an application-pool reservation. The Solution applies a two-replica manifest, then explicitly scales to six and refreshes earlier proofs. ' + PG_ESTIMATE_LABEL,
       hints: ['Compare replica count, served throughput, failures and captured connection mode.'], examNote: 'Size connection capacity across every replica.',
       fields: [...retrieval, 'replicas:assistant-api', 'pg:param:max_connections', 'pg:param:pgbouncer.default_pool_size'],
       verification: { scenarioId: 'load-1000rps', scenarioVersion: 1 }, check: scaleStable,

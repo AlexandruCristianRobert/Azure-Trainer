@@ -200,7 +200,7 @@ export const POSTGRES_BUILD_FILES = Object.freeze(['app.py', 'clients.py', 'base
 export const POSTGRES_KUBERNETES_FILES = Object.freeze(['k8s/deployment.yaml', 'k8s/service.yaml'])
 export const POSTGRES_FILES = Object.freeze([...POSTGRES_BUILD_FILES, 'schema.sql', 'load.sql', ...POSTGRES_KUBERNETES_FILES])
 export const POSTGRES_MANIFEST = Object.freeze({
-  id: 'data-python-postgres-v1', language: 'python', runtimeFamily: 'aks', dataApp: true,
+  id: 'data-python-postgres-v1', language: 'python', runtimeFamily: 'aks', dataApp: true, dataBackend: 'postgres',
   pythonInstallInstruction: 'RUN pip install "psycopg[binary]" psycopg_pool pgvector',
   files: POSTGRES_FILES, buildFiles: POSTGRES_BUILD_FILES, kubernetesFiles: POSTGRES_KUBERNETES_FILES,
   fixedFiles: Object.freeze({ 'server.py': SERVER, 'training_runtime.py': TRAINING_RUNTIME, 'baseline.py': BASELINE, 'load.sql': '-- simulator:load-corpus\n' }),

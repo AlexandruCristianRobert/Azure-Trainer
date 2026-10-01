@@ -6,7 +6,9 @@
  * Law alone would be replica-independent. Pools remove these cold bursts.
  * Pool/PgBouncer demand is RPS * 4ms; checkout costs 1ms. Available server slots
  * are max_connections - 3. Persistent pools request replicas * poolMaxSize;
- * PgBouncer's actual clients are replicas * poolMaxSize (up to5000 admitted);
+ * PgBouncer's pooled clients are replicas * poolMaxSize (up to5000 admitted).
+ * Without an application pool (poolMaxSize=0), direct PgBouncer client demand
+ * is ceil(RPS * 4ms): an explicit teaching concurrency assumption.
  * server reservations are min(admitted clients, default_pool_size).
  * Accepted concurrency = min(capacity, demand), queueFactor = max(0,
  * demand/capacity - 1), p95 = setup + 4 * (1 + queueFactor). Only direct peak
@@ -18,13 +20,14 @@ export function simulatePoolLoad({ replicas, requestsPerSecond, seconds, mode, p
   const fail = message => ({ served: 0, failed: Math.round(Math.max(0, Number(requestsPerSecond) || 0) * Math.max(0, Number(seconds) || 0)), p95Ms: 0, throughputRps: 0, peakServerConnections: 0, errors: [message] })
   if (!Number.isInteger(replicas) || replicas < 1 || !Number.isFinite(requestsPerSecond) || requestsPerSecond < 0 || !Number.isFinite(seconds) || seconds <= 0) return fail('Not supported by the simulator: load requires positive replicas/duration and non-negative requests per second.')
   if (!['per-request', 'pool', 'pgbouncer'].includes(mode)) return fail('Not supported by the simulator: unknown connection mode.')
-  if (mode !== 'per-request' && (!Number.isInteger(poolMaxSize) || poolMaxSize < 1)) return fail('Not supported by the simulator: poolMaxSize must be a positive integer.')
+  if (mode === 'pool' && (!Number.isInteger(poolMaxSize) || poolMaxSize < 1)) return fail('Not supported by the simulator: poolMaxSize must be a positive integer.')
+  if (mode === 'pgbouncer' && (!Number.isInteger(poolMaxSize) || poolMaxSize < 0)) return fail('Not supported by the simulator: PgBouncer poolMaxSize must be a non-negative integer; zero means no application pool.')
   if (mode === 'pgbouncer' && String(server?.parameters?.['pgbouncer.enabled']) !== 'true') return fail('ERROR: PgBouncer is not enabled on port 6432')
   const available = Math.max(0, Number(server?.parameters?.max_connections ?? 859) - 3)
   const total = Math.round(requestsPerSecond * seconds)
   const direct = mode === 'per-request'
   const demand = total ? Math.ceil(requestsPerSecond * (direct ? 0.029 : 0.004) + (direct ? replicas * 6 : 0)) : 0
-  const clients = direct ? demand : replicas * poolMaxSize
+  const clients = direct || mode === 'pgbouncer' && poolMaxSize === 0 ? demand : replicas * poolMaxSize
   const requested = mode === 'pgbouncer' ? Math.min(clients, 5000, Number(server.parameters['pgbouncer.default_pool_size'] ?? 50)) : clients
   const capacity = Math.max(0, Math.min(available, requested))
   const connectionAcceptance = requested ? Math.min(1, capacity / requested) : 1

@@ -1,4 +1,4 @@
-import { POSTGRES_MANIFEST, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
+import { POSTGRES_MANIFEST, POSTGRES_STARTER_FILES, POSTGRES_NAIVE_CLIENTS } from '../../templates/data-python/postgres.js'
 import { CORPUS, corpusQuestions } from '../../fixtures/data/corpus.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { parsePgSql } from '../../../lib/data/pg-sql.js'
@@ -23,7 +23,7 @@ const EXPLORATORY_APP = pgVectorAppSource({ efSearch: 4, iterativeScan: 'off', r
 const FILTERED_APP = pgVectorAppSource({ rag: false })
 const FINAL_APP = pgVectorAppSource()
 const DEPLOYMENT = POSTGRES_STARTER_FILES['k8s/deployment.yaml'].replace('assistant:v1', 'assistant:pg-vector')
-const deploy = app => [file('app.py', app), command(`az acr build --registry ${PG_REGISTRY} --image assistant:pg-vector .`),
+const deploy = app => [file('app.py', app), file('clients.py', POSTGRES_NAIVE_CLIENTS), command(`az acr build --registry ${PG_REGISTRY} --image assistant:pg-vector .`),
   file('k8s/deployment.yaml', DEPLOYMENT), command('kubectl apply -f k8s/deployment.yaml'),
   command('kubectl rollout restart deployment/assistant-api -n assistant')]
 const SCALE = command(`az postgres flexible-server update -g ${PG_GROUP} -n ${PG_SERVER} --tier GeneralPurpose --sku-name Standard_D2ds_v5`)
@@ -95,7 +95,8 @@ function answered(context) {
         && same(builder.result.sources, measurements.values[0].sources)))
     && !training.some(call => call.stepIndex === 1 && call.functionName === 'training_answer')
 }
-const retrievalFields = ['code:assistant-api:retrieve_passages', 'pg:table:chunks', 'pg:table:documents', 'pg:index:chunks']
+const retrievalFields = ['code:assistant-api:retrieve_passages', 'pg:table:chunks', 'pg:table:documents', 'pg:index:chunks',
+  'images:assistant-api', 'code:assistant-api:connect', 'dsnPort:assistant-api', 'pg:param:pgbouncer.enabled']
 const readySteps = [SCALE, MEMORY, INDEX]
 
 export const postgresVectorGuidedLab = {
@@ -105,7 +106,7 @@ export const postgresVectorGuidedLab = {
   labMode: 'guided', skillAreaId: 'data', service: 'postgresql', status: 'available', manifestId: POSTGRES_MANIFEST.id,
   capabilities: { acrBuild: true, kubernetes: true, dataPostgres: true }, dataTarget: PG_DATA_TARGET,
   initialProjectFiles: { ...POSTGRES_STARTER_FILES, 'app.py': STARTER_APP, 'schema.sql': PG_SCHEMA_SQL },
-  solutionFiles: { ...POSTGRES_STARTER_FILES, 'app.py': FINAL_APP, 'schema.sql': PG_SCHEMA_SQL, 'k8s/deployment.yaml': DEPLOYMENT },
+  solutionFiles: { ...POSTGRES_STARTER_FILES, 'app.py': FINAL_APP, 'clients.py': POSTGRES_NAIVE_CLIENTS, 'schema.sql': PG_SCHEMA_SQL, 'k8s/deployment.yaml': DEPLOYMENT },
   initializeSimulation: seedPostgresVectorGuided,
   stages: [
     { id: 'exact', title: 'Record exact search', taskIds: ['exact-knn'] },
