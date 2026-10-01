@@ -15,13 +15,12 @@
 // new `images:<deploymentName>` dependency field for why 'similar' and
 // 'no-miss' each name only the one Deployment they actually depend on.
 import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES, COSMOS_STARTER_FILES } from '../../templates/data-python/cosmos.js'
-import { parsePythonProject } from '../../../lib/project/python.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
 import {
   ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER_ID, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
-  cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask,
+  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, file, findReturnCall, parsed, scenario,
 } from './cosmos-helpers.js'
 import { seedCosmosVectorGuided } from './cosmos-seeds.js'
 
@@ -40,19 +39,6 @@ const initialFiles = { ...COSMOS_STARTER_FILES, 'app.py': LAB2_APP_PY }
 const IMAGE_V3 = `${ASSISTANT_REGISTRY}.azurecr.io/assistant:v3`
 const WORKER_DEPLOYMENT_V3 = COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v3')
 
-const file = (path) => ({ kind: 'file', path, content: COSMOS_SOLUTION_FILES[path] })
-const commands = (...lines) => lines.map((line) => ({ kind: 'command', line }))
-const scenario = (scenarioId) => ({ kind: 'scenario', scenarioId })
-
-const parsed = (context) => parsePythonProject(context.project.savedFiles, COSMOS_MANIFEST).appSpec
-const findReturnCall = (ops = []) => {
-  for (const op of ops) {
-    if (op.op === 'return' && op.value?.kind === 'call-sdk') return op.value
-    if (op.op === 'if') { const found = findReturnCall(op.then) ?? findReturnCall(op.else); if (found) return found }
-    if (op.op === 'for') { const found = findReturnCall(op.body); if (found) return found }
-  }
-  return null
-}
 // Finds every 'call-sdk' / 'call-local' / 'sdk-attribute' expression anywhere
 // in a function body (recursing through if/for), for process_changes's
 // looser shape check (several statements, not one direct return).

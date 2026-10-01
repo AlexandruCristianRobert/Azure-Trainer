@@ -5,14 +5,13 @@
 // helper (tests/helpers/dataLab.js) and the real UI both drive through
 // `applyRunAction`.
 import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES, COSMOS_STARTER_FILES } from '../../templates/data-python/cosmos.js'
-import { parsePythonProject } from '../../../lib/project/python.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { writeCharge } from '../../../lib/data/cosmos-cost.js'
 import { DEFAULT_INDEXING_POLICY } from '../../../lib/sandbox/cosmosdb-policies.js'
 import {
   ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER_ID, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
-  cosmosEvidence, cosmosRequestScenario, cosmosTask,
+  commands, cosmosEvidence, cosmosRequestScenario, cosmosTask, file, findReturnCall, parsed, scenario,
 } from './cosmos-helpers.js'
 import { seedCosmosSdkGuided } from './cosmos-seeds.js'
 
@@ -46,20 +45,6 @@ const SEED_ORDERED = { id: 'message-3', sessionId: 'session-3', userId: 'user-1'
 const SEED_WRITE_THEN_READ = { id: 'message-4', sessionId: 'session-4', userId: 'user-2', role: 'user', text: 'Confirm read after write.', createdAt: '2026-01-01T09:15:00Z' }
 
 const INDEXING_POLICY_JSON = '{"indexingMode":"consistent","automatic":true,"includedPaths":[{"path":"/*"}],"excludedPaths":[{"path":"/_etag/?"},{"path":"/text/?"}],"compositeIndexes":[[{"path":"/userId","order":"ascending"},{"path":"/createdAt","order":"descending"}]]}'
-
-const file = (path) => ({ kind: 'file', path, content: COSMOS_SOLUTION_FILES[path] })
-const commands = (...lines) => lines.map((line) => ({ kind: 'command', line }))
-const scenario = (scenarioId) => ({ kind: 'scenario', scenarioId })
-
-const parsed = (context) => parsePythonProject(context.project.savedFiles, COSMOS_MANIFEST).appSpec
-const findReturnCall = (ops = []) => {
-  for (const op of ops) {
-    if (op.op === 'return' && op.value?.kind === 'call-sdk') return op.value
-    if (op.op === 'if') { const found = findReturnCall(op.then) ?? findReturnCall(op.else); if (found) return found }
-    if (op.op === 'for') { const found = findReturnCall(op.body); if (found) return found }
-  }
-  return null
-}
 
 const codeCrudReady = (context) => {
   const spec = parsed(context)

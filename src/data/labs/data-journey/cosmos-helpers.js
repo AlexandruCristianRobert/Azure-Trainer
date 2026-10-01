@@ -1,4 +1,6 @@
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
+import { parsePythonProject } from '../../../lib/project/python.js'
+import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES } from '../../templates/data-python/cosmos.js'
 
 // Data journey Lab helpers (Task 7 scaffold; Labs 1-4, Task 8+, add more here).
 //
@@ -119,6 +121,26 @@ export function cosmosTask({ id, stageId, text, explanation, hints, examNote, ch
       ? { verification, dependencies: dependencies ?? dataDependencies({ clusterId: ASSISTANT_CLUSTER_ID, namespace: ASSISTANT_NAMESPACE, account: ASSISTANT_ACCOUNT, database: ASSISTANT_DATABASE }, fields) }
       : {}),
   }
+}
+
+// Solution-step builders and the appSpec parse helper (Review ruling 13):
+// moved here verbatim from cosmos-sdk-guided.lab.js and cosmos-vector-guided.lab.js,
+// where both Labs defined them identically. `file` always writes the Lab's
+// *solution* content for that path (a Task's Solution is always the fix, never
+// a Lab-specific starter variant), mirroring aks-journey's own file()/commands()
+// Solution-step builders.
+export const file = (path) => ({ kind: 'file', path, content: COSMOS_SOLUTION_FILES[path] })
+export const commands = (...lines) => lines.map((line) => ({ kind: 'command', line }))
+export const scenario = (scenarioId) => ({ kind: 'scenario', scenarioId })
+
+export const parsed = (context) => parsePythonProject(context.project.savedFiles, COSMOS_MANIFEST).appSpec
+export const findReturnCall = (ops = []) => {
+  for (const op of ops) {
+    if (op.op === 'return' && op.value?.kind === 'call-sdk') return op.value
+    if (op.op === 'if') { const found = findReturnCall(op.then) ?? findReturnCall(op.else); if (found) return found }
+    if (op.op === 'for') { const found = findReturnCall(op.body); if (found) return found }
+  }
+  return null
 }
 
 // Reads back a Task's own current, passed verification evidence (see
