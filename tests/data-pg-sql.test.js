@@ -80,4 +80,35 @@ describe('executePg', () => {
     expect(getPostgresDatabase(getPostgresServer(sandbox, 'pg-assistant'), 'knowledge').tables).toEqual([])
     expect(executePg(result.sandbox, { ...connection, sql: 'SELECT id FROM documents' }).session.settings).toEqual({})
   })
+  it('returns all actual exact JOIN matches regardless of base-table planner cardinality', async () => {
+    const { executePg } = await import('../src/lib/data/pg-engine.js')
+    const seeded = executePg(postgresSandbox(), { ...connection, sql: `CREATE TABLE documents (id bigint PRIMARY KEY);
+      CREATE TABLE chunks (id bigint PRIMARY KEY, document_id bigint REFERENCES documents(id));
+      INSERT INTO documents (id) VALUES (1);
+      INSERT INTO chunks (id, document_id) VALUES (1, 1), (2, 1), (3, 1)` })
+    const selected = executePg(seeded.sandbox, { ...connection, sql: 'SELECT c.id FROM documents d JOIN chunks c ON d.id = c.document_id ORDER BY c.id' }).results[0]
+    expect(selected.plan.estimatedRows).toBe(1)
+    expect(selected.rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }])
+    expect(selected.rowCount).toBe(3)
+  })
+  it('detaches nested JSON parameters and projected results from persisted sandbox data', async () => {
+    const { executePg } = await import('../src/lib/data/pg-engine.js')
+    const created = executePg(postgresSandbox(), { ...connection, sql: 'CREATE TABLE documents (id bigint PRIMARY KEY, metadata jsonb)' })
+    const metadata = { kind: 'article', nested: { tags: ['original'] } }
+    const inserted = executePg(created.sandbox, { ...connection, sql: 'INSERT INTO documents (id, metadata) VALUES (1, %s)', params: [metadata] })
+    const stored = getPostgresDatabase(getPostgresServer(inserted.sandbox, 'pg-assistant'), 'knowledge').tables[0].rows[0]
+    metadata.nested.tags.push('changed parameter')
+    expect(stored.metadata).toEqual({ kind: 'article', nested: { tags: ['original'] } })
+    const predicate = { kind: 'article' }
+    const indexed = executePg(inserted.sandbox, { ...connection, sql: 'CREATE INDEX metadata_idx ON documents USING gin (metadata) WHERE metadata @> %s', params: [predicate] })
+    predicate.kind = 'changed index parameter'
+    const indexedSelected = executePg(indexed.sandbox, { ...connection, sql: `SELECT id FROM documents WHERE metadata @> '{"kind":"article"}'` })
+    expect(indexedSelected.results[0].plan.index).toBe('metadata_idx')
+    const selected = executePg(inserted.sandbox, { ...connection, sql: 'SELECT metadata AS data, metadata::jsonb AS cast_data FROM documents' })
+    selected.results[0].rows[0].data.nested.tags.push('changed object row')
+    selected.results[0].rowValues[0][1].nested.tags.push('changed ordered row')
+    expect(stored.metadata).toEqual({ kind: 'article', nested: { tags: ['original'] } })
+    expect(selected.sandbox).toBe(inserted.sandbox)
+    expect(metadata.nested.tags).toEqual(['original', 'changed parameter'])
+  })
 })

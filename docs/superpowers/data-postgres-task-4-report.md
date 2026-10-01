@@ -1,6 +1,6 @@
 # Task 4 report — SQL engine and one-shot psql
 
-Implemented `pg-engine.js`, `psql.js`, shell dispatch gated by `dataPostgres`, and exactly three engine cases in `tests/data-pg-sql.test.js` (eight total). Read the task brief, progress ledger and Tasks 2/3/5 reports. No dependencies, external execution, network, or subagents were used. Existing progress-ledger edits are outside this commit. Commit attribution follows the controller's accurate-attribution ruling.
+Initially implemented `pg-engine.js`, `psql.js`, shell dispatch gated by `dataPostgres`, and exactly three engine cases in `tests/data-pg-sql.test.js` (eight total). Review round 1 below adds the two authorized core regressions, bringing the SQL file to ten cases. Read the task brief, progress ledger and Tasks 2/3/5 reports. No dependencies, external execution, network, or subagents were used. Existing progress-ledger edits are outside this commit. Commit attribution follows the controller's accurate-attribution ruling.
 
 ## Downstream interfaces
 
@@ -37,3 +37,22 @@ Only the named SQL file was tested. No full/old suite, AKS, Container Apps or br
 | Whitespace/status review | scoped Git diff/check/status | No whitespace errors; normal LF/CRLF advisories | 0.119 s |
 
 Recorded verification command wall time totals **12.088 seconds** (independent final test/build ran concurrently). Existing Vite large-bundle advisory remains. No permanent tests beyond the required three were added. The three cases exercise allow-list state/immutability, actual nearest-neighbor ordering, and sequential SQL/session/error persistence. The single psql smoke covers shell dispatch, saved-file loading, fixed COPY, planner integration and ordered duplicate projections. Broader schema/error branches were reviewed in source and retain the binding light-testing coverage limit.
+
+## Review round 1 fixes
+
+Confirmed both P2 findings against production code and exactly two new focused engine regression cases. A one-row documents table joined to three chunks produced three real matching contexts, but `selectRows` truncated them to the planner's one-row base-table estimate. Exact execution now applies only the SQL LIMIT to actual sorted/filter-matched sample contexts. The planner's row cap applies only when the chosen index method is HNSW or IVFFlat. Planner estimates and public result fields remain unchanged.
+
+JSONB coercion previously returned bound parameter objects directly, and SELECT projections returned objects from stored sandbox rows. Mutating either the original nested JSON parameter or either output shape therefore changed persistent sandbox data. The engine now copies composite values at insertion and projection boundaries, retaining atomic literal-node evaluation. Bound partial-index predicates are also copied when registering an index, since they share that same storage-boundary issue. The JSON regression verifies nested parameter mutation, object-row and ordered-row result mutation, and continued partial-GIN usability after mutating its original JSON parameter. Storage/output copies use the project's JSON serialization convention; result `rows` and `rowValues` may share values with each other within one result, but neither holds sandbox/parameter references.
+
+| Step | Explicit command | Result | Command wall time |
+| --- | --- | --- | --- |
+| Initial regression red | `npm.cmd test -- tests/data-pg-sql.test.js` | Original 8 pass; both new cases fail with reported JOIN cap and JSON parameter leak | 1.277 s |
+| Exact JOIN fix verification | Same explicit SQL path | 9 pass; only JSON parameter mutation still fails | 1.279 s |
+| Storage-copy fix verification | Same explicit SQL path | 9 pass; parameter isolation passes, projected-row mutation still fails | 1.291 s |
+| Projection/index-copy green | Same explicit SQL path | 10/10 pass | 1.322 s |
+| First build | `npm.cmd run build` | Exit 0; Vite 4.12 s | 4.832 s |
+| Partial-index boundary mutation check | Same explicit SQL path, temporarily removing only index-copy fix | 9 pass; JSON case fails because mutated predicate prevents GIN selection | 1.271 s |
+| Final green after restoring copy | Same explicit SQL path | 10/10 pass; Vitest 0.499 s | 1.314 s |
+| Final build | `npm.cmd run build` | Exit 0; 525 modules; Vite 4.07 s | 4.790 s |
+
+Review-round verification command wall time totals **17.375 seconds** from unrounded tool timing. Final test/build ran concurrently. No additional smoke, other test files, full suite, browser, AKS, Container Apps, dependency installation or subagents were used in this round. The existing bundle-size advisory remains. Public downstream interfaces are unchanged; exact query completeness and detached JSON storage/results now satisfy their immutable execution contract.

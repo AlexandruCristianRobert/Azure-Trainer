@@ -7,6 +7,7 @@ import { buildIndex, planSelect, evaluatePgExpression, matchesPgWhere, samplePgC
 const fail = (message, code = 'ProgrammingError', hint) => { throw Object.assign(new Error(message), { code, ...(hint ? { hint } : {}) }) }
 const unsupported = message => fail(`Not supported by the simulator: ${message}`, 'DATA_UNSUPPORTED')
 const emptyContext = { row: {}, relations: {} }
+const detachValue = value => value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value
 const tableFor = (db, name) => db.tables.find(table => table.name === name) ?? fail(`relation "${name}" does not exist`)
 const nameInPublic = name => {
   if (!name.includes('.')) return name
@@ -102,7 +103,7 @@ function coerceValue(value, column, context = emptyContext) {
     if (typeof coerced !== 'string' || Number.isNaN(Date.parse(coerced))) fail('invalid input syntax for type timestamptz', 'DataError')
     return new Date(coerced).toISOString()
   }
-  return coerced
+  return detachValue(coerced)
 }
 function appendRows(db, table, columns, rows, nowMs) {
   if (new Set(columns).size !== columns.length) fail('column specified more than once')
@@ -176,7 +177,7 @@ function createIndex(db, stmt, server, settings) {
   for (const [key, value] of Object.entries(stmt.with)) if (!options.includes(key) || !Number.isSafeInteger(value) || value < 1) fail(`invalid index option "${key}"`)
   const built = buildIndex(db, stmt, { ...server, parameters: { ...server.parameters, ...settings } })
   if (!built.ok) fail(built.error)
-  db.indexes.push({ ...stmt, sizeMb: built.sizeMb, buildSeconds: built.buildSeconds })
+  db.indexes.push({ ...detachValue(stmt), sizeMb: built.sizeMb, buildSeconds: built.buildSeconds })
   return { buildSeconds: built.buildSeconds, notice: built.label }
 }
 function projectionName(expression) {
@@ -204,8 +205,11 @@ function selectRows(db, stmt, server, settings) {
     }
     return 0
   })
-  const selected = contexts.slice(0, Math.min(stmt.limit ?? Infinity, plan.rowsReturnedBeforeLimit))
-  const rowValues = selected.map(context => projections.map(expression => evaluatePgExpression(expression, context)))
+  // Exact execution follows actual joined samples; logical cardinality is an
+  // estimate, never a row cap. Only a selected ANN index models candidate loss.
+  const ann = db.indexes.some(index => index.name === plan.index && ['hnsw', 'ivfflat'].includes(index.method))
+  const selected = contexts.slice(0, Math.min(stmt.limit ?? Infinity, ann ? plan.rowsReturnedBeforeLimit : Infinity))
+  const rowValues = selected.map(context => projections.map(expression => detachValue(evaluatePgExpression(expression, context))))
   const rows = rowValues.map(values => Object.fromEntries(values.map((value, index) => [columns[index].name, value])))
   if (stmt.explain) return { kind: 'explain', rows: [], rowValues: [], columns: [{ name: 'QUERY PLAN', type: 'text' }], rowCount: rows.length,
     plan: { ...plan, text: [...plan.text, ...(stmt.explain.analyze ? [`Actual time: ${plan.latencyMs.toFixed(2)} ms; rows: ${rows.length} (simulated)`] : [])] }, latencyMs: plan.latencyMs }
