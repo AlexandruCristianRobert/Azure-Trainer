@@ -12,15 +12,18 @@
 // then provision the lease checkpoint container, implement+deploy the
 // worker, and finally verify its at-least-once/idempotent delivery. No
 // later Task invalidates an earlier one's evidence - see cosmos-helpers.js's
-// new `images:<deploymentName>` dependency field for why 'similar' and
-// 'no-miss' each name only the one Deployment they actually depend on.
+// `code:<deploymentName>:<functionName>` dependency field for why 'similar'
+// and 'no-miss' each name only the functions they actually depend on
+// (review fix round 2: also used as a pass/fail guard via
+// `deployedFunctionsCurrent`, not just a staleness key, so each Task
+// grades the learner's own deployed code rather than the seed's).
 import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES, COSMOS_STARTER_FILES } from '../../templates/data-python/cosmos.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
 import {
   ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER_ID, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
-  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, file, findReturnCall, LEASES_CREATE_COMMAND, parsed, scenario,
+  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, deployedFunctionsCurrent, file, findReturnCall, LEASES_CREATE_COMMAND, parsed, scenario,
   VECTOR_CAPABILITY_COMMAND, WORKER_APPLY_COMMAND, WORKER_BUILD_V3_COMMAND, WORKER_DEPLOYMENT_YAML_V3,
 } from './cosmos-helpers.js'
 import { seedCosmosVectorGuided } from './cosmos-seeds.js'
@@ -96,6 +99,12 @@ const NEAR_MISS_VECTOR = DATA_FIXTURES.nearMisses['How do I permanently delete a
 const PARAPHRASE_VECTOR = DATA_FIXTURES.paraphrases['How long does Contoso Backup keep my snapshots?'].vector
 
 const similarReady = (context) => {
+  // Review fix round 2: must also require that assistant-api is running a
+  // build of the learner's OWN current find_similar_questions/
+  // remember_answer, not just the seed's own (now starter-correct) image -
+  // see the Task's own Solution below, which rebuilds+restarts to pick up
+  // the just-saved code under the SAME tag.
+  if (!deployedFunctionsCurrent(context, ASSISTANT_CLUSTER_ID, ASSISTANT_NAMESPACE, 'assistant-api', ['remember_answer', 'find_similar_questions'])) return false
   const record = cosmosEvidence(context, 'similar', 'similar')
   if (!record || record.measurements.status !== 200) return false
   const arrays = (record.measurements.values ?? []).filter((value) => Array.isArray(value))
@@ -143,6 +152,10 @@ const FEEDBACK_ITEMS = [
 ]
 
 const noMissReady = (context) => {
+  // Review fix round 2: as with 'similar' above, also require that
+  // feedback-worker is running a build of the learner's OWN current feed
+  // processor functions.
+  if (!deployedFunctionsCurrent(context, ASSISTANT_CLUSTER_ID, ASSISTANT_NAMESPACE, 'feedback-worker', ['process_changes', 'save_lease', 'apply_feedback'])) return false
   const record = cosmosEvidence(context, 'no-miss', 'feed-restart')
   if (!record || record.measurements.status !== 200 || record.measurements.value !== 2) return false
   const tally = containerNamed(context, 'tally')
@@ -211,12 +224,17 @@ export const cosmosVectorGuidedLab = {
       id: 'similar', stageId: 'vectors',
       text: 'Verify similarity search: run the similar scenario and confirm a paraphrase returns the canonical question as the top row with score >= 0.95, and a near-miss question does not return the canonical question above 0.9.',
       explanation: 'A paraphrase of a stored question should rank it first with a high score; a related-but-different question should score lower, below a safe application threshold.',
-      hints: ['Run the similar scenario - it stores several Q&A pairs, then queries once with a close paraphrase and once with a near-miss question.', 'Nearest is not the same as relevant: an application needs its own similarity threshold even when Cosmos faithfully ranks by distance.'],
+      hints: ['Build and redeploy assistant-api after implementing code-vectors, then run the similar scenario - it stores several Q&A pairs, then queries once with a close paraphrase and once with a near-miss question.', 'Nearest is not the same as relevant: an application needs its own similarity threshold even when Cosmos faithfully ranks by distance.'],
       examNote: 'Similarity scores need an application threshold; nearest isn\'t always relevant.',
       check: similarReady,
-      solution: { steps: [scenario('similar')] },
+      // Rebuilds the SAME tag (assistant:v2) from the now-implemented
+      // app.py, then `kubectl rollout restart` so replacement Pods re-pull
+      // it (imagePullPolicy: Always) - the only way assistant-api ever picks
+      // up code-vectors' own fix, since the seed-deployed Pod still runs the
+      // starter build (review fix round 2).
+      solution: { steps: [...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v2 .`, 'kubectl rollout restart deployment/assistant-api -n assistant'), scenario('similar')] },
       verification: { scenarioId: 'similar', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'indexing:qa_history'],
+      fields: ['code:assistant-api:remember_answer', 'code:assistant-api:find_similar_questions', 'indexing:qa_history'],
     }),
     cosmosTask({
       id: 'leases', stageId: 'feed',
@@ -254,7 +272,7 @@ export const cosmosVectorGuidedLab = {
       check: noMissReady,
       solution: { steps: [scenario('feed-restart')] },
       verification: { scenarioId: 'feed-restart', scenarioVersion: 1 },
-      fields: ['images:feedback-worker'],
+      fields: ['code:feedback-worker:process_changes', 'code:feedback-worker:save_lease', 'code:feedback-worker:apply_feedback'],
     }),
   ],
 }

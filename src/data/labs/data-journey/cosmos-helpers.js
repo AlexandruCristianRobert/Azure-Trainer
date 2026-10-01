@@ -12,12 +12,11 @@ import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES } from '../../templates/data-pyt
 //   - 'images': deployed source hashes for assistant-api and feedback-worker
 //   - 'images:<deploymentName>': just that one Deployment's source hash
 //     (Task 9: a Lab 2 Task that cares about only ONE of the two Deployments
-//     must not use the combined 'images' field above - 'similar' verifies
-//     assistant-api, before feedback-worker is ever deployed, and 'no-miss'
-//     verifies feedback-worker; sharing the combined field would make
-//     'similar' go stale the moment the LATER 'worker-deployed' Task
-//     deploys feedback-worker, violating "no later Task invalidates earlier
-//     evidence")
+//     must not use the combined 'images' field above, or every Task sharing
+//     one Deployment would go stale together regardless of which function
+//     each one actually depends on - see 'code:<deploymentName>:<functionName>'
+//     below, the field Lab 2's own 'similar'/'no-miss' and Lab 4's Tasks use
+//     instead, for exactly that reason, review fix round 2)
 //   - 'clientConsistency': clients.py's own `consistency_level`
 //   - 'accountConsistency': the account's default consistency level
 //   - 'indexing:<container>': that container's current indexing policy
@@ -56,6 +55,24 @@ const deployedAppSpec = (context, clusterId, namespace, deploymentName) => {
   const artifact = deploymentImageArtifact(context, clusterId, namespace, deploymentName)
   return artifact?.appSpec?.data ? artifact.appSpec : null
 }
+
+// Narrow "deployed matches current" guard (review ruling: a verification
+// Task that grades a scenario run against a Deployment must also require
+// that Deployment to be running a build of the functions it actually
+// verifies, as Lab 1's own `deployed()` does for assistant-api) - compares
+// the build-captured op list for the named functions (the same artifact
+// `podAppSpec`/`deployedAppSpec` reads at request time) against a fresh
+// parse of `context.project.savedFiles` right now. Narrower than a whole-
+// image sourceHash comparison, which would also trip on an unrelated edit
+// zone's own in-progress change (e.g. Lab 4's own worker.py edits must
+// never stale assistant-api's already-correct, never-redeployed app.py).
+export function deployedFunctionsCurrent(context, clusterId, namespace, deploymentName, functionNames) {
+  const deployed = deployedAppSpec(context, clusterId, namespace, deploymentName)
+  const current = parsed(context)
+  if (!deployed || !current) return false
+  return functionNames.every((name) => JSON.stringify(deployed.data.functions[name] ?? null) === JSON.stringify(current.data.functions[name] ?? null))
+}
+
 const DATA_DEPENDENCY_FIELDS = (context, { clusterId, namespace, account, database }, field) => {
   if (field === 'images') {
     return { assistantApiSourceHash: deploymentSourceHash(context, clusterId, namespace, 'assistant-api'), feedbackWorkerSourceHash: deploymentSourceHash(context, clusterId, namespace, 'feedback-worker') }

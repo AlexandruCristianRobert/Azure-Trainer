@@ -17,6 +17,22 @@ import {
 import { cosmosSdkGuidedLab } from './cosmos-sdk-guided.lab.js'
 import { COSMOS_SOLUTION_FILES } from '../../templates/data-python/cosmos.js'
 
+// Lab 1's own 'code-crud' Solution step always writes the canonical, fully-
+// solved app.py (see cosmos-helpers.js's `file()` doc comment) - correct for
+// Lab 1 itself (whose own app.py already carries every later Lab's edit
+// zones as solved text from the start, so overwriting with the canonical
+// solution changes nothing there). Replayed here to reach "Lab 1 end state"
+// for a LATER Lab's own seed, that same full-file write would clobber THIS
+// Lab's own, still-starter-or-faulty text for those later functions (review
+// fix round 2 / finding 2) - so this keeps only Lab 1's own portion of the
+// solution (everything before `def remember_answer`) and preserves
+// whatever `currentAppPy` already holds from that point on.
+function lab1OnlyAppPy(currentAppPy) {
+  const solutionCut = COSMOS_SOLUTION_FILES['app.py'].indexOf('def remember_answer')
+  const ownCut = currentAppPy.indexOf('def remember_answer')
+  return COSMOS_SOLUTION_FILES['app.py'].slice(0, solutionCut) + currentAppPy.slice(ownCut)
+}
+
 export function seedCosmosSdkGuided(run) {
   const lab = {
     id: run.labId, engineVersion: 2, contentVersion: run.contentVersion, manifestId: run.project.manifestId,
@@ -63,21 +79,25 @@ export function seedCosmosSdkGuided(run) {
 //
 // Lab 2's own initialProjectFiles (cosmos-vector-guided.lab.js) leave
 // remember_answer/find_similar_questions (app.py) and
-// save_lease/process_changes/apply_feedback (worker.py) as starters - but
-// parseDataApp (python-sdk.js) lowers every manifest.editZone together, so
-// *any* unimplemented one fails the whole parse, and a build from those
-// files would fail outright (project/build.js). So this seed's own internal
-// `az acr build` (replayed from Lab 1's 'deployed' Task) is run against a
-// scratch copy of the run with every edit zone pre-filled from
-// COSMOS_SOLUTION_FILES - never against the real run returned to the
-// learner, since only `sandbox`/`artifacts`/`runtime`/`nextSequence` survive
-// past this function (see `createBehavioralRun`, labEngine/run.js). The
-// result is a real build artifact whose own captured appSpec is frozen at
-// build time (data-actions.js's `podAppSpec`): the seed-deployed assistant-api
-// Pod keeps serving correct remember_answer/find_similar_questions from this
-// build regardless of what the learner's own editor currently holds, exactly
-// as the brief directs ("deploy the Lab 1 solution image; Lab 2's edit zones
-// ... start as starters").
+// save_lease/process_changes/apply_feedback (worker.py) as starters.
+// `raise NotImplementedError` in an edit zone is not a build-blocking
+// diagnostic (python-sdk.js review ruling: it lowers to an op that fails
+// only when actually CALLED), so a build from those still-starter files
+// succeeds. This seed's own internal `az acr build` (replayed from Lab 1's
+// 'deployed' Task) therefore runs against a SCRATCH COPY of the run whose
+// app.py/worker.py are this Lab's own (starter-or-faulty) current source -
+// never pre-solved - so the seed-deployed assistant-api Pod's build-captured
+// appSpec genuinely reflects Lab 2's own starters until the LEARNER's own
+// code and a later rebuild/redeploy change it (review fix round 2: the
+// Lab 2 'similar'/Lab 4 Tasks must grade the learner's own deployed code,
+// not a seed's pre-solved image). The one exception is Lab 1's own portion
+// of app.py (save_message/get_session/recent_sessions_for_user): the
+// replayed 'code-crud' step below writes only THAT portion from the
+// canonical solution (see `lab1OnlyAppPy`), preserving whatever this run's
+// own app.py already holds for the LATER functions. Only `sandbox`/
+// `artifacts`/`runtime`/`nextSequence` survive past this function (see
+// `createBehavioralRun`, labEngine/run.js), so none of this scratch-copy
+// mutation touches the learner's own `project.savedFiles` either way.
 export function seedCosmosVectorGuided(run) {
   const lab = {
     id: run.labId, engineVersion: 2, contentVersion: run.contentVersion, manifestId: run.project.manifestId,
@@ -92,15 +112,11 @@ export function seedCosmosVectorGuided(run) {
     seeded = result.run
   }
 
-  // Pre-fill every edit zone so the replayed 'deployed' build below (and
-  // every other build this seed runs) parses; see the function comment.
-  act({ type: 'save-file', path: 'app.py', text: COSMOS_SOLUTION_FILES['app.py'] })
-  act({ type: 'save-file', path: 'worker.py', text: COSMOS_SOLUTION_FILES['worker.py'] })
-
   for (const task of cosmosSdkGuidedLab.tasks) {
     if (task.stageId === 'verify' || task.stageId === 'consistency') continue
     for (const step of task.solution.steps) {
       if (step.kind === 'command') act({ type: 'command', line: step.line })
+      else if (step.kind === 'file' && step.path === 'app.py') act({ type: 'save-file', path: step.path, text: lab1OnlyAppPy(seeded.project.savedFiles['app.py']) })
       else if (step.kind === 'file') act({ type: 'save-file', path: step.path, text: step.content })
       else throw new Error(`Unsupported Lab 1 replay step in the Lab 2 seed: ${step.kind}`)
     }
