@@ -1,10 +1,10 @@
 # Data journey — handoff
 
-Current PostgreSQL branch: `codex/data-postgres`, based on `e059e55`, in `.superpowers/worktrees/data-postgres`. Local implementation only; no PostgreSQL merge or push has been performed. The older Cosmos branch notes below are historical.
+PostgreSQL Labs 5–9, terminal focus, and editor keyboard changes have been fast-forward integrated into `main` from `codex/data-postgres`, based on `e059e55`. Integration is reviewed and verified; the requested publish target is `origin/main`. The older Cosmos branch notes below are historical.
 
 ## PostgreSQL status — 2026-10-01
 
-Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete. Final whole-branch review's four original findings were addressed; its residual pool-accounting issue was resolved in the user-authorized integration follow-up. Terminal submission also restores focus to the new prompt. Focused premerge review is pending. Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
+Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete. Final whole-branch review's four original findings were addressed; its residual pool-accounting issue was resolved in the user-authorized integration follow-up. Terminal submission also restores focus to the new prompt. Focused integration-follow-up review approved the change without findings. Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
 
 Validation is intentionally bounded: named Data files only, no existing AKS/Container Apps suites, full suite or browser tests. Lab replay/build checks have taken seconds, not the 30-minute per-lab limit. Real Azure deployment and real Python/SQL execution are outside this simulator's scope. The existing Vite bundle-size advisory remains.
 
@@ -18,13 +18,15 @@ Validation is intentionally bounded: named Data files only, no existing AKS/Cont
 
 Shared support includes `src/lib/data/pg-sql.js`, `pg-engine.js`, `pg-plan.js`, `pg-pool.js`, `psql.js`, PostgreSQL SDK/runtime lowering, Flexible Server CLI/portal state, and the PostgreSQL template/data pipeline. Six-replica validation is gated to PostgreSQL labs; legacy replica limits are preserved.
 
-The latest explicit five-file run passes34 tests: SQL10, plan7, SDK11, five Lab solution replays and one terminal-focus component regression. Build passes with the existing bundle advisory. Browser walkthroughs and excluded journey suites have not been run. Thresholds and connection/vector estimates are teaching models, not Azure guarantees. The independent v3 extension uses its own protected manifest and loader and preserves the base corpus.
+The latest merged-main six-file run passes 42 tests: SQL 10, plan 7, SDK 11, five Lab solution replays, one terminal-focus component regression, and eight editor keyboard tests. Vitest took 8.18 seconds; build passed in 4.17 seconds with the existing bundle advisory. Browser walkthroughs and excluded journey suites have not been run. Thresholds and connection/vector estimates are teaching models, not Azure guarantees. The independent v3 extension uses its own protected manifest and loader and preserves the base corpus.
 
 ### Resolved integration follow-up
 
 Actual PG SQL calls now report request-local poolIdentity, preserving identity across checkouts and distinguishing equal-sized pool objects. Load simulation rejects multiple active pools as unsupported rather than undercounting them. Unused global pools do not affect the modeled active pool, and direct PgBouncer remains supported.
 
 The terminal waits for the replacement prompt to render after a submitted command, then restores focus after success or error. See `data-postgres-merge-prep-report.md` for red/green regressions and the pool-load probe. Historical final review records remain in `data-postgres-final-findings.md` and `data-postgres-final-fix-report.md`.
+
+The approved editor defaults are four spaces for Python/C# and two for other files. Tab/Shift+Tab indent/unindent current or selected rows; Enter preserves indentation and adds one unit after a Python block colon. Escape followed by Tab/Shift+Tab leaves the editor. Python handling is intentionally line-local, not a full parser or formatter. Focused review's backward-navigation finding was fixed in `59e6053`; scoped rereview approved it without remaining findings. See `project-editor-keyboard-report.md`.
 
 ## Status — 2026-10-01: Labs 1–4 (Cosmos DB) complete
 

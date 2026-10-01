@@ -2,6 +2,8 @@
 
 Branch codex/data-postgres; base e059e55. Completion and fix-round entries below are the recovery map.
 
+Integration continuation: focused pool/terminal review approved `1eebe19` with no findings. User-approved editor defaults implemented in `df93b78`; focused review's Escape → Shift → Shift+Tab issue fixed with RED/GREEN evidence in `59e6053`, scoped rereview clean. Both follow-ups fast-forward integrated into main. Fresh main verification: six explicitly named test files, 42/42 passing, Vitest 8.18s; production build passed in 4.17s with existing chunk advisory. No AKS/Container Apps/full/browser suites. User-requested publish target: origin/main. Reports: data-postgres-merge-prep-report.md and project-editor-keyboard-report.md. Historical parked residual below is resolved; no open review findings.
+
 Task 1: complete (8da4c9a..709ccc7, review clean; reviewer /root/review_corpus). Fixture check 0.143s, build 6.499s. Existing Vite bundle advisory only.
 Task 2: complete (709ccc7..c2aa64e, review clean; /root/review_server). Smoke 0.420s, build 14.675s.
 Task 3: complete (c2aa64e..d157570, review clean; /root/review_sql). Five parser tests green 4.190s; red 9.031s; build passed 11.94s Vite.
