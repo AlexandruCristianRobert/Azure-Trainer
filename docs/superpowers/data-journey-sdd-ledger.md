@@ -72,3 +72,10 @@ Task 10: fix round 1/5 dispatched (FIX_BASE b86065e)
 Task 10: fix round 1/5 (2 addressed, 0 open; commits b86065e..eec3a44)
 Task 10: complete (commits 6a7b785..eec3a44, review clean)
 Task 10: minor (deferred): feed-complete FEEDBACK_ITEMS reference non-existent qa_history ids (harmless)
+Task 11: dispatched (base 1a97d0a)
+Ruling 15: Task 11 tally-duplicate must prove checkpoint resumption, not just idempotent COUNT: post-restart batch must hand apply_feedback only items written after the saved checkpoint — the spec's change feed teaching point is checkpointing — cost if wrong: scenario change only
+Task 11: fix round 1/5 dispatched (FIX_BASE 72bb26f)
+Task 11: minor (deferred): feedbackDesignReady/feedbackReadReady guard duplication; partition key flexibility theoretical in simulator
+Task 11: fix round 1/5 (2 addressed, 0 open; commits 72bb26f..882ac2b)
+Task 11: complete (commits 1a97d0a..882ac2b, review clean)
+Final review: dispatched
