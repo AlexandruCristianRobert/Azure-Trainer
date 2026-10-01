@@ -48,6 +48,7 @@ import { aksCapstoneLab } from './aks-journey/capstone.lab.js'
 import { cosmosSdkGuidedLab } from './data-journey/cosmos-sdk-guided.lab.js'
 import { cosmosVectorGuidedLab } from './data-journey/cosmos-vector-guided.lab.js'
 import { cosmosTroubleshootingLab } from './data-journey/cosmos-troubleshooting.lab.js'
+import { cosmosIndependentLab } from './data-journey/cosmos-independent.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -101,6 +102,7 @@ export const LABS = [
   cosmosSdkGuidedLab,
   cosmosVectorGuidedLab,
   cosmosTroubleshootingLab,
+  cosmosIndependentLab,
 ]
 
 export function labById(id) {

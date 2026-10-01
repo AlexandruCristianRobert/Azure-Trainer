@@ -221,3 +221,57 @@ export function seedCosmosTroubleshooting(run) {
 
   return { sandbox: seeded.sandbox, artifacts: seeded.artifacts, runtime: seeded.runtime, nextSequence: seeded.nextSequence }
 }
+
+// Data journey Lab 4 (Task 11): "Independent: Cosmos feedback feature".
+// task-11-brief.md: the seed reaches the full Lab 2 end state - vector search
+// enabled, qa_history created, remember_answer/find_similar_questions already
+// served correctly (see seedCosmosVectorGuided's own scratch-build comment) -
+// but WITHOUT the feedback/tally/leases containers, and with the feedback
+// edit zones (worker.py's save_lease/process_changes/apply_feedback) reset to
+// starters so the learner redesigns them for this Lab. Reusing
+// seedCosmosVectorGuided (defined in this same file, so no new cross-module
+// import/cycle) and then deleting its own feedback/tally containers is
+// simpler and less error-prone than re-deriving "Lab 2 end state" from
+// scratch, and matters for more than tidiness: `createCosmosContainer`
+// leaves an EXISTING container's physicalPartitions/logicalScale untouched
+// on a matching re-create (sandbox/cosmosdb.js), so deleting first is what
+// lets the learner's OWN later `az cosmosdb sql container create` (replayed
+// with cosmos-independent.lab.js's own `dataScale`, via the
+// `context.lab.dataScale` hook in cosmosdb-sql.js) actually apply this Lab's
+// declared scale to a freshly-created `feedback`. Lab 2's own
+// `capability`/qa_history-create commands are duplicated as plain strings
+// below (never imported from cosmos-vector-guided.lab.js) for the same
+// reason seedCosmosTroubleshooting duplicates them above: a second
+// seeds<->Lab-module cycle broke bundling in Task 10's review.
+const QA_INDEXING_POLICY_JSON = '{"indexingMode":"consistent","automatic":true,"includedPaths":[{"path":"/*"}],"excludedPaths":[{"path":"/_etag/?"},{"path":"/embedding/*"}],"vectorIndexes":[{"path":"/embedding","type":"quantizedFlat"}]}'
+
+export function seedCosmosIndependent(run) {
+  const lab = {
+    id: run.labId, engineVersion: 2, contentVersion: run.contentVersion, manifestId: run.project.manifestId,
+    tasks: [], capabilities: { acrBuild: true, kubernetes: true, dataCosmos: true },
+  }
+  let seeded = { ...run, ...seedCosmosVectorGuided(run) }
+  const act = (action) => {
+    const result = applyRunAction(seeded, action, lab)
+    if (result.diagnostics.length || result.lines.some((line) => line.kind === 'err')) {
+      throw new Error(`Cosmos independent seed failed for ${JSON.stringify(action)}: ${JSON.stringify({ diagnostics: result.diagnostics, lines: result.lines })}`)
+    }
+    seeded = result.run
+  }
+
+  // task-11-brief.md: Lab 4 starts WITHOUT feedback/tally (seedCosmosVectorGuided's
+  // own Lab 2 prerequisite containers) - the learner's own Tasks recreate them.
+  act({ type: 'command', line: `az cosmosdb sql container delete --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name feedback --yes` })
+  act({ type: 'command', line: `az cosmosdb sql container delete --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name tally --yes` })
+
+  // Lab 2's own vectors Tasks (capability, qa_history) - see the module
+  // comment above for why these are literal commands, not a replay of
+  // cosmosVectorGuidedLab.tasks. remember_answer/find_similar_questions are
+  // already served correctly by the assistant-api Pod seedCosmosVectorGuided
+  // deployed from its own fully-solved scratch build, so no rebuild is
+  // needed here for them to work once qa_history exists.
+  act({ type: 'command', line: VECTOR_CAPABILITY_COMMAND })
+  act({ type: 'command', line: `az cosmosdb sql container create --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name qa_history --partition-key-path /product --throughput 400 --vector-embeddings '${VECTOR_EMBEDDINGS_JSON}' --idx '${QA_INDEXING_POLICY_JSON}'` })
+
+  return { sandbox: seeded.sandbox, artifacts: seeded.artifacts, runtime: seeded.runtime, nextSequence: seeded.nextSequence }
+}
