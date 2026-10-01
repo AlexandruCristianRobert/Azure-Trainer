@@ -56,7 +56,7 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 ## Tasks
 - [x] Task1 resource/CLI/portal/fixtures
 - [x] Task2 storage/TTL/memory
-- [ ] Task3 search/redis-cli
+- [x] Task3 search/redis-cli
 - [ ] Task4 SDK/runtime/helpers
 - [ ] Task5 template/workload/evidence
 - [ ] Task6 Lab10 Guided
@@ -65,7 +65,11 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 
 Task 1: complete (c89dd02..af71ed9, spec and quality approved by /root/review_redis_resource; zero findings). Disposable checks + one build, verification ~7.3s; no permanent tests/excluded suites. Report data-redis-task-1-report.md. Browser rendering unverified.
 Task 2: complete (c84d7b4..c310732, spec and quality approved by /root/review_redis_store; zero findings). Four store tests and one build; verification8.792s. Shared Blade formula; no persisted shape change. Report data-redis-task-2-report.md.
-Task 3: in progress. Base recorded at dispatch after controller ledger commit.
+Task 3: complete (9a93b9f..a621f1c, spec and quality approved by /root/review_redis_search; zero blocking findings). Three search tests and one build, verification16.909s. Actual author Codex confirmed. Cross-task manifest/Lab/deployment/freshness checks assigned to4–8 and final review, not claimed complete here.
+Task 3: minor (deferred): existing Vite chunk-size advisory; no bundle refactor in this feature batch, final review to triage.
+Task 4: in progress. Base recorded at dispatch after controller ledger commit.
+Ruling: Redis catalog accepts only host/port positionally, marks password/ssl/decode_responses/protocol and hset mapping keyword-only, and clients explicitly request protocol2 — actual redis-py third constructor positional is db and native RESP2 helper shape must stay stable — cost: narrower supported call forms plus one explicit constructor option; source https://redis.readthedocs.io/en/stable/connections.html.
+Ruling: Redis CLI reads context.run.runtime.simTimeMs from actual runLine({run,lab}) caller, not behavioralRun or elapsedMs; FT.INFO raw value uses RESP2 pairs with a separate detached measurement summary — accurate simulation clock and redis-py protocol must agree — cost: summary presentation separated from native command value.
 Ruling: native SCAN may return one bounded snapshot batch with cursor0 and treat COUNT as a hint; SDK scan_iter adapts native SCAN rather than a fake SCAN_ITER command — avoids unnecessary iterator machinery while preserving deletion-safe taught behavior — cost: general incremental cursor traversal is outside the simulator subset.
 Ruling: Task2 replaces Redis Blade's temporary memory accounting with its shared redisMemory helper — otherwise adding the cost model duplicates a logic block and risks teaching drift — cost: narrow extra consumer edit in the same task, no UI redesign.
 Ruling: Task1 may add the Redis collection cascade to deleteResourceGroup in src/lib/sandbox/ops.js — otherwise normal owned-group deletion leaves orphan Redis resources and invalid saves — cost: one additional shared cleanup branch, checked by the same disposable probe.
