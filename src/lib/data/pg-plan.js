@@ -55,6 +55,7 @@ export function makePgRowContext(row, table, alias) {
 export function evaluatePgExpression(expression, context) {
   if (!expression || typeof expression !== 'object' || !expression.kind) return expression
   const expr = expression
+  if (expr.kind === 'literal') return expr.value
   if (expr.kind === 'column') {
     if (expr.table) return context.relations[expr.table]?.[expr.name]
     if (Object.hasOwn(context.row, expr.name)) return context.row[expr.name]

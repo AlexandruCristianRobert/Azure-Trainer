@@ -6,7 +6,8 @@
  * Law alone would be replica-independent. Pools remove these cold bursts.
  * Pool/PgBouncer demand is RPS * 4ms; checkout costs 1ms. Available server slots
  * are max_connections - 3. Persistent pools request replicas * poolMaxSize;
- * PgBouncer caps those server slots at default_pool_size (5000 client slots).
+ * PgBouncer's actual clients are replicas * poolMaxSize (up to5000 admitted);
+ * server reservations are min(admitted clients, default_pool_size).
  * Accepted concurrency = min(capacity, demand), queueFactor = max(0,
  * demand/capacity - 1), p95 = setup + 4 * (1 + queueFactor). Only direct peak
  * connection attempts or persistent pool reservations beyond server capacity
@@ -23,10 +24,11 @@ export function simulatePoolLoad({ replicas, requestsPerSecond, seconds, mode, p
   const total = Math.round(requestsPerSecond * seconds)
   const direct = mode === 'per-request'
   const demand = total ? Math.ceil(requestsPerSecond * (direct ? 0.029 : 0.004) + (direct ? replicas * 6 : 0)) : 0
-  const requested = direct ? demand : mode === 'pool' ? replicas * poolMaxSize : Number(server.parameters['pgbouncer.default_pool_size'] ?? 50)
+  const clients = direct ? demand : replicas * poolMaxSize
+  const requested = mode === 'pgbouncer' ? Math.min(clients, 5000, Number(server.parameters['pgbouncer.default_pool_size'] ?? 50)) : clients
   const capacity = Math.max(0, Math.min(available, requested))
   const connectionAcceptance = requested ? Math.min(1, capacity / requested) : 1
-  const clientAcceptance = mode === 'pgbouncer' && demand > 5000 ? 5000 / demand : 1
+  const clientAcceptance = mode === 'pgbouncer' && clients > 5000 ? 5000 / clients : 1
   const served = Math.min(Math.floor(total * connectionAcceptance * clientAcceptance), Math.floor(capacity * seconds / (direct ? 0.029 : 0.004)))
   const failed = total - served
   const errors = []

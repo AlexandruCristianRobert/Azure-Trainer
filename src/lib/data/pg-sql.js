@@ -321,11 +321,15 @@ export function parsePgSql(text) {
 
 // Returns a cloned statement directly, never { statement }. Parameter values stay
 // data: they are substituted into the AST without re-tokenizing SQL text.
+// Object parameters are atomic { kind: 'literal', value: data } nodes so JSON
+// fields named kind cannot impersonate expressions. Primitives and vector arrays
+// keep their existing shape; casts still surround their bound value.
 export function bindParams(stmt, params) {
   const refs = []
   const visit = (node, resolve, depth = 0) => {
     if (depth > 100) throw new Error('Invalid statement nesting.')
     if (node === null || typeof node !== 'object') return node
+    if (node.kind === 'literal') return { kind: 'literal', value: node.value }
     if (node.kind === 'param') { refs.push(node); return resolve ? resolve(node) : node }
     if (Array.isArray(node)) return node.map(value => visit(value, resolve, depth + 1))
     return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, visit(value, resolve, depth + 1)]))
@@ -346,7 +350,10 @@ export function bindParams(stmt, params) {
     } else if (params !== undefined && params !== null && (typeof params !== 'object' || Object.keys(params).length)) {
       throw new Error('The statement has no parameter placeholders.')
     }
-    return visit(stmt, ref => style === 'named' ? params[ref.name] : params[ref.index])
+    return visit(stmt, ref => {
+      const value = style === 'named' ? params[ref.name] : params[ref.index]
+      return value !== null && typeof value === 'object' && !Array.isArray(value) ? { kind: 'literal', value } : value
+    })
   } catch (error) {
     return { error: { code: 'ProgrammingError', message: error.message } }
   }
