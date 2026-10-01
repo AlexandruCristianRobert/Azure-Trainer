@@ -71,22 +71,26 @@ function filtered(context) {
     && measurements.value.every(row => row.product === QUESTION.product && row.version === QUESTION.version && row.language === QUESTION.language)
     && hasSetting(measurements, 'hnsw.iterative_scan', value => value === 'relaxed_order')
 }
-function findExpression(value, predicate) {
-  if (!value || typeof value !== 'object') return false
-  return predicate(value) || Object.values(value).some(child => findExpression(child, predicate))
-}
 function answered(context) {
   const measurements = proof(context, 'answer')
-  const functions = pgDeployedArtifact(context, PG_TARGET)?.appSpec?.data?.functions
-  const body = functions?.answer?.body
   const calls = selects(measurements)
+  const training = measurements?.trainingCalls ?? []
+  const builders = training.filter(call => call.stepIndex === 0 && call.functionName === 'build_context')
+  const helpers = training.filter(call => call.stepIndex === 0 && call.functionName === 'training_answer')
   return learnerDeployed(context, ['retrieve_passages', 'build_context', 'answer']) && filtered(context)
     && measurements?.status === 200 && same(measurements.values, [
       { answer: QUESTION.answer, sources: QUESTION.expectedChunkIds },
       { answer: "I couldn't find that in the documentation.", sources: [] },
     ]) && calls.length === 2 && same(calls[0].rows.map(row => row.id), QUESTION.expectedChunkIds) && same(calls[1].rows, [])
-    && findExpression(body, expr => expr.kind === 'call-local' && expr.name === 'build_context')
-    && findExpression(body, expr => expr.kind === 'builtin' && expr.name === 'training_answer')
+    && measurements.trainingTraceTruncated === false
+    && builders.some(builder => same(builder.args, [calls[0].rows])
+      && same(builder.result?.sources, calls[0].rows.map(row => row.id))
+      && typeof builder.result?.passages === 'string'
+      && calls[0].rows.every(row => builder.result.passages.includes(row.content))
+      && helpers.some(helper => same(helper.args, [QUESTION.text, builder.result])
+        && helper.result === measurements.values[0].answer
+        && same(builder.result.sources, measurements.values[0].sources)))
+    && !training.some(call => call.stepIndex === 1 && call.functionName === 'training_answer')
 }
 const retrievalFields = ['code:assistant-api:retrieve_passages', 'pg:table:chunks', 'pg:table:documents', 'pg:index:chunks']
 const readySteps = [SCALE, MEMORY, INDEX]

@@ -34,6 +34,35 @@ class StopExecution extends Error {
 }
 function fail(code, message) { throw new StopExecution({ code, message }) }
 
+// PG-only training evidence is separate from SDK calls/charges. Detach at
+// input/output boundaries; reject non-JSON, cycles, nonfinite or oversized
+// snapshots through the same fail-closed DATA_UNSUPPORTED contract.
+function trainingSnapshot(value) {
+  let remaining = 8192
+  const ancestors = new Set()
+  function copy(item, depth) {
+    if (--remaining < 0 || depth > 32) throw new Error('snapshot bound')
+    if (item === null || typeof item === 'boolean' || typeof item === 'string') return item
+    if (typeof item === 'number' && Number.isFinite(item)) return item
+    if (typeof item !== 'object' || ancestors.has(item)) throw new Error('not finite JSON')
+    if (!Array.isArray(item) && ![Object.prototype, null].includes(Object.getPrototypeOf(item))) throw new Error('not plain JSON')
+    ancestors.add(item)
+    const result = Array.isArray(item) ? Array.from(item, child => copy(child, depth + 1))
+      : Object.fromEntries(Object.entries(item).map(([key, child]) => [key, copy(child, depth + 1)]))
+    ancestors.delete(item)
+    return result
+  }
+  try {
+    const snapshot = copy(value, 0)
+    if (JSON.stringify(snapshot).length > 65536) throw new Error('snapshot size bound')
+    return snapshot
+  } catch { return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training evidence must be bounded finite JSON') }
+}
+function recordTrainingCall(ctx, functionName, args, result) {
+  if (ctx.trainingCalls.length >= 64) { ctx.trainingTraceTruncated.value = true; return }
+  ctx.trainingCalls.push({ functionName, args, result: trainingSnapshot(result) })
+}
+
 export function runDataFunction({ appSpec, sandbox, account, database, dataTarget, functionName, args = [], nowMs, scenarioState, changeFeed }) {
   const calls = []
   const acct = (sandbox.cosmosAccounts ?? []).find((a) => a.name === account)
@@ -52,9 +81,11 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
     consistency: clientLevel ?? accountDefault,
     calls, lastContinuations: {}, sandboxBox: { value: sandbox }, globals: {},
     connections: { opened: 0, closed: 0, active: 0, events: [] }, jsonbValues: new WeakSet(),
+    trainingCalls: [], trainingTraceTruncated: { value: false },
   }
   const totalCharge = () => round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0))
-  const pgEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections } : {}
+  const pgEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections,
+    trainingCalls: ctx.trainingCalls, trainingTraceTruncated: ctx.trainingTraceTruncated.value } : {}
   try {
     if (dataTarget?.kind === 'postgres') {
       for (const [name, expr] of Object.entries(appSpec.data.postgres?.globals ?? {})) if (expr.kind === 'literal') ctx.globals[name] = expr.value
@@ -75,8 +106,12 @@ function callFunction(name, argValues, ctx, depth) {
   const locals = {}
   fn.params.forEach((param, i) => { locals[param] = argValues[i] })
   const frame = { ...ctx, currentFunctionName: name, depth }
+  const traceContext = ctx.dataTarget?.kind === 'postgres' && name === 'build_context'
+  const trainingArgs = traceContext ? trainingSnapshot(argValues) : null
   const signal = execOps(fn.body, locals, frame)
-  return signal ? signal.value : null
+  const result = signal ? signal.value : null
+  if (traceContext) recordTrainingCall(ctx, name, trainingArgs, result)
+  return result
 }
 
 function execOps(ops, locals, ctx) {
@@ -189,11 +224,15 @@ function evalBuiltin(expr, locals, ctx) {
     case 'training_answer': {
       if (ctx.dataTarget?.kind !== 'postgres') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
       const context = evalExpr(expr.args[1], locals, ctx)
+      const trainingArgs = trainingSnapshot([value, context])
       const top = context?.sources?.[0]
-      if (top == null || typeof context?.passages !== 'string' || !context.passages) return 'I could not find a relevant passage in the supplied sources.'
       const passage = CORPUS.chunks.find(chunk => chunk.id === top)
-      if (!passage || !context.passages.includes(passage.content)) return 'I could not find a relevant passage in the supplied sources.'
-      return corpusQuestions().find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
+      const result = top == null || typeof context?.passages !== 'string' || !context.passages
+        || !passage || !context.passages.includes(passage.content)
+        ? 'I could not find a relevant passage in the supplied sources.'
+        : corpusQuestions().find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
+      recordTrainingCall(ctx, 'training_answer', trainingArgs, result)
+      return result
     }
     case 'next': return Array.isArray(value) && value.length ? value[0] : null
     default: return fail('DATA_UNSUPPORTED', `Not supported by the simulator: builtin '${expr.name}'`)

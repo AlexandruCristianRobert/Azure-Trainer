@@ -103,6 +103,8 @@ function runRequestSteps(run, lab, manifest, target, steps) {
   // reads this array instead). Additive: existing Tasks keep reading `value`.
   const values = []
   let calls = []
+  const trainingCalls = []
+  let trainingTraceTruncated = false
   let stale = false
   for (const step of steps) {
     if (status !== 200) break
@@ -111,13 +113,20 @@ function runRequestSteps(run, lab, manifest, target, steps) {
     const result = runDataFunction({ appSpec, sandbox, account, database, ...(lab.capabilities?.dataPostgres ? { dataTarget: lab.dataTarget } : {}), functionName, args: step.args, nowMs, scenarioState, changeFeed: CHANGE_FEED_HOOK })
     sandbox = result.sandbox
     calls = calls.concat(result.calls)
+    if (lab.capabilities?.dataPostgres) {
+      // Step index binds detached request-local training inputs/results to the
+      // corresponding actual response in measurements.values.
+      trainingCalls.push(...(result.trainingCalls ?? []).map(call => ({ ...call, stepIndex: values.length })))
+      trainingTraceTruncated ||= result.trainingTraceTruncated === true
+    }
     value = result.value
     values.push(result.value)
     status = result.status
     if (lab.capabilities?.dataPostgres && result.error) error = result.error
     if (result.calls.some((call) => call.stale)) stale = true
   }
-  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0)), stale, ...(error ? { error } : {}) }
+  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0)), stale,
+    ...(lab.capabilities?.dataPostgres ? { trainingCalls, trainingTraceTruncated } : {}), ...(error ? { error } : {}) }
 }
 
 function runWorkerSteps(run, lab, manifest, target, steps) {
@@ -229,7 +238,9 @@ export function applyDataAction(run, action, lab) {
     ? runRequestSteps(run, lab, manifest, scenario.target, scenario.steps)
     : runWorkerSteps(run, lab, manifest, scenario.target, scenario.steps)
   const completed = outcome.status === 200
-  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value, values: outcome.values, ...(outcome.error ? { error: outcome.error } : {}), ...(outcome.load ?? {}) }
+  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value, values: outcome.values,
+    ...(postgres ? { trainingCalls: outcome.trainingCalls ?? [], trainingTraceTruncated: outcome.trainingTraceTruncated === true } : {}),
+    ...(outcome.error ? { error: outcome.error } : {}), ...(outcome.load ?? {}) }
   const next = recordVerification({ ...run, sandbox: outcome.sandbox }, lab, task.id, {
     scenarioId: action.scenarioId, scenarioVersion: scenario.version,
     outcome: completed ? 'passed' : 'failed', completed,
