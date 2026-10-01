@@ -78,3 +78,18 @@ export function seedPostgresPoolingGuided(run) {
     pgSqlCommand(`-c "${PG_HNSW_SQL}"`),
   ] })
 }
+
+export function seedPostgresTroubleshooting(run) {
+  // The incompatible distance index was built before the compute downgrade.
+  // A later, visible maintenance stage drops it; no hidden incident flags.
+  const seeded = { ...run, ...seedPostgresApp(run, { imageTag: 'pg-troubleshooting-seed', commands: [
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name maintenance_work_mem --value 65536`,
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name max_connections --value 50`,
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_product_version ON documents (product, version)"'),
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_metadata ON documents USING gin (metadata jsonb_path_ops)"'),
+    pgSqlCommand('-c "CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_l2_ops)"'),
+    `az postgres flexible-server update -g ${PG_GROUP} -n pg-assistant --tier Burstable --sku-name Standard_B1ms`,
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name maintenance_work_mem --value 1024`,
+  ] }) }
+  return initialized(applyPostgresSeedActions(seeded, [command('kubectl scale deployment/assistant-api -n assistant --replicas 6')]))
+}

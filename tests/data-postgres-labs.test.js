@@ -3,6 +3,7 @@ import { replaySolution } from './helpers/dataLab.js'
 import { labById } from '../src/data/labs/index.js'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 describe('PostgreSQL data Labs', () => {
   it('Lab 5 starts without index proofs and completes every Task through its ordered Solutions', () => {
@@ -64,5 +65,56 @@ describe('PostgreSQL data Labs', () => {
     expect(proof('bouncer-load')).toMatchObject({ mode: 'pgbouncer', replicas: 6, poolMaxSize: 5, failed: 0, peakServerConnections: 20 })
     expect(proof('bouncer-load').calls.filter(call => typeof call.sql === 'string').every(call => call.poolLifetime === 'module' && call.poolMaxSize === 5)).toBe(true)
     expect(proof('bouncer-load').calls.filter(call => call.plan)[0].rows.map(row => row.id)).toEqual([1, 2])
+  })
+  it('Lab 8 starts with five unsatisfied incidents and repairs each through ordered standalone Solutions', () => {
+    // A solved seed, static-code grading, stale app proof or mismatched
+    // distance index must prevent troubleshooting completion.
+    const lab = labById('data-postgres-troubleshooting')
+    expect(lab).toBeDefined()
+    const fresh = createBehavioralRun(lab, { attemptId: 'postgres-troubleshooting-fresh' })
+    expect(lab.tasks.map(task => task.id)).toEqual(['quote-safe', 'latency-restored', 'index-rebuilt', 'filtered-complete', 'load-stable'])
+    expect(evaluateLab(lab, fresh).tasks.filter(task => task.done)).toEqual([])
+    expect(Object.keys(fresh.evidence.experimentsById)).toEqual([])
+    expect(fresh.sandbox.postgresServers[0]).toMatchObject({ skuName: 'Standard_B1ms', parameters: { maintenance_work_mem: '1024', max_connections: '50' } })
+    expect(fresh.sandbox.postgresServers[0].databases[0].indexes.find(index => index.method === 'hnsw').columns[0].opclass).toBe('vector_l2_ops')
+    const observe = (run, scenarioId) => applyRunAction(run, { type: lab.scenarios[scenarioId].kind, scenarioId }, lab)
+    const measurement = result => result.lines[0].measurements
+    const quote = measurement(observe(fresh, 'question-with-quote'))
+    expect(quote.status).toBeGreaterThanOrEqual(400)
+    expect(quote.error.message.toLowerCase()).toContain('syntax error')
+    const latency = measurement(observe(fresh, 'retrieve-latency'))
+    expect(latency.calls.filter(call => call.plan)[0].plan.node).toBe('Seq Scan')
+    expect(latency.calls.reduce((sum, call) => sum + call.latencyMs, 0)).toBeGreaterThan(100)
+    expect(measurement(observe(fresh, 'load-600rps'))).toMatchObject({ status: 503, mode: 'per-request', replicas: 6 })
+    // The filtered defect emerges after the distance-index repair; it is
+    // latent under the initial exact scan, rather than an artificial failure.
+    const applyStep = (run, step) => applyRunAction(run, step.kind === 'file'
+      ? { type: 'save-file', path: step.path, text: step.content }
+      : step.kind === 'command' ? { type: 'command', line: step.line }
+        : { type: lab.scenarios[step.scenarioId].kind, scenarioId: step.scenarioId }, lab).run
+    let databaseOnly = fresh
+    for (const step of lab.tasks[1].solution.steps.slice(0, 4)) databaseOnly = applyStep(databaseOnly, step)
+    databaseOnly = observe(databaseOnly, 'retrieve-latency').run
+    expect(evaluateLab(lab, databaseOnly).tasks.find(task => task.id === 'latency-restored').done).toBe(false)
+    let staged = fresh
+    for (const task of lab.tasks.slice(0, 2)) for (const step of task.solution.steps) staged = applyStep(staged, step)
+    expect(measurement(observe(staged, 'retrieve-filtered')).value.length).toBeLessThan(2)
+    for (const step of lab.tasks[2].solution.steps.slice(0, 3)) staged = applyStep(staged, step)
+    const blockedBuild = applyRunAction(staged, { type: 'command', line: 'psql "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge user=assistant_admin" -c "CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)"' }, lab)
+    expect(blockedBuild.lines.some(line => line.kind === 'err' && line.text.includes('could not build HNSW index'))).toBe(true)
+    expect(blockedBuild.run.sandbox.postgresServers[0].databases[0].indexes.some(index => index.method === 'hnsw')).toBe(false)
+    const { run, state } = replaySolution(lab)
+    expect(state.tasks.filter(task => !task.done).map(task => task.id)).toEqual([])
+    expect(state.isComplete).toBe(true)
+    const proof = id => run.evidence.experimentsById[run.evidence.currentEvidenceByTask[id]].measurements
+    expect(proof('quote-safe')).toMatchObject({ status: 200, value: [] })
+    expect(proof('quote-safe').calls.filter(call => call.plan)[0].rows).toEqual([])
+    for (const id of ['latency-restored', 'index-rebuilt']) {
+      expect(proof(id).value.map(row => row.id)).toEqual([17, 9])
+      expect(proof(id).calls.filter(call => call.plan)[0].plan.node).toMatch(/^Index Scan/)
+    }
+    expect(proof('filtered-complete').value.map(row => row.id)).toEqual([1, 2])
+    expect(proof('load-stable')).toMatchObject({ status: 200, mode: 'pgbouncer', replicas: 6, poolMaxSize: 5, failed: 0, p95Ms: 5 })
+    expect(proof('load-stable').calls.filter(call => typeof call.sql === 'string').every(call => call.poolLifetime === 'module' && call.poolMaxSize === 5)).toBe(true)
   })
 })
