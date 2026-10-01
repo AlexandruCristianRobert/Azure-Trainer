@@ -38,6 +38,7 @@ const measurement = (context, id) => {
   return record?.taskId === id && record.scenarioId === id && record.completed && record.outcome === 'passed' ? record.measurements : null
 }
 const trustworthy = m => m?.status === 200 && m.provenanceValid === true && m.traceTruncated === false && m.crossFilterAnswers === 0
+  && m.requests.every(request => request.cacheEffects?.complete === true)
 const correct = m => trustworthy(m) && m.answersCorrect === true && m.staleAnswers === 0
 const cachedFunctions = ['cached_answer']
 const freshFunctions = [...cachedFunctions, 'invalidate_product']
@@ -65,10 +66,9 @@ const task = ({ id, stageId, text, explanation, hints, examNote, check, steps, f
   id, stageId, text, explanation, hints, examNote, check, solution: { steps },
   ...(fields ? { verification: { scenarioId: id, scenarioVersion: 1 }, dependencies: redisDependencies(REDIS_DEPENDENCY_TARGET, fields) } : {}),
 })
-const semanticTrace = m => m.calls.some(call => call.command === 'FT.SEARCH' && !call.error
-  && call.args[0] === 'idx:semantic' && call.args.at(-2) === 'DIALECT' && Number(call.args.at(-1)) === 2)
+const semanticTrace = m => m.requests.some(request => request.cacheEffects.searchedSemanticDialect2)
 const twoNamespacesScanned = m => ['ka:answer:contoso-backup:*', 'ka:sem:contoso-backup:*']
-  .every(prefix => m.calls.some(call => call.command === 'SCAN' && !call.error && call.args.includes(prefix)))
+  .every(prefix => m.requests.some(request => request.cacheEffects.scanPatterns.includes(prefix)))
 
 export const redisCacheGuidedLab = {
   id: 'data-redis-cache-guided', title: 'Guided: Cache answers and search Redis vectors',
@@ -148,7 +148,7 @@ export const redisCacheGuidedLab = {
       explanation: 'Delete only the requested product in both namespaces. The workload retains the stale diagnostic cache, calls your deployed invalidation function and verifies the resulting payload and unaffected Support response.',
       hints: ['Use scan_iter with each product-prefixed namespace and delete every returned key.', 'Do not clear the whole database or remove the vector index.'],
       examNote: 'Filter-safe keys include product, version and language plus the normalized question digest. Invalidation must cover both response strings and semantic hashes; deleting only exact answers can leave stale semantic hits. A SCAN/DELETE loop is a teaching pattern, not a production concurrency guarantee.',
-      check: context => { const m = measurement(context, 'fresh-after-invalidate'); const returned = m?.requests.slice(-2); return redisDeployedFunctionsCurrent(context, freshFunctions) && correct(m) && twoNamespacesScanned(m) && returned?.[0]?.expectedAnswer && returned[0].originCalls === 1 && returned[0].body.sourceRevision === 2 && returned[0].body.answer === 'Contoso Backup snapshots are retained for 14 days by default.' && returned[1].expectedAnswer && returned[1].responseHit && m.calls.some(call => call.command === 'DEL' && call.args.some(key => key.startsWith('ka:answer:contoso-backup:'))) },
+      check: context => { const m = measurement(context, 'fresh-after-invalidate'); const returned = m?.requests.slice(-2); return redisDeployedFunctionsCurrent(context, freshFunctions) && correct(m) && twoNamespacesScanned(m) && returned?.[0]?.expectedAnswer && returned[0].originCalls === 1 && returned[0].body.sourceRevision === 2 && returned[0].body.answer === 'Contoso Backup snapshots are retained for 14 days by default.' && returned[1].expectedAnswer && returned[1].responseHit && m.requests.some(request => request.cacheEffects.removedKeys.some(entry => entry.command === 'DEL' && entry.key.startsWith('ka:answer:contoso-backup:'))) },
       fields: freshFields, steps: release(freshSource, 'redis-invalidate', ['fresh-after-invalidate'], ['SCAN 0 MATCH ka:answer:contoso-support:*']),
     }),
     task({ id: 'index', stageId: 'semantic',

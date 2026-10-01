@@ -35,12 +35,12 @@ const database = context => context.sandbox.redisClusters?.find(cluster => clust
 const measurement = (context, id) => context.evidence.experimentsById[context.evidence.currentEvidenceByTask[id]]?.measurements
 const correct = m => m?.status === 200 && m.provenanceValid === true && m.answersCorrect === true
   && m.traceTruncated === false && m.crossFilterAnswers === 0 && m.staleAnswers === 0
+  && m.requests.every(request => request.cacheEffects?.complete === true)
 const allFunctions = Object.keys(REDIS_SOLUTION_FUNCTIONS)
 const cacheFunctions = ['cached_answer', 'remember_semantic', 'semantic_lookup', 'answer']
 const fields = (names, search = true) => ['redis:resource', ...names.map(name => `code:assistant-api:${name}`),
   'redis:source:contoso-backup', 'redis:source:contoso-support', ...(search ? ['redis:index:idx:semantic'] : [])]
-const searched = m => m.calls.some(call => call.command === 'FT.SEARCH' && !call.error
-  && call.args[0] === 'idx:semantic' && call.args.at(-2) === 'DIALECT' && Number(call.args.at(-1)) === 2)
+const searched = m => m.requests.some(request => request.cacheEffects.searchedSemanticDialect2)
 const task = ({ id, stageId, text, explanation, hints, examNote, names = cacheFunctions, search = true, check, steps }) => ({
   id, stageId, text, explanation, hints, examNote, solution: { steps }, verification: { scenarioId: id, scenarioVersion: 1 },
   dependencies: redisDependencies(REDIS_DEPENDENCY_TARGET, names.length ? fields(names, search) : ['redis:resource']),
@@ -93,8 +93,8 @@ export const redisTroubleshootingLab = {
       check: (_context, m) => correct(m) && m.total === 5 && m.originCalls === 4 && m.responseHits === 1
         && m.requests[3]?.body.sourceRevision === 2 && m.requests[4]?.body.sourceRevision === 2
         && m.requests.at(-1)?.responseHit === true
-        && ['ka:answer:contoso-backup:*', 'ka:sem:contoso-backup:*'].every(prefix => m.calls.some(call => call.command === 'SCAN' && !call.error && call.args.includes(prefix)))
-        && ['ka:answer:', 'ka:sem:'].every(prefix => m.calls.some(call => call.command === 'DEL' && call.value > 0 && call.args.some(key => key.startsWith(prefix + 'contoso-backup:')))),
+        && ['ka:answer:contoso-backup:*', 'ka:sem:contoso-backup:*'].every(prefix => m.requests.some(request => request.cacheEffects.scanPatterns.includes(prefix)))
+        && ['ka:answer:', 'ka:sem:'].every(prefix => m.requests.some(request => request.cacheEffects.removedKeys.some(entry => entry.command === 'DEL' && entry.key.startsWith(prefix + 'contoso-backup:')))),
       steps: [scenario('fresh-after-invalidation'), inspect('Before repair: staleAnswers=2; revision 1 exact and semantic answers despite the revision 2 source. Support remains correct.'),
         ...deploy(finalSource, 'redis-invalidation-fixed'), scenario('fresh-after-invalidation')],
     }),
@@ -116,8 +116,8 @@ export const redisTroubleshootingLab = {
       examNote: 'TTL changes affect new writes only. Simulated clock advances are synchronous. ' + REDIS_ESTIMATE_LABEL,
       check: (_context, m) => correct(m) && m.total === 258 && m.originCalls >= 256 && m.persistentKeys === 0
         && m.rejectedWrites === 0 && m.expiredKeys >= 256 && m.usedBytes > 0 && m.usedBytes < 65536
-        && m.calls.some(call => call.command === 'SET' && call.args.includes('EX'))
-        && m.calls.some(call => call.command === 'EXPIRE' && call.value === 1),
+        && m.requests.some(request => request.cacheEffects.setWithExpiry)
+        && m.requests.some(request => request.cacheEffects.expiryApplied),
       steps: [...deploy(finalSource, 'redis-ttl-fixed'), scenario('memory-restored'),
         cli(`TTL ka:answer:${canonicalSuffix}`), cli(`TTL ka:sem:${canonicalSuffix}`), cli('INFO memory')],
     }),
@@ -127,8 +127,8 @@ export const redisTroubleshootingLab = {
       hints: ['The source has distinct correct answers for all four scopes. Check crossFilterAnswers and each returned body.scope.', 'Use response_key(question, product, version, language) in both read paths and semantic_key with all four arguments for hash writes.'],
       examNote: 'Cache identity includes every dimension that can change the answer: product, version and language. Retire unsafe keys after changing the key scheme.',
       check: (_context, m) => correct(m) && m.total === 12 && m.originCalls === 8 && m.responseHits === 4
-        && REDIS_FIXTURES.scopeVariants.every(entry => m.calls.some(call => call.command === 'HSET' && !call.error
-          && call.args[0].startsWith(`ka:sem:${entry.scope.product}:${entry.scope.version}:${entry.scope.language}:`))),
+        && REDIS_FIXTURES.scopeVariants.every(entry => m.requests.some(request => request.cacheEffects.hashWrittenKeys.some(key =>
+          key.startsWith(`ka:sem:${entry.scope.product}:${entry.scope.version}:${entry.scope.language}:`)))),
       steps: [...deploy(missingScope, 'redis-scope-incident'), scenario('purge-owned-cache'), scenario('scope-isolation'),
         inspect('Expected diagnostic: successful HTTP with crossFilterAnswers > 0; inspect wrong returned product, version and language.'),
         ...deploy(finalSource, 'redis-scope-fixed'), scenario('purge-owned-cache'), scenario('scope-isolation')],

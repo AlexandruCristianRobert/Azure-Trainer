@@ -62,6 +62,12 @@ def semantic_store(question, product, version, language, answer):
     expect(sdkHit.value).toEqual(answer)
     expect(sdkHit.redis.originCalls).toBe(0)
     expect(sdkHit.redis.calls[0].value[2]).toContainEqual(expect.objectContaining({ redisKind: 'bytes' }))
+    expect(sdkHit.redis.returnProvenance).toMatchObject({ kind: 'search', callIndex: 0 })
+    const canned = parseDataApp({ ...files, 'app.py': app.replace('return decode_answer(row["payload"])', `return ${JSON.stringify(answer)}`) }, manifest)
+    expect(canned.diagnostics).toEqual([])
+    const fabricated = runDataFunction({ appSpec: canned.appSpec, sandbox: stored.sandbox, dataTarget: target, functionName: 'semantic_lookup', args: [question, 'contoso-backup', 'v1', 'en', 0.05], nowMs: 0 })
+    expect(fabricated.value).toEqual(answer)
+    expect(fabricated.redis.returnProvenance).toBeNull()
   })
   it('executes Redis miss, real SET EX and repeat hit with one protected scoped origin call', () => {
     const target = REDIS_TARGET
@@ -106,6 +112,23 @@ def bounded_trace(keys):
     expect(one.status).toBe(200)
     expect(two.value).toEqual(one.value)
     expect(one.redis.originCalls + two.redis.originCalls).toBe(1)
+    expect(one.redis.returnProvenance).toMatchObject({ kind: 'source', callIndex: 0 })
+    expect(two.redis.returnProvenance).toMatchObject({ kind: 'get', callIndex: 0 })
+    for (const source of [app.replace('return decode_answer(value)', `return ${JSON.stringify(one.value)}`), app.replace('    return result\n', `    return ${JSON.stringify(one.value)}\n`)]) {
+      const canned = parseDataApp({ ...files, 'app.py': source }, manifest)
+      expect(canned.diagnostics).toEqual([])
+      const fabricated = runDataFunction({ appSpec: canned.appSpec, sandbox: source.includes('return decode_answer(value)') ? sandbox : one.sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60], nowMs: 1000 })
+      expect(fabricated.value).toEqual(one.value)
+      expect(fabricated.redis.returnProvenance).toBeNull()
+    }
+    const nestedSource = app.replace('return decode_answer(value)', 'return relay(value)').replace('    return result\n', '    return relay(encode_answer(result))\n') + '\ndef relay(payload):\n    items = [{"payload": payload, "unrelated": "literal"}]\n    for item in items:\n        return decode_answer(encode_answer(decode_answer(item["payload"])))\n'
+    const nested = parseDataApp({ ...files, 'app.py': nestedSource, 'clients.py': files['clients.py'].replace('decode_responses=False', 'decode_responses=True') }, { ...manifest, editZones: [...manifest.editZones, 'relay'] })
+    expect(nested.diagnostics).toEqual([])
+    for (const [state, kind] of [[sandbox, 'source'], [one.sandbox, 'get']]) {
+      const flow = runDataFunction({ appSpec: nested.appSpec, sandbox: state, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60], nowMs: 1000 })
+      expect(flow.value).toEqual(one.value)
+      expect(flow.redis.returnProvenance).toMatchObject({ kind, callIndex: 0 })
+    }
     expect(two.redis.calls.some(call => call.command === 'GET' && call.hit === true)).toBe(true)
     expect(one.redis.calls.find(call => call.command === 'SET')).toMatchObject({ args: [expect.any(String), expect.objectContaining({ redisKind: 'bytes' }), 'EX', 60] })
     expect(Object.values(one.sandbox.redisClusters[0].database.keys)[0].expiresAtMs).toBe(60000)

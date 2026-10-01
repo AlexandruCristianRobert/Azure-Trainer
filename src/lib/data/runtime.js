@@ -85,6 +85,8 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
     connections: { opened: 0, closed: 0, active: 0, events: [] }, jsonbValues: new WeakSet(), pgPoolIds: new Map(),
     trainingCalls: [], trainingTraceTruncated: { value: false },
     redisEvidence: newRedisEvidence(),
+    // Metadata never enters learner values, SDK arguments or persisted state.
+    redisFlow: dataTarget?.kind === 'redis' && appSpec.data.redis ? { current: null, locals: new WeakMap() } : null,
   }
   const totalCharge = () => round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0))
   const runtimeEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections,
@@ -99,6 +101,7 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
       execOps(appSpec.data.redis.clientOps, ctx.globals, { ...ctx, depth: 0 })
     }
     const returned = callFunction(functionName, args, ctx, 0)
+    if (ctx.redisFlow) ctx.redisEvidence.returnProvenance = ctx.redisFlow.current?.origin ?? null
     const value = appSpec.data.redis ? redisSnapshot(returned, fail) : returned
     return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...runtimeEvidence() }
   } catch (error) {
@@ -107,17 +110,19 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
   }
 }
 
-function callFunction(name, argValues, ctx, depth) {
+function callFunction(name, argValues, ctx, depth, argFlow = []) {
   if (depth > MAX_DEPTH) fail('DATA_UNSUPPORTED', 'Not supported by the simulator: recursion depth exceeded')
   const fn = ctx.appSpec.data.functions[name]
   if (!fn) fail('DATA_UNSUPPORTED', `Not supported by the simulator: unknown function '${name}'`)
   const locals = {}
   fn.params.forEach((param, i) => { locals[param] = argValues[i] })
+  if (ctx.redisFlow) ctx.redisFlow.locals.set(locals, Object.fromEntries(fn.params.map((param, i) => [param, argFlow[i] ?? null])))
   const frame = { ...ctx, currentFunctionName: name, depth }
   const traceContext = ctx.dataTarget?.kind === 'postgres' && name === 'build_context'
   const trainingArgs = traceContext ? trainingSnapshot(argValues) : null
   const signal = execOps(fn.body, locals, frame)
   const result = signal ? signal.value : null
+  if (ctx.redisFlow && !signal) ctx.redisFlow.current = null
   if (traceContext) recordTrainingCall(ctx, name, trainingArgs, result)
   return result
 }
@@ -133,7 +138,14 @@ function execOps(ops, locals, ctx) {
 function execStatement(op, locals, ctx) {
   ctx.currentSource = op.source
   switch (op.op) {
-    case 'assign': locals[op.name] = evalExpr(op.value, locals, ctx); return null
+    case 'assign': {
+      locals[op.name] = evalExpr(op.value, locals, ctx)
+      if (ctx.redisFlow) {
+        if (!ctx.redisFlow.locals.has(locals)) ctx.redisFlow.locals.set(locals, {})
+        ctx.redisFlow.locals.get(locals)[op.name] = ctx.redisFlow.current
+      }
+      return null
+    }
     case 'return': return { kind: 'return', value: evalExpr(op.value, locals, ctx) }
     case 'expr': evalExpr(op.value, locals, ctx); return null
     case 'with': {
@@ -145,9 +157,11 @@ function execStatement(op, locals, ctx) {
     case 'raise-not-implemented': return fail('DATA_UNSUPPORTED', `Not supported by the simulator: ${op.functionName} is not completed yet.`)
     case 'for': {
       const iterable = evalExpr(op.iterable, locals, ctx)
+      const iterableFlow = ctx.redisFlow?.current
       if (['postgres', 'redis'].includes(ctx.dataTarget?.kind) && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
-      for (const item of Array.isArray(iterable) ? iterable : []) {
+      for (const [index, item] of (Array.isArray(iterable) ? iterable : []).entries()) {
         locals[op.name] = item
+        if (ctx.redisFlow) ctx.redisFlow.locals.get(locals)[op.name] = iterableFlow?.children?.[index] ?? null
         const signal = execOps(op.body, locals, ctx)
         if (signal) return signal
       }
@@ -184,42 +198,87 @@ function evalCompare(test, locals, ctx) {
 }
 
 function evalExpr(expr, locals, ctx) {
+  if (!ctx.redisFlow) return evalExprValue(expr, locals, ctx)
+  ctx.redisFlow.current = null
+  const value = evalExprValue(expr, locals, ctx)
+  // Only explicit data-flow branches below can propagate a trusted origin.
+  if (!['name', 'dict', 'list', 'tuple', 'redis-helper', 'call-sdk', 'call-local', 'subscript', 'get', 'attribute', 'builtin', 'sequence-method'].includes(expr.kind)) ctx.redisFlow.current = null
+  return value
+}
+function evalFlowArgs(expressions, locals, ctx) {
+  const flow = []
+  const values = expressions.map(expr => {
+    const value = evalExpr(expr, locals, ctx)
+    flow.push(ctx.redisFlow?.current ?? null)
+    return value
+  })
+  if (ctx.redisFlow) ctx.redisFlow.current = null
+  return { values, flow }
+}
+function evalExprValue(expr, locals, ctx) {
   switch (expr.kind) {
     case 'literal': return expr.value
-    case 'name': return Object.hasOwn(locals, expr.name) ? locals[expr.name] : ctx.globals[expr.name]
-    case 'dict': return Object.fromEntries(Object.entries(expr.entries).map(([key, value]) => [key, evalExpr(value, locals, ctx)]))
-    case 'list': return expr.items.map((item) => evalExpr(item, locals, ctx))
-    case 'tuple': return expr.items.map((item) => evalExpr(item, locals, ctx))
+    case 'name': {
+      const scope = Object.hasOwn(locals, expr.name) ? locals : ctx.globals
+      if (ctx.redisFlow) ctx.redisFlow.current = ctx.redisFlow.locals.get(scope)?.[expr.name] ?? null
+      return scope[expr.name]
+    }
+    case 'dict': {
+      const keys = Object.keys(expr.entries)
+      const { values, flow } = evalFlowArgs(Object.values(expr.entries), locals, ctx)
+      if (ctx.redisFlow) ctx.redisFlow.current = { children: Object.fromEntries(keys.map((key, i) => [key, flow[i]])) }
+      return Object.fromEntries(keys.map((key, i) => [key, values[i]]))
+    }
+    case 'list':
+    case 'tuple': {
+      const { values, flow } = evalFlowArgs(expr.items, locals, ctx)
+      if (ctx.redisFlow) ctx.redisFlow.current = { children: flow }
+      return values
+    }
     case 'fstring': return expr.parts.map(part => pythonPgStr(evalExpr(part, locals, ctx))).join('')
     case 'redis-add': {
       const left = evalExpr(expr.left, locals, ctx); const right = evalExpr(expr.right, locals, ctx)
       if (typeof left === 'string' && typeof right === 'string' && left.length + right.length <= 65536) return left + right
       return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: Redis string concatenation requires bounded strings')
     }
-    case 'redis-helper': return evalRedisHelper(expr.name, expr.args.map(arg => evalExpr(arg, locals, ctx)), ctx, fail)
+    case 'redis-helper': {
+      const { values, flow } = evalFlowArgs(expr.args, locals, ctx)
+      return evalRedisHelper(expr.name, values, ctx, fail, flow)
+    }
     case 'sequence-method': {
-      const target = evalExpr(expr.target, locals, ctx); const value = evalExpr(expr.value, locals, ctx)
-      if (expr.method === 'append' && Array.isArray(target) && target.length < 1024) { target.push(value); return null }
+      const target = evalExpr(expr.target, locals, ctx); const targetFlow = ctx.redisFlow?.current
+      const value = evalExpr(expr.value, locals, ctx); const valueFlow = ctx.redisFlow?.current
+      if (ctx.redisFlow) ctx.redisFlow.current = null
+      if (expr.method === 'append' && Array.isArray(target) && target.length < 1024) {
+        if (targetFlow) { delete targetFlow.origin; (targetFlow.children ??= {})[target.length] = valueFlow }
+        target.push(value); return null
+      }
       if (expr.method === 'join' && typeof target === 'string' && Array.isArray(value) && value.length <= 1024 && value.every(item => typeof item === 'string')) return value.join(target)
       return fail('DATA_UNSUPPORTED', `Not supported by the simulator: invalid bounded ${expr.method} operation`)
     }
     case 'subscript': {
       const target = evalExpr(expr.target, locals, ctx)
+      if (ctx.redisFlow) ctx.redisFlow.current = ctx.redisFlow.current?.children?.[expr.key] ?? null
       if (typeof expr.key === 'number' && (!Array.isArray(target) || expr.key >= target.length)) return fail('IndexError', 'tuple or list index out of range')
       return target == null ? undefined : target[expr.key]
     }
     case 'get': {
       const target = evalExpr(expr.target, locals, ctx)
+      if (ctx.redisFlow) ctx.redisFlow.current = ctx.redisFlow.current?.children?.[expr.key] ?? null
       if (target != null && Object.hasOwn(target, expr.key)) return target[expr.key]
       return expr.default ? evalExpr(expr.default, locals, ctx) : null
     }
-    case 'attribute': { const target = evalExpr(expr.target, locals, ctx); return target == null ? undefined : target[expr.attr] }
+    case 'attribute': {
+      const target = evalExpr(expr.target, locals, ctx)
+      if (ctx.redisFlow) ctx.redisFlow.current = ctx.redisFlow.current?.children?.[expr.attr] ?? null
+      return target == null ? undefined : target[expr.attr]
+    }
     case 'sdk-attribute': return evalSdkAttribute(expr, ctx)
     case 'builtin': return evalBuiltin(expr, locals, ctx)
     case 'call-sdk': return evalCallSdk(expr, locals, ctx)
     case 'call-local': {
-      const argValues = expr.args.map((argExpr) => evalExpr(argExpr, locals, ctx))
-      return callFunction(expr.name, argValues, ctx, ctx.depth + 1)
+      const { values, flow } = evalFlowArgs(expr.args, locals, ctx)
+      return callFunction(expr.name, values, ctx, ctx.depth + 1, flow)
     }
     default: return fail('DATA_UNSUPPORTED', `Not supported by the simulator: expression '${expr.kind}'`)
   }
@@ -227,6 +286,9 @@ function evalExpr(expr, locals, ctx) {
 
 function evalBuiltin(expr, locals, ctx) {
   const value = evalExpr(expr.args[0], locals, ctx)
+  const valueFlow = ctx.redisFlow?.current
+  if (ctx.redisFlow) ctx.redisFlow.current = expr.name === 'next' ? valueFlow?.children?.[0] ?? null
+    : expr.name === 'list' && Array.isArray(value) ? { children: { ...valueFlow?.children } } : null
   switch (expr.name) {
     case 'float': {
       const text = value?.redisKind === 'bytes' ? redisText(value, fail) : value

@@ -76,7 +76,7 @@ export function redisText(value, fail) {
   } catch { return fail('UnicodeDecodeError', 'Redis value is not valid UTF-8 bytes.') }
 }
 
-export const newRedisEvidence = () => ({ calls: [], originCalls: 0, sourceCalls: [], traceTruncated: false, measurements: { estimate } })
+export const newRedisEvidence = () => ({ calls: [], originCalls: 0, sourceCalls: [], returnProvenance: null, traceTruncated: false, measurements: { estimate } })
 function record(ctx, collection, entry, fail) {
   if (ctx.redisEvidence[collection].length >= MAX_TRACE) { ctx.redisEvidence.traceTruncated = true; return }
   ctx.redisEvidence[collection].push(snapshot(entry, fail))
@@ -91,6 +91,7 @@ function responses(value, decode, fail) {
 
 export function evalRedisCall(call, args, target, ctx, fail) {
   if (ctx.dataTarget?.kind !== 'redis' || !ctx.appSpec.data.redis) return unsupported(fail, 'Redis calls require a trusted Redis app and target')
+  ctx.redisFlow.current = null
   if (call === 'redis.Redis') {
     const cluster = getRedisCluster(ctx.sandboxBox.value, { resourceGroup: ctx.dataTarget.resourceGroup, name: ctx.dataTarget.cluster })
     if (!cluster || args.host !== cluster.hostName || (args.port ?? 10000) !== cluster.database.port || args.ssl !== true
@@ -127,8 +128,22 @@ export function evalRedisCall(call, args, target, ctx, fail) {
   ctx.sandboxBox.value = result.sandbox
   ctx.redisEvidence.measurements = { ...snapshot(result.measurements, fail), estimate }
   const deltas = Object.fromEntries(['hits', 'misses', 'expiredKeys', 'rejectedWrites'].map(key => [key, (result.measurements[key] ?? 0) - (before[key] ?? 0)]))
+  const callIndex = ctx.redisEvidence.calls.length
   record(ctx, 'calls', { command, args: values, value: result.value, deltas, ...(command === 'GET' || command === 'HGETALL' ? { hit: deltas.hits > 0 } : {}), ...(result.error ? { error: result.error } : {}) }, fail)
   if (result.error) return fail(result.error.code, result.error.message)
+  if (command === 'GET' && result.value !== null) ctx.redisFlow.current = { origin: { kind: 'get', callIndex, key: String(values[0]) } }
+  if (command === 'FT.SEARCH' && Array.isArray(result.value)) {
+    const children = {}
+    for (let position = 1; position < result.value.length; position += 2) {
+      const fields = result.value[position + 1]
+      const fieldFlow = {}
+      for (let index = 0; index < fields.length; index += 2) if (fields[index] === 'payload') {
+        fieldFlow[index + 1] = { origin: { kind: 'search', callIndex, key: String(result.value[position]) } }
+      }
+      children[position + 1] = { children: fieldFlow }
+    }
+    ctx.redisFlow.current = { children }
+  }
   if (method === 'scan_iter') return responses(result.value[1], target.decode, fail)
   if (command === 'SET') return result.value === 'OK'
   if (command === 'EXPIRE') return Boolean(result.value)
@@ -143,18 +158,27 @@ export function evalRedisCall(call, args, target, ctx, fail) {
   return responses(result.value, target.decode, fail)
 }
 
-export function evalRedisHelper(name, args, ctx, fail) {
+export function evalRedisHelper(name, args, ctx, fail, argFlow = []) {
   if (ctx.dataTarget?.kind !== 'redis' || !ctx.appSpec.data.redis) return unsupported(fail, 'protected Redis helpers require a trusted Redis app and target')
+  ctx.redisFlow.current = null
   switch (name) {
     case 'response_key':
     case 'semantic_key': {
       if (!args.every(value => typeof value === 'string') || args[0].length > 8192) return unsupported(fail, 'Redis key helper arguments')
       return `${name === 'response_key' ? 'ka:answer' : 'ka:sem'}:${args[1]}:${args[2]}:${args[3]}:${sha256(normalize(args[0]))}`
     }
-    case 'encode_answer': return binary(JSON.stringify(snapshot(args[0], fail)))
+    case 'encode_answer': {
+      const result = binary(JSON.stringify(snapshot(args[0], fail)))
+      ctx.redisFlow.current = argFlow[0] ?? null
+      return result
+    }
     case 'decode_answer': {
       const text = redisText(args[0], fail)
-      try { return snapshot(JSON.parse(text), fail) } catch (error) {
+      try {
+        const result = snapshot(JSON.parse(text), fail)
+        ctx.redisFlow.current = argFlow[0] ?? null
+        return result
+      } catch (error) {
         if (error instanceof SyntaxError) return fail('JSONDecodeError', 'Cached payload is not valid JSON.')
         throw error
       }
@@ -167,11 +191,15 @@ export function evalRedisHelper(name, args, ctx, fail) {
       const raw = args[0]
       if (!Array.isArray(raw) || !Number.isInteger(raw[0]) || raw.length !== 1 + raw[0] * 2) return unsupported(fail, 'decode_search requires the actual bounded RESP2 rows')
       const rows = []
+      const rowFlow = []
       for (let position = 1; position < raw.length; position += 2) {
         const fields = raw[position + 1]
         if (!Array.isArray(fields) || fields.length % 2) return unsupported(fail, 'decode_search RESP2 field pairs')
         rows.push(Object.fromEntries(Array.from({ length: fields.length / 2 }, (_, i) => [redisText(fields[i * 2], fail), snapshot(fields[i * 2 + 1], fail)])))
+        rowFlow.push({ children: Object.fromEntries(Array.from({ length: fields.length / 2 }, (_, i) =>
+          [redisText(fields[i * 2], fail), argFlow[0]?.children?.[position + 1]?.children?.[i * 2 + 1] ?? null])) })
       }
+      ctx.redisFlow.current = { children: rowFlow }
       return rows
     }
     case 'embed': return snapshot(redisEmbed(args[0], args[1] ?? ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'), fail)
@@ -183,7 +211,9 @@ export function evalRedisHelper(name, args, ctx, fail) {
       if (![1, 2].includes(revision)) return unsupported(fail, 'source_answer revision')
       const result = redisSourceAnswer({ product, version, language }, question, revision)
       ctx.redisEvidence.originCalls++
+      const callIndex = ctx.redisEvidence.sourceCalls.length
       record(ctx, 'sourceCalls', { functionName: 'source_answer', args, sourceRevision: revision, result }, fail)
+      if (result !== null) ctx.redisFlow.current = { origin: { kind: 'source', callIndex } }
       return snapshot(result, fail)
     }
     default: return unsupported(fail, `Redis helper '${name}'`)
