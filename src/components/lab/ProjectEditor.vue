@@ -1,14 +1,16 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { getProjectManifest } from '../../lib/project/manifests.js'
 import { parseKubernetesYaml } from '../../lib/kubernetes/yaml.js'
 import { kubeJson } from '../../lib/kubernetes/format.js'
+import { editProjectText } from '../../lib/project/editor-keyboard.js'
 
 const run = useLabRunStore()
 const path = ref('src/Trainer.Api/Program.cs')
 const text = ref('')
 const message = ref('')
+let leaveEditorOnTab = false
 const current = computed(() => run.behavioralRun?.project)
 const manifest = computed(() => getProjectManifest(current.value?.manifestId ?? run.lab?.manifestId))
 const files = computed(() => manifest.value.files)
@@ -47,6 +49,7 @@ const applied = computed(() => {
 })
 
 function selectFile(next) {
+  leaveEditorOnTab = false
   path.value = next
   text.value = current.value?.draftFiles?.[next] ?? ''
   message.value = ''
@@ -63,6 +66,32 @@ function edit(event) {
   text.value = event.target.value
   message.value = ''
   void run.dispatchBehavioral({ type: 'draft', path: path.value, text: text.value }).catch((error) => { message.value = error.message })
+}
+function editorKeydown(event) {
+  if (locked.value || fixed.value || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return
+  if (event.key === 'Escape') {
+    leaveEditorOnTab = true
+    return
+  }
+  if (leaveEditorOnTab && event.key === 'Tab') {
+    leaveEditorOnTab = false
+    return
+  }
+  leaveEditorOnTab = false
+  const textarea = event.target
+  const result = editProjectText({ text: textarea.value, start: textarea.selectionStart, end: textarea.selectionEnd, key: event.key, shiftKey: event.shiftKey, path: path.value })
+  if (!result) return
+  event.preventDefault()
+  const editedPath = path.value
+  const attemptId = run.behavioralRun?.attemptId
+  const labId = run.labId
+  const direction = textarea.selectionDirection
+  textarea.value = result.text
+  edit({ target: textarea })
+  void nextTick(() => {
+    if (path.value !== editedPath || run.labId !== labId || run.behavioralRun?.attemptId !== attemptId || locked.value || fixed.value || text.value !== result.text || textarea.ownerDocument.activeElement !== textarea) return
+    textarea.setSelectionRange(result.start, result.end, direction)
+  })
 }
 async function save() {
   message.value = ''
@@ -88,7 +117,8 @@ async function save() {
           <p>Python supports the taught request handlers, input checks, client construction, named calls, dictionaries, loops, guards, and returns shown in this project. SQL supports the declared documents table, equality metadata filters, cosine distance cutoff, ordering, and LIMIT with named parameters. Requests use deterministic local fixtures; no Python SDK or database connects.</p>
         </aside>
         <label class="project-tool__label" for="project-source">File contents</label>
-        <textarea id="project-source" :value="text" :disabled="locked || fixed" :readonly="fixed" spellcheck="false" @input="edit" />
+        <p id="project-source-shortcuts" class="project-tool__state">Tab / Shift+Tab: indent / unindent. Enter: keep indentation. Escape then Tab: leave editor.</p>
+        <textarea id="project-source" :value="text" :disabled="locked || fixed" :readonly="fixed" aria-describedby="project-source-shortcuts" spellcheck="false" @input="edit" @keydown="editorKeydown" @blur="leaveEditorOnTab = false" />
         <div class="project-tool__actions"><span role="status">{{ fixed ? 'Fixed helper · read-only' : message || (run.unsaved ? 'Saving draft…' : dirty ? 'Unsaved draft' : 'Saved source') }}</span><button type="button" class="btn btn--primary" :disabled="locked || fixed || run.busy || !dirty" @click="save">Save file</button></div>
         <ul v-if="run.diagnostics?.length" class="project-tool__diagnostics" aria-label="Diagnostics"><li v-for="(item, i) in run.diagnostics" :key="i"><button v-if="files.includes(item.path)" type="button" class="project-tool__diagnostic-link" @click="openDiagnostic(item)">{{ item.path }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</button><span v-else>{{ item.path || path }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</span>: {{ item.code }} — {{ item.message }}</li></ul>
       </div>
