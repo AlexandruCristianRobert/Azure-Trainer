@@ -72,6 +72,7 @@ describe('project editor keyboard edits', () => {
     manifest.fixedFiles['app.py'] = 'abc'; editor.selectFile('other.py'); editor.selectFile('app.py'); key('Tab')
     delete manifest.fixedFiles['app.py']; editor.selectFile('other.py'); editor.selectFile('app.py')
     key('Escape'); key('Tab')
+    key('Escape'); key('Shift', { shiftKey: true }); key('Tab', { shiftKey: true })
     expect(prevented).toBe(0)
     expect(drafts).toEqual([])
     key('Tab')

@@ -20,3 +20,9 @@ Active implementation and verification took approximately three minutes. Verific
 ## Self-review
 
 Reviewed row boundary exclusion, literal caret/selection mappings, partial unindent, quoted comments, pre-caret-only colon detection, CRLF, editable-key dispatch, native Escape/modifier/IME keys, read-only/fixed guards, and stale restoration after switching files. Existing save/error paths remain in place. Used APIs compatible with the declared Node 18 minimum. Changes are confined to the helper, component wiring/hint, eight focused tests, and this report. Terminal/pool work, controller handoff files, main, and remote branches are outside this commit. No blocking concerns; browser behavior was not exercised.
+
+## Review correction: backward focus exit
+
+Review identified that a real Escape → Shift keydown → Shift+Tab sequence reset the armed exit state on the intermediate Shift key. Added that exact sequence to the existing boundary test, preserving the eight-test total. RED reproduced the issue: one failed/seven passed, unwanted `preventDefault` count 1 instead of 0, duration 436 ms. The handler now returns early for standalone Shift, Control, Alt, Meta, and AltGraph keys, preserving the armed exit state and all existing guards.
+
+Fresh verification after the correction: `npm.cmd test -- tests/project-editor-keyboard.test.js` passed all eight tests (424 ms); `npm.cmd run build` passed (4.04 s, existing large-chunk advisory); `git diff --check` passed. The correction and verification took approximately one minute. No wider test scope or external execution was added.

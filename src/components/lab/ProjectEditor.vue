@@ -69,6 +69,7 @@ function edit(event) {
 }
 function editorKeydown(event) {
   if (locked.value || fixed.value || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return
+  if (['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'].includes(event.key)) return
   if (event.key === 'Escape') {
     leaveEditorOnTab = true
     return
