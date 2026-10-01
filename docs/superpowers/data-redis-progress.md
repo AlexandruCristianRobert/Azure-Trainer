@@ -60,7 +60,7 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 - [x] Task4 SDK/runtime/helpers
 - [x] Task5 template/workload/evidence
 - [x] Task6 Lab10 Guided
-- [ ] Task7 Lab11 Troubleshooting
+- [x] Task7 Lab11 Troubleshooting
 - [ ] Task8 Lab12 Independent/handoff
 
 Task 1: complete (c89dd02..af71ed9, spec and quality approved by /root/review_redis_resource; zero findings). Disposable checks + one build, verification ~7.3s; no permanent tests/excluded suites. Report data-redis-task-1-report.md. Browser rendering unverified.
@@ -79,6 +79,8 @@ Task 5: complete (5c4aca5..f4a2c40, spec/quality approved after1fix round). Disp
 Task 6: in progress. Base recorded after controller ledger commit.
 Task 6: complete (d5f3e35..5f301fe, spec/quality approved /root/review_redis_guided; zero blocking findings). One full ordered10/10 walkthrough, semantic-deletion sabotage, localized freshness corrections, onebuild ~29s. Owning guided seed/order/TTL/freshness/semantic/scope/currentdeployed/dependency gates resolved. Browser/existingjourneytests excluded; final static review remains.
 Task 7: in progress. Base recorded after controller ledger commit.
+Task 7: complete (58dfa08..eb8e653, spec/quality approved /root/review_redis_troubleshooting; zero blocking findings). Six tasks/fourstages pass via initial1–3prefix +approvedsearchcontinuation/finalrefresh; sole0.20negative fails, buildpasses. Commands tensofseconds, exact interruptedprocesswall unavailable. InitialTTLCLIaggregateassertion not reached; actualpersistentkey/tracedTTLrecovery predicates and sharedstorecases establish recovery, no extraTTLrerun. Browser/existingjourneytests excluded; Lab12/finalgates remain.
+Task 8: in progress. Base recorded after controller ledger commit.
 Ruling: Task7's canonical troubleshooting seed must supply RediSearch and the initial DIM8 index, reserving schema faults for its explicit search stage; it may adjust seedRedisTroubleshooting accordingly — the temporary Task5 module-omission recipe would add an unplanned prerequisite and block the specified first stale-semantic incident — cost: omission-of-module is taught in Guided exam notes/creation checks, not a fifth troubleshooting incident.
 Ruling: Task5 may add optional writtenAtMs to Redis key validation and stamp successful SET/HSET using simulation time, preserving it on reads/EXPIRE and restoring it on rejected writes; absent old-save timestamps remain accepted but unknown for age proofs — lastAccessMs changes on reads and cannot establish actual cache age across scenarios — cost: narrow shared storage/model changes and one focused store-file check, older keys need reset/repopulation before age proof.
 Ruling: Task4 fix wave may modify redis-search.js to preserve native binary payloads (not embeddings) through FT.SEARCH and exercise an SDK-written semantic hash in its existing SDK case; HGETALL byte-key access must be represented faithfully or explicitly unsupported rather than teaching string lookup with decode_responses=False — review exposed a load-bearing native protocol boundary omitted by the hand-seeded test — cost: one narrow upstream search edit and a smaller supported mapping-access subset if rejection is used.
