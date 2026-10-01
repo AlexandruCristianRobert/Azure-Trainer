@@ -115,3 +115,65 @@ Scoped `git diff --check -- <owned tracked source/test paths>` exited 0; Git emi
 Read the full owned diff and new source files after successful replay. Checked routing/signature consistency, immutable artifact fixture selection, distinct scenario steps, supported-index outcome checks, actual-used pool traces, seed rejection, dependency invalidation and ordered/standalone solution refresh. Removed a redundant size-one exception from the PgBouncer consistency check, then re-ran scoped tests and build. Base fixtures/templates and protected exact baseline were retained; helper/seed modules import no Lab module. Commit uses configured actual author, without false Claude attribution.
 
 No known correctness concern remains. The normal Vite large-chunk advisory is retained. Alternate B-tree audience strategy is supported by the grader and existing SQL AST/planner, but this task's one planned replay exercises the GIN design; no extra permanent test was added under the binding light-testing policy.
+
+## Review fix round 1 — allow successful additional SELECTs
+
+Base `cd44e86`. Reviewer finding confirmed: `selects.length === 1` imposed an unrequested strategy constraint. A valid indexed document preflight followed by the unchanged ANN SELECT produced correct rows, recall 1 and 17.55ms per request, but the shared helper rejected it for retrieval, metadata and load.
+
+Changed only the Lab's shared grounding helper and its two plan consumers. Grounding now retains SELECTs whose actual rows equal this step's returned value; at least one supplier must exist in the same request step. Every call must still succeed. Retrieval accepts a qualifying supplier's recall and continues summing **all** calls for the 20ms budget. Metadata accepts an applicable audience index from a matching supplier, rather than an unrelated preflight plan. Load uses the same relaxed grounding and still checks every SQL call's actual connection/pool metadata. No permanent tests were added or changed.
+
+RED scoped inline probe command: a PowerShell literal here-string piped to `node --input-type=module` (exit 1, wall 1.941s). The script imported the Lab, `replaySolution`, `applyRunAction` and `evaluateLab`; replayed the base solution; created `docs_id_lookup ON documents(id)`; added `conn.execute("SELECT id FROM documents WHERE id = %s", (17,))` inside both retrieval and metadata connections; saved/built/deployed that app; refreshed all three scenarios; then asserted all tasks complete. Relevant output:
+
+```text
+{"states":[{"id":"v3-retrieval","done":false},{"id":"audience-indexed","done":false},{"id":"scale-stable","done":false}],"totals":[17.55,17.55,17.55,17.55],"selectCounts":[2,2,2,2]}
+Error: Valid indexed multi-SELECT design was rejected
+```
+
+After the implementation, positive cases passed. The first negative probe reported `Over-budget additional SQL was accepted` (wall 2.069s), but inspection of actual SQL traces (wall 2.078s) showed no extra slow retrieval query: a first-occurrence source replacement had edited only the earlier metadata function. Corrected the inline probe to `replaceAll`; no production change was necessary. Final identical positive/negative probe command structure passed (exit 0, wall 2.332s). The two negative variants add an actual `SELECT id FROM documents LIMIT 1` heap scan to retrieval, or replace the preflight with `SELECT id FROM missing_relation`; respectively, over-budget and errored retrieval remain incomplete.
+
+```text
+{"states":[{"id":"v3-retrieval","done":true},{"id":"audience-indexed","done":true},{"id":"scale-stable","done":true}],"totals":[17.55,17.55,17.55,17.55],"selectCounts":[2,2,2,2]}
+Multi-SELECT positive retrieval/metadata/load, over-budget negative and SQL-error negative passed.
+```
+
+GREEN command: `npm.cmd test -- tests/data-postgres-labs.test.js` (exit 0, wall 8.558s).
+
+```text
+> azure-trainer@0.1.0 test
+> vitest run tests/data-postgres-labs.test.js
+RUN v2.1.9 E:/Projects/Vue/Azure-Trainer/.superpowers/worktrees/data-postgres
+✓ tests/data-postgres-labs.test.js (5 tests) 5792ms
+  ✓ PostgreSQL data Labs > Lab 9 independently onboards v3 audiences with SQL-grounded retrieval, indexed metadata and six-replica load 1599ms
+  ✓ PostgreSQL data Labs > Lab 6 starts without HNSW proofs and completes sizing, ANN filtering and grounded answers through ordered Solutions 429ms
+  ✓ PostgreSQL data Labs > Lab 7 observes naive exhaustion then completes deployed pooling and port 6432 load through ordered Solutions 1325ms
+  ✓ PostgreSQL data Labs > Lab 8 starts with five unsatisfied incidents and repairs each through ordered standalone Solutions 2303ms
+Test Files 1 passed (1)
+Tests 5 passed (5)
+Start at 19:24:45
+Duration 7.73s (transform 831ms, setup 0ms, collect 1.65s, tests 5.79s, environment 0ms, prepare 77ms)
+```
+
+Build command: `npm.cmd run build` (exit 0, wall 4.641s).
+
+```text
+> azure-trainer@0.1.0 build
+> vite build
+vite v6.4.3 building for production...
+transforming...
+✓ 535 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                       0.88 kB │ gzip:   0.46 kB
+dist/assets/LabPage-BgxcCD0X.css      9.67 kB │ gzip:   1.84 kB
+dist/assets/index-A8FG7ZL2.css       43.07 kB │ gzip:   8.25 kB
+dist/assets/vendor-gT9JDirl.js       98.85 kB │ gzip:  38.43 kB
+dist/assets/LabPage-BYYRrZaL.js     298.24 kB │ gzip:  76.58 kB
+dist/assets/index-Iklcbs9U.js     2,308.15 kB │ gzip: 622.69 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.95s
+```
+
+Fix-round measured validation wall total: **21.619s**, including the RED probe and negative-probe diagnosis. Scoped diff check exited 0 with only LF→CRLF notices. Self-review confirmed step isolation, returned-row equality, matching-supplier recall/index checks, full-call error/latency accounting and preserved load connection checks. Owned files: `postgres-independent.lab.js` and this report. Controller ledger/HANDOFF excluded. No known unresolved review finding or correctness concern; normal Vite chunk advisory remains.

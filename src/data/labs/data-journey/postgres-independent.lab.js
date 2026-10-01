@@ -52,10 +52,12 @@ function learnerDeployed(context, names) {
 function groundedStep(measurements, stepIndex, ids) {
   const value = measurements?.values?.[stepIndex]
   const calls = (measurements?.calls ?? []).filter(call => call.stepIndex === stepIndex)
-  const selects = calls.filter(call => call.plan)
+  // Additional successful SQL is allowed. Ground the response in a SELECT
+  // from this request step, retaining every call for errors/latency/load mode.
+  const selects = calls.filter(call => call.plan && same(call.rows, value))
   return measurements?.status === 200 && Array.isArray(value) && same(value.map(row => row.id), ids)
-    && selects.length === 1 && same(selects[0].rows, value) && calls.every(call => !call.error)
-    ? { value, calls, select: selects[0] } : null
+    && selects.length > 0 && calls.every(call => !call.error)
+    ? { value, calls, selects } : null
 }
 function v3Retrieval(context) {
   const m = proof(context, 'v3-retrieval')
@@ -63,7 +65,8 @@ function v3Retrieval(context) {
     const step = groundedStep(m, stepIndex, question.expectedChunkIds)
     return !!step && step.value.every(row => row.product === question.product && row.version === question.version
       && row.language === question.language && row.metadata?.audience === question.audience)
-      && step.select.plan.recall >= 0.95 && step.calls.reduce((sum, call) => sum + call.latencyMs, 0) <= 20
+      && step.selects.some(select => select.plan.recall >= 0.95)
+      && step.calls.reduce((sum, call) => sum + call.latencyMs, 0) <= 20
   })
 }
 function audienceIndexed(context) {
@@ -72,16 +75,18 @@ function audienceIndexed(context) {
     const step = groundedStep(m, stepIndex, [17 + stepIndex])
     if (!step || !step.value.every(row => row.metadata?.audience === question.audience && row.language === question.language
       && row.product === question.product && row.version === question.version)) return false
-    const index = database(context)?.indexes.find(index => index.name === step.select.plan.index && index.table === 'documents')
-    const parsed = parsePgSql(step.select.sql)
-    if (!index || parsed.error) return false
     const audienceExpr = expression => expression?.kind === 'column' && expression.name === 'audience'
       || expression?.kind === 'json-extract' && expression.key === 'audience' && expression.column?.name === 'metadata'
-    return parsed.statements.some(stmt => stmt.kind === 'select' && (
-      index.method === 'gin' && index.columns.some(column => column.name === 'metadata')
-        && stmt.where.some(condition => condition.operator === '@>' && condition.expression?.name === 'metadata')
-      || index.method === 'btree' && audienceExpr(index.columns[0].expression ?? { kind: 'column', name: index.columns[0].name })
-        && stmt.where.some(condition => condition.operator === '=' && audienceExpr(condition.expression))))
+    return step.selects.some(select => {
+      const index = database(context)?.indexes.find(index => index.name === select.plan.index && index.table === 'documents')
+      const parsed = parsePgSql(select.sql)
+      if (!index || parsed.error) return false
+      return parsed.statements.some(stmt => stmt.kind === 'select' && (
+        index.method === 'gin' && index.columns.some(column => column.name === 'metadata')
+          && stmt.where.some(condition => condition.operator === '@>' && condition.expression?.name === 'metadata')
+        || index.method === 'btree' && audienceExpr(index.columns[0].expression ?? { kind: 'column', name: index.columns[0].name })
+          && stmt.where.some(condition => condition.operator === '=' && audienceExpr(condition.expression))))
+    })
   })
 }
 function scaleStable(context) {
