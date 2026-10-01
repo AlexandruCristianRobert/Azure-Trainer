@@ -53,3 +53,10 @@ Task 7: complete (commits 49713e3..764035c, review clean)
 Task 7: minor (deferred): AksExperimentPanel dataEvidence optional-chaining style; dataDependencies() unused until Task 8 (signature may need adjustment)
 Task 7: note for Task 8: data-worker step contract (post = raw container write, redeliver re-sends previous batch) is implementer-designed — confirm fits Labs
 STOPPED at 02:12 (Task 8 would not finish + review before the 2:30 deadline). Next: Task 8 (Lab 1). Tasks 1-7 complete.
+RESUMED by learner request: Tasks 8-11. Task 8: dispatched (base a5418fa)
+Ruling 10: Task 8 build.js PORT_MISMATCH skip for dataApp accepted (gated, needed by all data Labs) — cost if wrong: build check gap for data apps
+Ruling 11: Task 8 — (a) stages display order must equal the safe completion order: provision → tune(indexing) → code → deploy → verify(point-read, cross-partition, ordered) → consistency; the "see the composite-index error first" moment is dropped from Lab 1 (Lab 3 teaches it as an incident) — (b) dataDependencies becomes per-Task: each verification Task snapshots only the fields it depends on — Guided Lab must be an ordered walkthrough (CONTEXT.md); Labs 2-4 reuse the helper — cost if wrong: Lab 1 narrative slightly less dramatic
+Task 8: minor (deferred): extra registration test in data-cosmos-labs.test.js; dataScale value undocumented
+Task 8: fix round 1/5 dispatched (FIX_BASE 8ae258a)
+Task 8: fix round 1/5 (2 addressed, 0 open; commits 8ae258a..3b61403)
+Task 8: complete (commits a5418fa..3b61403, review clean)
