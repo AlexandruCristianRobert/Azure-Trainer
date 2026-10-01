@@ -66,3 +66,9 @@ Task 9: complete (commits ac5ce42..7c1f95e, review clean)
 Task 9: Ruling 12: `similar` merged into one 8-step scenario (engine maps 1 scenario → 1 Task evidence) — accepted — cost if wrong: none
 Task 9: minor (deferred): Sonnet 5 vs 5.5 commit trailers (harness attribution)
 Ruling 13: Lab-file helpers (findReturnCall/file/commands/scenario/parsed) duplicated between Lab 1 and 2 — Task 10 extracts them into cosmos-helpers.js before adding Lab 3 — avoids 4× copies — cost if wrong: small refactor risk to Labs 1-2 (covered by replay tests)
+Task 10: dispatched (base 6a7b785)
+Ruling 14: Task 10 — add dependency fields 'code:<deployment>:<function>' (deployed appSpec op list for that function, from the build-captured appSpec) and 'deployedConsistency:<deployment>' (deployed appSpec client.consistency); every Lab 3 Task gets a complete Solution (its own edit + rebuild new tag + redeploy + rerun) and narrow deps so incidents don't stale each other — CONTEXT.md Solution definition — cost if wrong: dependency field complexity
+Task 10: fix round 1/5 dispatched (FIX_BASE b86065e)
+Task 10: fix round 1/5 (2 addressed, 0 open; commits b86065e..eec3a44)
+Task 10: complete (commits 6a7b785..eec3a44, review clean)
+Task 10: minor (deferred): feed-complete FEEDBACK_ITEMS reference non-existent qa_history ids (harmless)
