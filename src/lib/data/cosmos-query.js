@@ -94,6 +94,17 @@ class Parser {
       const param = this.parseParameterRef(); this.expectSymbol(')')
       return { type: 'arrayContains', path, param }
     }
+    if (this.isWord('vectordistance')) {
+      // VectorDistance(c.path, @p) (>|>=|<|<=) (@p|number) as a WHERE
+      // condition (real Cosmos supports this; for cosine, higher is more
+      // similar) - review ruling: the similarity floor and any other
+      // restriction must come from the query text, not a post-check filter.
+      const call = this.parseVectorCall()
+      const token = this.current()
+      if (!token || token.type !== 'symbol' || !['>', '>=', '<', '<='].includes(token.value)) this.fail('Expected a comparison operator after VectorDistance(...).')
+      this.i++
+      return { type: 'vectorCompare', ...call, op: token.value, value: this.parseValueOrParam() }
+    }
     const path = this.parsePath()
     const token = this.current()
     if (!token || token.type !== 'symbol' || !(token.value in COMPARATORS)) this.fail('Expected a comparison operator.')
@@ -216,12 +227,20 @@ function resolveParam(parameters, name) {
   return found.value
 }
 
-function resolveCondition(cond, parameters) {
+function resolveCondition(cond, parameters, container) {
   if (cond.type === 'arrayContains') return { ...cond, resolvedValue: resolveParam(parameters, cond.param) }
+  if (cond.type === 'vectorCompare') {
+    return {
+      ...cond,
+      resolvedScore: vectorScorer(container, parameters, cond.path, cond.param),
+      resolvedValue: cond.value.kind === 'param' ? resolveParam(parameters, cond.value.name) : cond.value.value,
+    }
+  }
   return { ...cond, resolvedValue: cond.value.kind === 'param' ? resolveParam(parameters, cond.value.name) : cond.value.value }
 }
 
 function evalCondition(item, cond) {
+  if (cond.type === 'vectorCompare') return COMPARATORS[cond.op](cond.resolvedScore(item), cond.resolvedValue)
   const actual = getPath(item, cond.path)
   if (cond.type === 'arrayContains') return Array.isArray(actual) && actual.some((entry) => sameValue(entry, cond.resolvedValue))
   return COMPARATORS[cond.op](actual, cond.resolvedValue)
@@ -285,7 +304,7 @@ export function runCosmosQuery(container, text, parameters = [], { partitionKey 
   if (parsed.error) return { error: parsed.error }
   const ast = parsed.ast
   try {
-    const where = ast.where.map((cond) => resolveCondition(cond, parameters))
+    const where = ast.where.map((cond) => resolveCondition(cond, parameters, container))
 
     let partitionKeyValue = partitionKey
     if (partitionKeyValue === undefined) {
@@ -298,12 +317,15 @@ export function runCosmosQuery(container, text, parameters = [], { partitionKey 
     const matched = itemsInScope.filter((item) => where.every((cond) => evalCondition(item, cond)))
 
     // Ordinary WHERE/ORDER BY property paths are served by includedPaths/excludedPaths.
-    // A VectorDistance ORDER BY is served by a vectorIndexes entry instead (real Cosmos
-    // configurations commonly exclude the vector path from ordinary indexing), so it is
-    // checked separately rather than against isPathIndexed.
+    // A VectorDistance condition (in WHERE or ORDER BY) is served by a vectorIndexes
+    // entry instead (real Cosmos configurations commonly exclude the vector path from
+    // ordinary indexing), so those paths are checked separately rather than against
+    // isPathIndexed.
     const orderPaths = ast.orderBy?.type === 'paths' ? ast.orderBy.items.map((item) => item.path) : []
-    const propertyPathsIndexed = [...where.map((cond) => cond.path), ...orderPaths].every((path) => isPathIndexed(container.indexingPolicy, toSlashPath(path)))
-    const vectorIndexed = ast.orderBy?.type !== 'vector' || (container.indexingPolicy?.vectorIndexes ?? []).some((entry) => entry.path === toSlashPath(ast.orderBy.path))
+    const ordinaryWherePaths = where.filter((cond) => cond.type !== 'vectorCompare').map((cond) => cond.path)
+    const propertyPathsIndexed = [...ordinaryWherePaths, ...orderPaths].every((path) => isPathIndexed(container.indexingPolicy, toSlashPath(path)))
+    const vectorPaths = [...where.filter((cond) => cond.type === 'vectorCompare').map((cond) => cond.path), ...(ast.orderBy?.type === 'vector' ? [ast.orderBy.path] : [])]
+    const vectorIndexed = vectorPaths.every((path) => (container.indexingPolicy?.vectorIndexes ?? []).some((entry) => entry.path === toSlashPath(path)))
     const usedIndex = propertyPathsIndexed && vectorIndexed
 
     if (ast.orderBy?.type === 'paths' && ast.orderBy.items.length >= 2) {
@@ -313,7 +335,7 @@ export function runCosmosQuery(container, text, parameters = [], { partitionKey 
       }
     }
 
-    let vector = false
+    let vector = where.some((cond) => cond.type === 'vectorCompare')
     let ordered = matched
     if (ast.orderBy?.type === 'paths') {
       ordered = sortByPaths(matched, ast.orderBy.items)

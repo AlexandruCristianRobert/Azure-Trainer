@@ -21,6 +21,9 @@
 // they belong to qa_history, not feedback/tally/leases, so Lab 2's existing
 // implementation already satisfies this Lab's own similarity-search
 // requirement once a stricter score floor is applied (see `similarFloorReady`).
+// app.py's own NEW edit zone, question_feedback (review ruling, finding 3),
+// IS reset to a starter here (LAB4_APP_PY below) - it is this Lab's own
+// concern (feedback-read), not Lab 2's.
 //
 // Task order below (feedback-design, feedback-read, similar-floor,
 // tally-correct) matches task-11-brief.md's own listing, which is also a
@@ -32,20 +35,24 @@
 // build/deploy - this Lab's four Tasks cooperate on ONE feedback feature,
 // they are not independent incidents).
 import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES, COSMOS_STARTER_FILES } from '../../templates/data-python/cosmos.js'
-import { pointReadCharge } from '../../../lib/data/cosmos-cost.js'
 import { runCosmosQuery } from '../../../lib/data/cosmos-query.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
 import {
-  ASSISTANT_ACCOUNT, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_REGISTRY,
-  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, file,
+  ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER_ID, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
+  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, deployedFunctionsCurrent, file,
   LEASES_CREATE_COMMAND, scenario,
 } from './cosmos-helpers.js'
 import { seedCosmosIndependent } from './cosmos-seeds.js'
 
-// Only worker.py's three "feedback edit zones" reset to starters (see the
-// module comment); app.py keeps Lab 2's solved remember_answer/
-// find_similar_questions.
-const initialFiles = { ...COSMOS_SOLUTION_FILES, 'worker.py': COSMOS_STARTER_FILES['worker.py'] }
+// Worker.py's three "feedback edit zones" reset to starters (see the module
+// comment); app.py keeps Lab 2's solved remember_answer/find_similar_questions,
+// but its OWN new edit zone (question_feedback, review ruling - finding 3)
+// starts as a starter too, since this Lab's own feedback-read Task is what
+// requires the learner to implement it.
+const questionFeedbackCut = COSMOS_STARTER_FILES['app.py'].indexOf('def question_feedback')
+const solutionQuestionFeedbackCut = COSMOS_SOLUTION_FILES['app.py'].indexOf('def question_feedback')
+const LAB4_APP_PY = COSMOS_SOLUTION_FILES['app.py'].slice(0, solutionQuestionFeedbackCut) + COSMOS_STARTER_FILES['app.py'].slice(questionFeedbackCut)
+const initialFiles = { ...COSMOS_SOLUTION_FILES, 'app.py': LAB4_APP_PY, 'worker.py': COSMOS_STARTER_FILES['worker.py'] }
 
 const IMAGE_V8 = `${ASSISTANT_REGISTRY}.azurecr.io/assistant:v8`
 const WORKER_V8 = COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v8')
@@ -56,18 +63,18 @@ const containerNamed = (context, name) => cosmosDatabase(context)?.containers?.f
 
 // --- feedback-design / feedback-read: task-11-brief.md names one scenario
 // (`question-feedback`) for both, but each Task owns its OWN scenario id
-// here (`question-feedback` / `feedback-read-check`, same requests) rather
-// than sharing one - fix round 1 review: a Task with no `verification` of
-// its own (reading a sibling Task's evidence instead) is never checked
-// against THAT sibling's `dependencyMatches`, so it can stay 'done' after
-// the sibling's own evidence has gone stale. Giving `feedback-read` its own
-// verification+dependencies (narrow `fields`, matching what it actually
-// depends on) fixes that with no engine change. Both scenarios are
-// 'post'-only (raw container writes, no Python route), so requirement (a)'s
-// RU cost is computed by direct evaluation against the live `feedback`
-// container, the same way requirement (c)'s tally count is (see
-// `tallyCorrectReady`) - there is no app route that reads `feedback` by
-// questionId to dispatch through.
+// here rather than sharing one - fix round 1 review: a Task with no
+// `verification` of its own (reading a sibling Task's evidence instead) is
+// never checked against THAT sibling's `dependencyMatches`, so it can stay
+// 'done' after the sibling's own evidence has gone stale. Giving
+// `feedback-read` its own verification+dependencies (narrow `fields`,
+// matching what it actually depends on) fixes that with no engine change.
+// `question-feedback` (feedback-design) is 'post'-only (a raw container
+// write, no Python route), so requirement (a)'s single-partition check is
+// computed by direct evaluation against the live `feedback` container.
+// `feedback-read-check` (feedback-read) instead calls the learner's own
+// `question_feedback` app route (review ruling, finding 3), since reading
+// "all feedback for one question" is now something the app itself exposes.
 const QID_PROBE = 'qid-feedback-probe'
 const QID_OTHER = 'qid-feedback-other'
 const PROBE_ITEMS = [
@@ -83,54 +90,66 @@ const feedbackProbeQuery = (context) => {
   return result.error ? null : result
 }
 
+// Review ruling (finding 3): must also require that feedback-worker is
+// running a build of the learner's OWN current feedback-worker functions,
+// not a stale earlier deploy.
+const feedbackWorkerFunctionsCurrent = (context) => deployedFunctionsCurrent(context, ASSISTANT_CLUSTER_ID, ASSISTANT_NAMESPACE, 'feedback-worker', ['save_lease', 'process_changes', 'apply_feedback'])
+
 const feedbackDesignReady = (context) => {
+  if (!feedbackWorkerFunctionsCurrent(context)) return false
   const record = cosmosEvidence(context, 'feedback-design', 'question-feedback')
   if (!record || record.measurements.status !== 200) return false
   const result = feedbackProbeQuery(context)
   return !!result && result.stats.partitionsTouched === 1 && result.rows.length === PROBE_ITEMS.length
 }
 
-// Models "reading all feedback for one question" as what it would cost to
-// retrieve each already-known item by id and partition key (a point read
-// per item) rather than a `query_items` scan - at this Lab's declared scale
-// (logicalScale 50), ANY single-partition `query_items` scan costs well over
-// 3 RU even for one matched row (queryCharge's `0.1 * scanned * logicalScale`
-// term alone), so the cheap, correct design is a point-read-shaped access
-// path, not a query - exactly the lesson a dense, production-scale container
-// teaches over this Lab's earlier, cheap-by-default containers.
+// Review ruling (finding 3): reading all of one question's feedback is now
+// an app route - question_feedback(question_id), an edit zone on app.py
+// (assistant-api), implemented with feedback.query_items(..., partition_key
+// =question_id) or an equivalent query - rather than a raw container probe.
+// The check reads the RU the learner's OWN call actually recorded and
+// requires every one of that question's feedback items came back; it adds
+// no point-read-shaped design requirement of its own.
 const feedbackReadReady = (context) => {
+  if (!deployedFunctionsCurrent(context, ASSISTANT_CLUSTER_ID, ASSISTANT_NAMESPACE, 'assistant-api', ['question_feedback'])) return false
   const record = cosmosEvidence(context, 'feedback-read', 'feedback-read-check')
   if (!record || record.measurements.status !== 200) return false
-  const result = feedbackProbeQuery(context)
-  if (!result || result.stats.partitionsTouched !== 1 || result.rows.length !== PROBE_ITEMS.length) return false
-  const consistency = cosmosAccount(context)?.defaultConsistencyLevel
-  const charge = result.rows.reduce((sum, row) => sum + pointReadCharge(row, consistency), 0)
-  return charge <= 3
+  if (typeof record.measurements.totalCharge !== 'number' || record.measurements.totalCharge > 3) return false
+  const rows = record.measurements.value
+  if (!Array.isArray(rows)) return false
+  const container = containerNamed(context, 'feedback')
+  const expectedIds = (container?.items ?? []).filter((item) => item.questionId === QID_PROBE).map((item) => item.id)
+  const returnedIds = new Set(rows.map((row) => row.id))
+  return expectedIds.length > 0 && rows.length === expectedIds.length && expectedIds.every((id) => returnedIds.has(id))
 }
 
 // --- similar-floor: reuses Lab 2's own remember_answer/find_similar_questions
 // (already served correctly by the seed - see the module comment) with a
 // stricter application floor (0.9, vs. Lab 2's own 0.95/0.9 pair) than any
-// Lab 2 Task required. The query itself cannot filter on a computed
-// VectorDistance score (cosmos-query.js's WHERE grammar only compares stored
-// paths), so the floor is an application-level judgment, read from the
-// scenario's own returned rows - exactly how Lab 2's 'similar' Task already
-// judges its own near-miss/paraphrase scores.
-const FLOOR = 0.9
+// Lab 2 Task required. Review ruling (finding 3): the floor and the product
+// restriction must come from the learner's OWN query, not a post-check
+// filter - cosmos-query.js's WHERE grammar now supports VectorDistance(...)
+// as a condition, so the Solution's query filters with
+// `WHERE c.product = @product AND VectorDistance(c.embedding, @embedding)
+// >= 0.9`. The scenario seeds every qaHistory fixture (both products) and
+// asks for k=5, so a design missing either the floor or the product filter
+// has room to leak a near-miss or another-product row; the check reads the
+// returned rows exactly as the app sent them, with no post-filtering.
 const CANONICAL = DATA_FIXTURES.qaHistory.find((entry) => entry.id === 'qa-1')
 const NEAR_MISS_VECTOR = DATA_FIXTURES.nearMisses['How do I permanently delete a Contoso Backup snapshot before its retention period ends?'].vector
 const PARAPHRASE_VECTOR = DATA_FIXTURES.paraphrases['How long does Contoso Backup keep my snapshots?'].vector
-
-const aboveFloor = (rows) => (rows ?? []).filter((row) => typeof row.score === 'number' && row.score >= FLOOR)
+const OTHER_PRODUCT_IDS = new Set(DATA_FIXTURES.qaHistory.filter((entry) => entry.product !== CANONICAL.product).map((entry) => entry.id))
 
 const similarFloorReady = (context) => {
+  if (!deployedFunctionsCurrent(context, ASSISTANT_CLUSTER_ID, ASSISTANT_NAMESPACE, 'assistant-api', ['remember_answer', 'find_similar_questions'])) return false
   const record = cosmosEvidence(context, 'similar-floor', 'similar-floor')
   if (!record || record.measurements.status !== 200) return false
   const arrays = (record.measurements.values ?? []).filter((value) => Array.isArray(value))
   const [nearMissRows, paraphraseRows] = arrays
-  const nearMissAbove = aboveFloor(nearMissRows)
-  const paraphraseAbove = aboveFloor(paraphraseRows)
-  return nearMissAbove.length === 0 && paraphraseAbove.length === 1 && paraphraseAbove[0].id === CANONICAL.id
+  const hasOtherProduct = (rows) => (rows ?? []).some((row) => OTHER_PRODUCT_IDS.has(row.id))
+  if (hasOtherProduct(nearMissRows) || hasOtherProduct(paraphraseRows)) return false
+  if ((nearMissRows ?? []).length !== 0) return false
+  return (paraphraseRows ?? []).length === 1 && paraphraseRows[0].id === CANONICAL.id
 }
 
 // --- tally-correct: reuses Lab 2's own save_lease/process_changes/
@@ -170,6 +189,7 @@ const TALLY_ITEMS = [
 ]
 
 const tallyCorrectReady = (context) => {
+  if (!feedbackWorkerFunctionsCurrent(context)) return false
   const record = cosmosEvidence(context, 'tally-correct', 'tally-duplicate')
   if (!record || record.measurements.status !== 200) return false
   const batchCounts = (record.measurements.values ?? []).filter((value) => typeof value === 'number')
@@ -182,16 +202,19 @@ const tallyCorrectReady = (context) => {
 
 export const cosmosIndependentLab = {
   id: 'data-cosmos-independent', title: 'Independent: Cosmos feedback feature',
-  brief: 'Design the Knowledge Assistant\'s feedback store yourself. Reading all feedback stored for one question must cost at most 3 RU at this Lab\'s declared scale (4 physical partitions, a logical scale of 50). Similar-question search must stay restricted to one product and ignore any match scoring below 0.9. A feedback worker must keep a per-question count of positive feedback that stays correct across a worker restart and a duplicated delivery.',
+  brief: 'Design the Knowledge Assistant\'s feedback store yourself. Reading all feedback stored for one question must cost at most 3 RU at this Lab\'s declared scale (4 physical partitions, a logical scale of 2). Similar-question search must stay restricted to one product and ignore any match scoring below 0.9. A feedback worker must keep a per-question count of positive feedback that stays correct across a worker restart and a duplicated delivery.',
   minutes: 50, engineVersion: 2, contentVersion: 1, journeyId: 'data-knowledge-assistant', journeyOrder: 4, labMode: 'independent',
   skillAreaId: 'data', service: 'cosmos-db', status: 'available',
   manifestId: COSMOS_MANIFEST.id, capabilities: { acrBuild: true, kubernetes: true, dataCosmos: true },
   dataTarget: { resourceGroup: ASSISTANT_GROUP, account: ASSISTANT_ACCOUNT, database: ASSISTANT_DATABASE },
-  // task-11-brief.md's own declared scale for requirement (a): dense enough
-  // that a `query_items` scan of even one matched row costs well over 3 RU
-  // (cosmos-cost.js's queryCharge), so only a point-read-shaped access path
-  // can satisfy feedback-read.
-  dataScale: { physicalPartitions: 4, logicalScale: 50 },
+  // task-11-brief.md's own declared scale for requirement (a). Review ruling
+  // (finding 3): feedback-read now reads through question_feedback(question_id)
+  // - an app route with no known item ids to point-read by - so the only
+  // design that can satisfy it is a query scoped to a single partition via
+  // partition_key; a cross-partition query still costs far more than 3 RU
+  // regardless of logicalScale (queryCharge's fixed fan-out penalty alone),
+  // which is the scale this Lab now declares.
+  dataScale: { physicalPartitions: 4, logicalScale: 2 },
   initialProjectFiles: initialFiles, solutionFiles: COSMOS_SOLUTION_FILES, initializeSimulation: seedCosmosIndependent,
   stages: [
     { id: 'feedback', title: 'Design and verify the feedback store', taskIds: ['feedback-design', 'feedback-read'] },
@@ -204,18 +227,26 @@ export const cosmosIndependentLab = {
       { action: 'post', route: 'feedback', args: PROBE_ITEMS[1] },
       { action: 'post', route: 'feedback', args: OTHER_ITEM },
     ]),
-    // Same requests as `question-feedback`, under its own scenario id so
-    // `feedback-read` can own its own verification dispatch (see the module
-    // comment above `feedback-design`).
-    'feedback-read-check': cosmosWorkerScenario([
-      { action: 'post', route: 'feedback', args: PROBE_ITEMS[0] },
-      { action: 'post', route: 'feedback', args: PROBE_ITEMS[1] },
-      { action: 'post', route: 'feedback', args: OTHER_ITEM },
+    // Calls the learner's OWN question_feedback route through assistant-api
+    // (review ruling, finding 3) - a 'data-request', so it cannot also post
+    // the probe items itself (a raw container write is a 'data-worker'
+    // action; see cosmos-helpers.js's two scenario builders). 'feedback-read'
+    // Task's own Solution below re-runs 'question-feedback' first (idempotent
+    // - upsert by id) so this scenario's own replay never depends on
+    // 'feedback-design' having already run. The Task's own evidence is this
+    // scenario's `data-request`, with its own `verification` separate from
+    // 'feedback-design''s `data-worker` one (see the module comment above
+    // `feedback-design`).
+    'feedback-read-check': cosmosRequestScenario([
+      { route: 'GET /questions/{id}/feedback', args: [QID_PROBE] },
     ]),
+    // Seeds every qaHistory fixture (both products), not just the canonical
+    // row, so a design missing the floor or the product filter has rows to
+    // leak - see the module comment above `similarFloorReady`.
     'similar-floor': cosmosRequestScenario([
-      { route: 'POST /answers', args: [{ ...CANONICAL }] },
-      { route: 'GET /similar', args: [CANONICAL.product, [...NEAR_MISS_VECTOR], 1] },
-      { route: 'GET /similar', args: [CANONICAL.product, [...PARAPHRASE_VECTOR], 1] },
+      ...DATA_FIXTURES.qaHistory.map((entry) => ({ route: 'POST /answers', args: [{ ...entry }] })),
+      { route: 'GET /similar', args: [CANONICAL.product, [...NEAR_MISS_VECTOR], 5] },
+      { route: 'GET /similar', args: [CANONICAL.product, [...PARAPHRASE_VECTOR], 5] },
     ]),
     'tally-duplicate': cosmosWorkerScenario([
       { action: 'post', route: 'feedback', args: TALLY_ITEMS[0] },
@@ -252,18 +283,22 @@ export const cosmosIndependentLab = {
         ],
       },
       verification: { scenarioId: 'question-feedback', scenarioVersion: 1 },
-      fields: ['images:feedback-worker'],
+      fields: ['code:feedback-worker:save_lease', 'code:feedback-worker:process_changes', 'code:feedback-worker:apply_feedback'],
     }),
     cosmosTask({
       id: 'feedback-read', stageId: 'feedback',
       text: 'Confirm that reading all feedback stored for one question costs at most 3 RU at this Lab\'s declared scale.',
-      explanation: 'At a logical scale of 50, even a single-partition query that scans the matched rows costs well over 3 RU - retrieving each already-known item by id and partition key instead keeps the read cheap regardless of how dense the partition really is.',
-      hints: ['Re-run the question-feedback scenario and look at how few, how small the items for one question are.', 'A point read\'s cost depends on item size, never on logical scale; a query\'s cost does.'],
-      examNote: 'Point reads are the cheapest, most scale-independent operation in Cosmos DB; prefer them for hot, narrow reads.',
+      explanation: 'A query scoped to a single partition via partition_key stays cheap; a query that cannot target one partition forces Cosmos to fan out across every physical partition, which costs far more regardless of how few rows actually match.',
+      hints: ['Implement question_feedback(question_id) in app.py with feedback.query_items(..., partition_key=question_id) or an equivalent query, build and redeploy assistant-api, then run the feedback-read-check scenario.', 'A query scoped to a single partition via partition_key stays cheap; without it, Cosmos must fan out across every physical partition.'],
+      examNote: 'A query scoped to a single partition via partition_key avoids the fan-out cost of a cross-partition scan.',
       check: feedbackReadReady,
-      solution: { steps: [scenario('feedback-read-check')] },
+      // Re-seeds the probe items (idempotent) so this Task's own Solution
+      // stands alone, then implements+deploys question_feedback before
+      // calling it - the seed-deployed assistant-api Pod still has this
+      // Lab's own starter for it (review ruling, finding 3).
+      solution: { steps: [scenario('question-feedback'), file('app.py'), ...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v2 .`, 'kubectl rollout restart deployment/assistant-api -n assistant'), scenario('feedback-read-check')] },
       verification: { scenarioId: 'feedback-read-check', scenarioVersion: 1 },
-      fields: ['images:feedback-worker'],
+      fields: ['code:assistant-api:question_feedback'],
     }),
     cosmosTask({
       id: 'similar-floor', stageId: 'search',
@@ -274,7 +309,7 @@ export const cosmosIndependentLab = {
       check: similarFloorReady,
       solution: { steps: [scenario('similar-floor')] },
       verification: { scenarioId: 'similar-floor', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'indexing:qa_history'],
+      fields: ['code:assistant-api:remember_answer', 'code:assistant-api:find_similar_questions', 'indexing:qa_history'],
     }),
     cosmosTask({
       id: 'tally-correct', stageId: 'worker',
@@ -285,7 +320,7 @@ export const cosmosIndependentLab = {
       check: tallyCorrectReady,
       solution: { steps: [scenario('tally-duplicate')] },
       verification: { scenarioId: 'tally-duplicate', scenarioVersion: 1 },
-      fields: ['images:feedback-worker'],
+      fields: ['code:feedback-worker:save_lease', 'code:feedback-worker:process_changes', 'code:feedback-worker:apply_feedback'],
     }),
   ],
 }

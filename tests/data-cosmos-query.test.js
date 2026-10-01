@@ -42,5 +42,6 @@ describe('runCosmosQuery', () => {
       items: vc.items,
     })
     expect(runCosmosQuery(vcIndexed, q, [{ name: '@v', value: [0.9, 0.1] }]).stats.usedIndex).toBe(true)
+    expect(runCosmosQuery(vc, 'SELECT c.id FROM c WHERE VectorDistance(c.embedding, @v) >= 0.99', [{ name: '@v', value: [1, 0] }]).rows.map((row) => row.id)).toEqual(['a'])
   })
 })

@@ -72,7 +72,9 @@ const SOLUTION_PROCESS_CHANGES = `def process_changes():
     if lease is not None:
         continuation = lease.get("continuation")
         start_time = None
-    changes = feedback.query_items_change_feed(start_time=start_time, continuation=continuation)
+    # The change feed result is an iterator against the real SDK, so collect
+    # it before counting - len() on the iterator itself would fail.
+    changes = list(feedback.query_items_change_feed(start_time=start_time, continuation=continuation))
     for change in changes:
         apply_feedback(change)
     new_continuation = feedback.client_connection.last_response_headers["etag"]
@@ -110,7 +112,6 @@ const FIXED_QA_IDX_JSON = '{"indexingMode":"consistent","automatic":true,"includ
 // --- Scenario fixtures (fresh ids - distinct from Lab 2's own seeded
 // `sessions`/`qa_history` fixtures, so none of these writes collide with
 // seeded history).
-const SEED_BUDGET = { id: 'ts-msg-budget', sessionId: 'ts-session-budget', userId: 'ts-user-1', role: 'user', text: 'What is my backup retention window?', createdAt: '2026-02-01T09:00:00Z' }
 const SEED_ORDERED = { id: 'ts-msg-ordered', sessionId: 'ts-session-ordered', userId: 'ts-user-2', role: 'user', text: 'List my recent sessions.', createdAt: '2026-02-01T09:05:00Z' }
 const SEED_FRESH = { id: 'ts-msg-fresh', sessionId: 'ts-session-fresh', userId: 'ts-user-3', role: 'user', text: 'Confirm read after write.', createdAt: '2026-02-01T09:10:00Z' }
 const REMEMBER_ITEM = DATA_FIXTURES.qaHistory.find((entry) => entry.id === 'qa-3')
@@ -152,15 +153,17 @@ const writeCostReady = (context) => {
   return !!writeCall && writeCall.charge <= BASELINE_WRITE_CHARGE * 0.6
 }
 
-// Requires an actual point read (not just an absent stale flag): query_items
-// (incident 1's buggy get_session) never reports staleness at all, so without
-// this, a stale read would look indistinguishable from a fixed one while
-// get_session is still broken.
+// Requires an actual point read made at Session consistency (not just an
+// absent stale flag): query_items (incident 1's buggy get_session) never
+// reports staleness at all, and a weaker-than-Session read of a just-created
+// item now 404s rather than silently succeeding stale (runtime.js's
+// execReadItem), so without the consistency assertion, a 404 would look
+// indistinguishable from "not run yet" while the client is still Eventual.
 const freshReadReady = (context) => {
   const record = cosmosEvidence(context, 'fresh-read', 'write-then-read')
   if (!record || record.measurements.status !== 200) return false
   const readCall = record.measurements.calls?.find((call) => call.call === 'cosmos.container.read_item')
-  return !!readCall && record.measurements.stale === false
+  return !!readCall && readCall.consistency === 'Session' && record.measurements.stale === false
 }
 
 const feedCompleteReady = (context) => {
@@ -186,9 +189,15 @@ export const cosmosTroubleshootingLab = {
     { id: 'diagnose', title: 'Diagnose and repair the conversation history incidents', taskIds: ['session-budget', 'ordered-restored', 'write-cost', 'fresh-read', 'feed-complete'] },
   ],
   scenarios: {
+    // Reads a message already in the seeded conversation history (never
+    // written by this scenario itself) - review fix: a fresh write-then-read
+    // in the SAME request now 404s under Eventual/ConsistentPrefix (the
+    // item hasn't "replicated" yet; see runtime.js's execReadItem), and this
+    // Task's own incident (an oversized read) is independent of the
+    // separate consistency incident 'fresh-read' repairs, so its own
+    // standalone Solution must not accidentally depend on that other fix.
     'get-session': cosmosRequestScenario([
-      { route: 'POST /messages', args: [SEED_BUDGET] },
-      { route: 'GET /sessions/{id}', args: [SEED_BUDGET.id, SEED_BUDGET.sessionId] },
+      { route: 'GET /sessions/{id}', args: ['msg-1', 'session-1'] },
     ]),
     'user-sessions-ordered': cosmosRequestScenario([
       { route: 'POST /messages', args: [SEED_ORDERED] },

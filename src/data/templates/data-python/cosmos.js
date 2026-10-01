@@ -24,7 +24,7 @@ Cosmos DB for NoSQL. Route handlers dispatched by server.py (fixed) via
 COSMOS_MANIFEST.routes. Container clients (sessions, qa_history, feedback,
 leases, tally) live in clients.py.
 """
-from clients import qa_history, sessions
+from clients import feedback, qa_history, sessions
 
 `
 
@@ -57,14 +57,26 @@ def remember_answer(entry):
 
 def find_similar_questions(product, embedding, k):
     # GET /similar: the k closest stored questions for one product, ranked by
-    # cosine similarity to the supplied embedding.
+    # cosine similarity to the supplied embedding. A similarity floor (0.9)
+    # keeps a merely-related question from being returned as if it answered
+    # the one actually asked.
     return qa_history.query_items(
-        query="SELECT TOP @k c.id, c.question, c.answer, VectorDistance(c.embedding, @embedding) AS score FROM c WHERE c.product = @product ORDER BY VectorDistance(c.embedding, @embedding)",
+        query="SELECT TOP @k c.id, c.question, c.answer, VectorDistance(c.embedding, @embedding) AS score FROM c WHERE c.product = @product AND VectorDistance(c.embedding, @embedding) >= 0.9 ORDER BY VectorDistance(c.embedding, @embedding)",
         parameters=[
             {"name": "@product", "value": product},
             {"name": "@embedding", "value": embedding},
             {"name": "@k", "value": k},
         ],
+    )
+
+
+def question_feedback(question_id):
+    # GET /questions/{id}/feedback: every feedback item stored for one
+    # question. Partition key: /questionId.
+    return feedback.query_items(
+        query="SELECT * FROM c WHERE c.questionId = @questionId",
+        parameters=[{"name": "@questionId", "value": question_id}],
+        partition_key=question_id,
     )
 `
 
@@ -86,6 +98,10 @@ def remember_answer(entry):
 
 def find_similar_questions(product, embedding, k):
     raise NotImplementedError("Lab task")
+
+
+def question_feedback(question_id):
+    raise NotImplementedError("Lab task")
 `
 
 const WORKER_PY_HEADER = `"""Feedback worker: processes the feedback container's change feed and keeps
@@ -98,8 +114,14 @@ from clients import feedback, leases, tally
 
 
 def read_lease():
-    # Fixed by the scaffold: returns None when no checkpoint has been saved
-    # yet, instead of raising a not-found error.
+    # Fixed by the scaffold. Simulator-only: this read_item call returns None
+    # on a missing lease instead of raising, so "no checkpoint yet" behaves
+    # like an empty result here. Against the real SDK, catch the not-found
+    # error instead:
+    #   try:
+    #       return leases.read_item(item="feedback-worker", partition_key="feedback-worker")
+    #   except CosmosResourceNotFoundError:
+    #       return None
     return leases.read_item(item="feedback-worker", partition_key="feedback-worker")
 
 
@@ -118,7 +140,9 @@ def process_changes():
     if lease is not None:
         continuation = lease.get("continuation")
         start_time = None
-    changes = feedback.query_items_change_feed(start_time=start_time, continuation=continuation)
+    # The change feed result is an iterator against the real SDK, so collect
+    # it before counting - len() on the iterator itself would fail.
+    changes = list(feedback.query_items_change_feed(start_time=start_time, continuation=continuation))
     for change in changes:
         apply_feedback(change)
     new_continuation = feedback.client_connection.last_response_headers["etag"]
@@ -155,6 +179,7 @@ ROUTES = {
     ("GET", "/users"): app.recent_sessions_for_user,
     ("POST", "/answers"): app.remember_answer,
     ("GET", "/similar"): app.find_similar_questions,
+    ("GET", "/questions"): app.question_feedback,
 }
 PORT = 8080
 
@@ -263,8 +288,8 @@ spec:
 export const COSMOS_FILES = Object.freeze(['app.py', 'worker.py', 'clients.py', 'server.py', 'Dockerfile', 'k8s/deployment.yaml', 'k8s/worker.yaml', 'k8s/service.yaml'])
 export const COSMOS_BUILD_FILES = Object.freeze(['app.py', 'worker.py', 'clients.py', 'server.py', 'Dockerfile'])
 export const COSMOS_KUBERNETES_FILES = Object.freeze(['k8s/deployment.yaml', 'k8s/worker.yaml', 'k8s/service.yaml'])
-export const COSMOS_EDIT_ZONES = Object.freeze(['save_message', 'get_session', 'recent_sessions_for_user', 'remember_answer', 'find_similar_questions', 'save_lease', 'process_changes', 'apply_feedback'])
-export const COSMOS_ROUTES = Object.freeze({ 'POST /messages': 'save_message', 'GET /sessions/{id}': 'get_session', 'GET /users/{id}/sessions': 'recent_sessions_for_user', 'POST /answers': 'remember_answer', 'GET /similar': 'find_similar_questions', 'worker:batch': 'process_changes' })
+export const COSMOS_EDIT_ZONES = Object.freeze(['save_message', 'get_session', 'recent_sessions_for_user', 'remember_answer', 'find_similar_questions', 'question_feedback', 'save_lease', 'process_changes', 'apply_feedback'])
+export const COSMOS_ROUTES = Object.freeze({ 'POST /messages': 'save_message', 'GET /sessions/{id}': 'get_session', 'GET /users/{id}/sessions': 'recent_sessions_for_user', 'POST /answers': 'remember_answer', 'GET /similar': 'find_similar_questions', 'GET /questions/{id}/feedback': 'question_feedback', 'worker:batch': 'process_changes' })
 
 export const COSMOS_MANIFEST = Object.freeze({
   id: 'data-python-cosmos-v1', language: 'python', runtimeFamily: 'aks', dataApp: true,
