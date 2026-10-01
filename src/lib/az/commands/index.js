@@ -18,6 +18,7 @@ import { cognitiveservicesGroup } from './cognitiveservices.js'
 import { deploymentGroup } from './deployment.js'
 import { aksGroup } from './aks.js'
 import { postgresGroup } from './postgres.js'
+import { redisenterpriseGroup } from './redisenterprise.js'
 
 let AZ_TREE = null
 
@@ -38,6 +39,7 @@ export function buildTree() {
     keyvault: keyvaultGroup,
     login: loginCommand,
     postgres: postgresGroup,
+    redisenterprise: redisenterpriseGroup,
     servicebus: servicebusGroup,
     storage: storageGroup,
     functionapp: functionappGroup,

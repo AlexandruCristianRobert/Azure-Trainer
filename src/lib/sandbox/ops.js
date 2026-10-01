@@ -103,6 +103,7 @@ export function deleteResourceGroup(sb, { name }) {
   next = deleteContainerAppResourcesInGroup(next, name)
   next = deleteCosmosAccountsInGroup(next, name)
   next.postgresServers = (next.postgresServers ?? []).filter(server => server.resourceGroup.toLowerCase() !== name.toLowerCase())
+  next.redisClusters = (next.redisClusters ?? []).filter(cluster => cluster.resourceGroup.toLowerCase() !== name.toLowerCase())
   next = deleteKeyVaultsInGroup(next, name)
   next = deleteFunctionResourcesInGroup(next, name)
   next = deleteEventGridTopicsInGroup(next, name)

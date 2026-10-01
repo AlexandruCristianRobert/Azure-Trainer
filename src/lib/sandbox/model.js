@@ -18,11 +18,56 @@ export const POSTGRES_SKUS = {
 }
 
 export function createSandbox() {
-  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], postgresServers: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
+  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], postgresServers: [], redisClusters: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
 }
 
 function object(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+const finiteNonnegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0
+function redisJson(value, ancestors = new Set()) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (!value || typeof value !== 'object' || ancestors.has(value) || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) return false
+  const next = new Set(ancestors).add(value)
+  return Object.values(value).every(child => redisJson(child, next))
+}
+function validRedisValue(value) {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+    || (object(value) && value.redisKind === 'bytes' && typeof value.base64 === 'string'
+      && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.base64)
+      && btoa(atob(value.base64)) === value.base64
+      && Object.keys(value).every(key => ['redisKind', 'base64'].includes(key)))
+}
+function validRedisKey(key) {
+  return object(key) && ['string', 'hash'].includes(key.type)
+    && (key.expiresAtMs === null || finiteNonnegative(key.expiresAtMs)) && finiteNonnegative(key.lastAccessMs)
+    && (key.type === 'string' ? validRedisValue(key.value) : object(key.value) && Object.values(key.value).every(validRedisValue))
+}
+function validRedisIndex(index, name) {
+  return object(index) && index.name === name && typeof index.prefix === 'string'
+    && (!Object.hasOwn(index, 'createdAtMs') || finiteNonnegative(index.createdAtMs))
+    && Array.isArray(index.fields) && index.fields.length === 4
+    && new Set(index.fields.map(field => field?.name)).size === index.fields.length
+    && ['product', 'version', 'language'].every(name => index.fields.some(field => field?.name === name && field.type === 'TAG'))
+    && index.fields.some(field => field?.name === 'embedding' && field.type === 'VECTOR' && field.algorithm === 'HNSW'
+      && field.dataType === 'FLOAT32' && [8, 12].includes(field.dimensions) && field.distanceMetric === 'COSINE')
+}
+export function validRedisCluster(cluster) {
+  const database = cluster?.database
+  return object(cluster) && redisJson(cluster) && typeof cluster.name === 'string' && /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/.test(cluster.name)
+    && typeof cluster.resourceGroup === 'string' && typeof cluster.location === 'string' && cluster.location === normalizeLocation(cluster.location)
+    && cluster.sku === 'Balanced_B0' && cluster.hostName === `${cluster.name}.${cluster.location}.redis.training.invalid`
+    && object(database) && database.name === 'default' && database.port === 10000
+    && Array.isArray(database.modules) && database.modules.length <= 1 && database.modules.every(module => module === 'RediSearch')
+    && database.clusteringPolicy === 'EnterpriseCluster' && database.evictionPolicy === 'NoEviction'
+    && database.clientProtocol === 'Encrypted' && database.accessKeysAuthentication === 'Enabled'
+    && finiteNonnegative(database.memoryLimitBytes) && object(database.keys) && Object.values(database.keys).every(validRedisKey)
+    && object(database.indexes) && Object.entries(database.indexes).every(([name, index]) => validRedisIndex(index, name))
+    && (database.modules.includes('RediSearch') || Object.keys(database.indexes).length === 0)
+    && object(database.sourceRevisions) && Object.values(database.sourceRevisions).every(revision => [1, 2].includes(revision))
+    && object(database.stats) && ['hits', 'misses', 'expiredKeys', 'rejectedWrites'].every(name => finiteNonnegative(database.stats[name]))
 }
 
 function pathEntries(value) {
@@ -344,6 +389,9 @@ export function isSandboxShape(sb) {
     && (!Object.hasOwn(sb, 'containerAppEnvironments') || Array.isArray(sb.containerAppEnvironments))
     && (!Object.hasOwn(sb, 'containerApps') || Array.isArray(sb.containerApps))
     && (!Object.hasOwn(sb, 'cosmosAccounts') || (Array.isArray(sb.cosmosAccounts) && sb.cosmosAccounts.every(validCosmosAccount)))
+    && (!Object.hasOwn(sb, 'redisClusters') || (Array.isArray(sb.redisClusters) && sb.redisClusters.every(cluster => validRedisCluster(cluster)
+      && sb.resourceGroups.some(group => same(group.name, cluster.resourceGroup)))
+      && new Set(sb.redisClusters.map(cluster => `${cluster.resourceGroup}/${cluster.name}`.toLowerCase())).size === sb.redisClusters.length))
     && (!Object.hasOwn(sb, 'postgresServers') || (Array.isArray(sb.postgresServers) && sb.postgresServers.every(server => validPostgresServer(server)
       && sb.resourceGroups.some(group => same(group.name, server.resourceGroup)))
       && new Set(sb.postgresServers.map(server => server.name)).size === sb.postgresServers.length))
@@ -369,6 +417,7 @@ export function normalizeSandbox(sb) {
   if (!Object.hasOwn(next, 'functionApps')) next.functionApps = []
   if (!Object.hasOwn(next, 'cosmosAccounts')) next.cosmosAccounts = []
   if (!Object.hasOwn(next, 'postgresServers')) next.postgresServers = []
+  if (!Object.hasOwn(next, 'redisClusters')) next.redisClusters = []
   if (!Object.hasOwn(next, 'keyVaults')) next.keyVaults = []
   if (!Object.hasOwn(next, 'eventGridTopics')) next.eventGridTopics = []
   if (!Object.hasOwn(next, 'aksClusters')) next.aksClusters = []

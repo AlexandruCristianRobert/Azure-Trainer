@@ -42,6 +42,10 @@ function hasEventGridSubscription(sb, rg, topicName, name) {
 
 export function resolveBlade(blade, sandbox) {
   if (!blade) return { ...LIST }
+  if (blade.kind === 'redis-enterprise') {
+    if (hasResource(sandbox.redisClusters, blade.resourceGroup, blade.name)) return { ...blade }
+    return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
+  }
   if (blade.kind === 'servicebus-namespace') {
     if (hasNamespace(sandbox, blade.resourceGroup, blade.name)) return { ...blade, tab: blade.tab ?? 'queues' }
     return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)

@@ -21,6 +21,7 @@ import ContainerRegistryBlade from './ContainerRegistryBlade.vue'
 import ManagedIdentityBlade from './ManagedIdentityBlade.vue'
 import AksClusterBlade from './AksClusterBlade.vue'
 import PostgresServerBlade from './PostgresServerBlade.vue'
+import RedisEnterpriseBlade from './RedisEnterpriseBlade.vue'
 
 const run = useLabRunStore()
 const portal = usePortalStore()
@@ -29,6 +30,7 @@ const blade = computed(() => resolveBlade(portal.blade, run.sandbox))
 
 <template>
   <AksClusterBlade v-if="blade.kind === 'aks-cluster'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
+  <RedisEnterpriseBlade v-else-if="blade.kind === 'redis-enterprise'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
   <PostgresServerBlade v-else-if="blade.kind === 'postgres-server'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
   <ContainerRegistryBlade v-else-if="blade.kind === 'container-registry'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
   <ManagedIdentityBlade v-else-if="blade.kind === 'managed-identity'" :key="blade.resourceGroup + '/' + blade.name" :resource-group="blade.resourceGroup" :name="blade.name" />
