@@ -8,6 +8,14 @@ import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 // kubernetes/evidence.js for the pattern it mirrors). Review fix round 1
 // (Task 8): a Task names exactly the fields it actually depends on, from:
 //   - 'images': deployed source hashes for assistant-api and feedback-worker
+//   - 'images:<deploymentName>': just that one Deployment's source hash
+//     (Task 9: a Lab 2 Task that cares about only ONE of the two Deployments
+//     must not use the combined 'images' field above - 'similar' verifies
+//     assistant-api, before feedback-worker is ever deployed, and 'no-miss'
+//     verifies feedback-worker; sharing the combined field would make
+//     'similar' go stale the moment the LATER 'worker-deployed' Task
+//     deploys feedback-worker, violating "no later Task invalidates earlier
+//     evidence")
 //   - 'clientConsistency': clients.py's own `consistency_level`
 //   - 'accountConsistency': the account's default consistency level
 //   - 'indexing:<container>': that container's current indexing policy
@@ -19,15 +27,19 @@ import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 // field regardless of which ones a Task asked for, over-coupling every
 // verification Task in a Lab to every tracked field - Review Focus #5 /
 // fix round 1 Important finding 2.)
+const deploymentSourceHash = (context, clusterId, namespace, deploymentName) => {
+  const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
+  const image = resources[`Deployment/${namespace}/${deploymentName}`]?.spec?.template?.spec?.containers?.[0]?.image ?? null
+  const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
+  return artifactId ? context.artifacts.buildsById?.[artifactId]?.sourceHash ?? null : null
+}
 const DATA_DEPENDENCY_FIELDS = (context, { clusterId, namespace, account, database }, field) => {
   if (field === 'images') {
-    const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
-    const sourceHash = (deploymentName) => {
-      const image = resources[`Deployment/${namespace}/${deploymentName}`]?.spec?.template?.spec?.containers?.[0]?.image ?? null
-      const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
-      return artifactId ? context.artifacts.buildsById?.[artifactId]?.sourceHash ?? null : null
-    }
-    return { assistantApiSourceHash: sourceHash('assistant-api'), feedbackWorkerSourceHash: sourceHash('feedback-worker') }
+    return { assistantApiSourceHash: deploymentSourceHash(context, clusterId, namespace, 'assistant-api'), feedbackWorkerSourceHash: deploymentSourceHash(context, clusterId, namespace, 'feedback-worker') }
+  }
+  if (field.startsWith('images:')) {
+    const deploymentName = field.slice('images:'.length)
+    return { [field]: deploymentSourceHash(context, clusterId, namespace, deploymentName) }
   }
   if (field === 'clientConsistency') return { clientConsistencySource: context.project.savedFiles['clients.py'] ?? null }
   if (field === 'accountConsistency') {
@@ -78,6 +90,21 @@ export function cosmosRequestScenario(steps) {
     kind: 'data-request', version: 1,
     target: Object.freeze({ clusterId: ASSISTANT_CLUSTER_ID, namespace: ASSISTANT_NAMESPACE, serviceName: 'assistant-api', deploymentName: 'assistant-api' }),
     steps: Object.freeze(steps.map((step) => Object.freeze({ ...step, args: Object.freeze([...step.args]) }))),
+  })
+}
+
+// The feedback-worker Deployment (Task 9's own feed-processor template) is
+// the `data-worker` target for every Lab 2+ scenario that drives the pull-
+// model change feed processor. feedback-worker has no Service (see
+// COSMOS_MANIFEST's k8s files), so its target carries no `serviceName`,
+// unlike `cosmosRequestScenario` above.
+export function cosmosWorkerScenario(steps) {
+  return Object.freeze({
+    kind: 'data-worker', version: 1,
+    target: Object.freeze({ clusterId: ASSISTANT_CLUSTER_ID, namespace: ASSISTANT_NAMESPACE, deploymentName: 'feedback-worker' }),
+    steps: Object.freeze(steps.map((step) => Object.freeze(
+      step.action === 'post' ? { action: step.action, route: step.route, args: Object.freeze({ ...step.args }) } : { action: step.action },
+    ))),
   })
 }
 
