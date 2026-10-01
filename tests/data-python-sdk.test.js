@@ -7,11 +7,125 @@ import { createPostgresServer, createPostgresDatabase, setPostgresParameter } fr
 import { executePg, loadCorpus } from '../src/lib/data/pg-engine.js'
 import { parsePgSql } from '../src/lib/data/pg-sql.js'
 import { POSTGRES_MANIFEST, POSTGRES_STARTER_FILES } from '../src/data/templates/data-python/postgres.js'
+import { REDIS_HELPER_FILES, REDIS_RUNTIME_MANIFEST } from '../src/data/templates/data-python/redis-runtime.js'
+import { createRedisCluster } from '../src/lib/sandbox/redis.js'
+import { executeRedis } from '../src/lib/data/redis-store.js'
+import { executeRedisSearch, float32Blob } from '../src/lib/data/redis-search.js'
+import { REDIS_TARGET, redisEmbed, redisSourceAnswer } from '../src/data/fixtures/data/redis.js'
 
 const manifest = { editZones: ['get_session', 'recent'], receivers: { sessions: 'cosmos-container' } }
 const files = (app, clients = 'from azure.cosmos import CosmosClient\nclient = CosmosClient(URL, credential=KEY, consistency_level="Session")\n') => ({ 'app.py': app, 'clients.py': clients })
 
 describe('parseDataApp', () => {
+  it('executes a parameterized Redis semantic hit from real binary vectors and protected decoders', () => {
+    const target = REDIS_TARGET
+    const question = 'How many days are Contoso Backup snapshots retained?'
+    let sandbox = createResourceGroup(createSandbox(), { name: target.resourceGroup, location: 'eastus' }).sandbox
+    sandbox = createRedisCluster(sandbox, { ...target, name: target.cluster, modules: ['RediSearch'] }).sandbox
+    const created = executeRedisSearch(sandbox, target, 'FT.CREATE', ['idx:semantic', 'ON', 'HASH', 'PREFIX', 1, 'ka:sem:', 'SCHEMA', 'product', 'TAG', 'version', 'TAG', 'language', 'TAG', 'embedding', 'VECTOR', 'HNSW', 6, 'TYPE', 'FLOAT32', 'DIM', 8, 'DISTANCE_METRIC', 'COSINE'])
+    expect(created.error).toBeUndefined()
+    const answer = redisSourceAnswer({ product: 'contoso-backup', version: 'v1', language: 'en' }, question)
+    sandbox = executeRedis(created.sandbox, target, 'HSET', ['ka:sem:contoso-backup:v1:en:seed', { product: 'contoso-backup', version: 'v1', language: 'en', payload: JSON.stringify(answer), embedding: float32Blob(redisEmbed(question)) }]).sandbox
+    const app = `from clients import cache
+from training_runtime import embed, pack_embedding, decode_search, decode_answer
+def semantic_lookup(question, product, version, language, threshold):
+    query = "(@product:{" + product + "} @version:{" + version + "} @language:{" + language + "})=>[KNN 1 @embedding $vec AS distance]"
+    raw = cache.execute_command("FT.SEARCH", "idx:semantic", query, "PARAMS", 2,
+        "vec", pack_embedding(embed(question)), "SORTBY", "distance", "ASC",
+        "RETURN", 2, "payload", "distance", "DIALECT", 2)
+    rows = decode_search(raw)
+    for row in rows:
+        if float(row["distance"]) <= threshold:
+            return decode_answer(row["payload"])
+    return None
+`
+    const files = { ...REDIS_HELPER_FILES, 'app.py': app, 'clients.py': 'import redis as cache_sdk\ncache = cache_sdk.Redis("redis-assistant.eastus.redis.training.invalid", 10000, password="Training-Only-Redis-Key", ssl=True, decode_responses=False, protocol=2)\n' }
+    const manifest = { ...REDIS_RUNTIME_MANIFEST, editZones: ['semantic_lookup'], routes: { 'GET /answer': 'semantic_lookup' } }
+    const parsed = parseDataApp(files, manifest)
+    expect(parsed.diagnostics).toEqual([])
+    const result = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'semantic_lookup', args: [question, 'contoso-backup', 'v1', 'en', 0.05], nowMs: 0 })
+    expect(result.status).toBe(200)
+    expect(result.value).toEqual(answer)
+    expect(result.redis.calls.some(call => call.command === 'FT.SEARCH')).toBe(true)
+    expect(result.redis.originCalls).toBe(0)
+    result.value.answer = 'detached'
+    expect(sandbox.redisClusters[0].database.keys['ka:sem:contoso-backup:v1:en:seed'].value.payload).toBe(JSON.stringify(answer))
+  })
+  it('executes Redis miss, real SET EX and repeat hit with one protected scoped origin call', () => {
+    const target = REDIS_TARGET
+    const question = 'How many days are Contoso Backup snapshots retained?'
+    let sandbox = createResourceGroup(createSandbox(), { name: target.resourceGroup, location: 'eastus' }).sandbox
+    sandbox = createRedisCluster(sandbox, { ...target, name: target.cluster }).sandbox
+    const app = `from clients import cache
+from training_runtime import response_key, encode_answer, decode_answer, source_answer
+def cached_answer(question, product, version, language, ttl):
+    key = response_key(question, product, version, language)
+    value = cache.get(key)
+    if value is not None:
+        return decode_answer(value)
+    result = source_answer(question, product, version, language)
+    cache.set(key, encode_answer(result), ex=ttl)
+    return result
+def key_check():
+    return response_key(" ABC ", "p", "v1", "en")
+def hash_check():
+    cache.hset("temp", mapping={"payload": encode_answer({"answer": "learner value"})})
+    cache.expire("temp", 60)
+    rows = cache.hgetall("temp")
+    return {"value": decode_answer(rows["payload"]), "ttl": cache.ttl("temp"), "exists": cache.exists("temp")}
+def invalidate():
+    for key in cache.scan_iter(match="ka:answer:contoso-backup:*", count=100):
+        cache.delete(key)
+    return cache.delete("absent-one", "absent-two")
+def fail_after_write():
+    cache.set("survives", "learner value", ex=60)
+    return cache.hgetall("survives")
+def bounded_trace(keys):
+    for key in keys:
+        cache.get(key)
+    return None
+`
+    const files = { ...REDIS_HELPER_FILES, 'app.py': app, 'clients.py': 'from redis import Redis as CacheClient\ncache = CacheClient(host="redis-assistant.eastus.redis.training.invalid", port=10000, password="Training-Only-Redis-Key", ssl=True, decode_responses=False, protocol=2)\n' }
+    const manifest = { ...REDIS_RUNTIME_MANIFEST, editZones: ['cached_answer', 'key_check', 'hash_check', 'invalidate', 'fail_after_write', 'bounded_trace'], routes: { 'GET /cached': 'cached_answer' } }
+    const parsed = parseDataApp(files, manifest)
+    expect(parsed.diagnostics).toEqual([])
+    const one = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60], nowMs: 0 })
+    const two = runDataFunction({ appSpec: parsed.appSpec, sandbox: one.sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60], nowMs: 1000 })
+    expect(one.status).toBe(200)
+    expect(two.value).toEqual(one.value)
+    expect(one.redis.originCalls + two.redis.originCalls).toBe(1)
+    expect(two.redis.calls.some(call => call.command === 'GET' && call.hit === true)).toBe(true)
+    expect(one.redis.calls.find(call => call.command === 'SET')).toMatchObject({ args: [expect.any(String), expect.objectContaining({ redisKind: 'bytes' }), 'EX', 60] })
+    expect(Object.values(one.sandbox.redisClusters[0].database.keys)[0].expiresAtMs).toBe(60000)
+    expect(runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'key_check' }).value).toBe('ka:answer:p:v1:en:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+    const revised = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60], nowMs: 0, scenarioState: { sourceRevisions: { 'contoso-backup': 2 } } })
+    expect(revised.value.answer).toContain('14 days')
+    const unsupported = parseDataApp({ ...files, 'app.py': app.replace('cache.get(key)', 'cache.unknown(key)') }, manifest)
+    expect(unsupported.diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
+    expect(parseDataApp({ ...files, 'clients.py': files['clients.py'].replace('host=', '').replace('port=10000,', '10000, "Training-Only-Redis-Key",') }, manifest).diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
+    expect(parseDataApp({ ...files, 'app.py': app.replace('mapping={"payload": encode_answer({"answer": "learner value"})}', '{"payload": encode_answer({"answer": "learner value"})}') }, manifest).diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
+    expect(parseDataApp({ ...files, 'training_runtime.py': files['training_runtime.py'] + '\n# changed\n' }, manifest).diagnostics[0].code).toBe('SCAFFOLD_MODIFIED')
+    expect(parseDataApp({ ...files, 'app.py': app + '\nresponse_key = "shadow"\n' }, manifest).diagnostics.some(d => d.code === 'SCAFFOLD_MODIFIED')).toBe(true)
+    const wrongConnection = parseDataApp({ ...files, 'clients.py': files['clients.py'].replace('ssl=True', 'ssl=False') }, manifest)
+    const disconnected = runDataFunction({ appSpec: wrongConnection.appSpec, sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60] })
+    expect(disconnected.error.code).toBe('ConnectionError')
+    expect(JSON.stringify(disconnected.redis)).not.toContain('Training-Only-Redis-Key')
+    const hash = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'hash_check', nowMs: 0 })
+    expect(hash.value).toEqual({ value: { answer: 'learner value' }, ttl: 60, exists: 1 })
+    const invalidated = runDataFunction({ appSpec: parsed.appSpec, sandbox: one.sandbox, dataTarget: target, functionName: 'invalidate', nowMs: 0 })
+    expect(invalidated.status).toBe(200)
+    expect(Object.keys(invalidated.sandbox.redisClusters[0].database.keys)).toEqual([])
+    expect(invalidated.redis.calls.at(-1)).toMatchObject({ command: 'DEL', args: ['absent-one', 'absent-two'] })
+    const failed = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'fail_after_write', nowMs: 0 })
+    expect(failed.error.code).toBe('ResponseError')
+    expect(failed.sandbox.redisClusters[0].database.keys.survives.value).toBe('learner value')
+    const truncated = runDataFunction({ appSpec: parsed.appSpec, sandbox: two.sandbox, dataTarget: target, functionName: 'bounded_trace', args: [Array(257).fill('missing')], nowMs: 1000 })
+    expect(truncated.status).toBe(200)
+    expect(truncated.redis.calls).toHaveLength(256)
+    expect(truncated.redis.traceTruncated).toBe(true)
+    expect(truncated.redis.calls[0].hit).toBe(false)
+    expect(truncated.redis.measurements.misses).toBe(258)
+  })
   it('distinguishes actually used pools while preserving identity across checkouts', () => {
     const dataTarget = { kind: 'postgres', server: 'pg-assistant', resourceGroup: 'rg-assistant', database: 'knowledge' }
     let sandbox = createResourceGroup(createSandbox(), { name: 'rg-assistant', location: 'eastus' }).sandbox

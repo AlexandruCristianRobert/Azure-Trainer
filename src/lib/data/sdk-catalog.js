@@ -5,6 +5,17 @@
 // it never executes Python (ADR-0002/0003), it only looks calls up here.
 
 export const SDK_CALLS = {
+  'redis.Redis': { kind: 'constructor', params: ['host', 'port', 'password', 'ssl', 'decode_responses', 'protocol'], required: ['host', 'password', 'ssl'], keywordOnly: ['password', 'ssl', 'decode_responses', 'protocol'], returns: 'redis-client' },
+  'redis.client.get': { kind: 'method', receiver: 'redis-client', params: ['name'], required: ['name'] },
+  'redis.client.set': { kind: 'method', receiver: 'redis-client', params: ['name', 'value', 'ex'], required: ['name', 'value'] },
+  'redis.client.delete': { kind: 'method', receiver: 'redis-client', params: [], variadic: 'names', required: [] },
+  'redis.client.exists': { kind: 'method', receiver: 'redis-client', params: ['name'], required: ['name'] },
+  'redis.client.ttl': { kind: 'method', receiver: 'redis-client', params: ['name'], required: ['name'] },
+  'redis.client.expire': { kind: 'method', receiver: 'redis-client', params: ['name', 'time'], required: ['name', 'time'] },
+  'redis.client.hset': { kind: 'method', receiver: 'redis-client', params: ['name', 'mapping'], required: ['name', 'mapping'], keywordOnly: ['mapping'] },
+  'redis.client.hgetall': { kind: 'method', receiver: 'redis-client', params: ['name'], required: ['name'] },
+  'redis.client.scan_iter': { kind: 'method', receiver: 'redis-client', params: ['match', 'count'], required: [] },
+  'redis.client.execute_command': { kind: 'method', receiver: 'redis-client', params: [], variadic: 'args', required: [] },
   'postgres.module.connect': { kind: 'constructor', params: ['conninfo', 'autocommit', 'row_factory'], required: ['conninfo'], keywordOnly: ['autocommit', 'row_factory'], returns: 'pg-connection' },
   'postgres.pool.ConnectionPool': { kind: 'constructor', params: ['conninfo', 'min_size', 'max_size', 'open', 'kwargs'], required: ['conninfo'], keywordOnly: ['min_size', 'max_size', 'open', 'kwargs'], returns: 'pg-pool' },
   'postgres.pool.connection': { kind: 'method', receiver: 'pg-pool', params: [], required: [], returns: 'pg-connection' },

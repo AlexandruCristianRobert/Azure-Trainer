@@ -19,6 +19,7 @@ import { embed } from '../../data/fixtures/data/knowledge.js'
 import { CORPUS, corpusQuestions } from '../../data/fixtures/data/corpus.js'
 import { SUPPORT_V3_CORPUS, SUPPORT_V3_ALL_QUESTIONS } from '../../data/fixtures/data/corpus-v3.js'
 import { executePg } from './pg-engine.js'
+import { evalRedisCall, evalRedisHelper, newRedisEvidence, redisText, redisSnapshot } from './redis-runtime.js'
 
 const MAX_DEPTH = 8
 const round2 = (n) => Math.round(n * 100) / 100
@@ -83,20 +84,26 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
     calls, lastContinuations: {}, sandboxBox: { value: sandbox }, globals: {},
     connections: { opened: 0, closed: 0, active: 0, events: [] }, jsonbValues: new WeakSet(), pgPoolIds: new Map(),
     trainingCalls: [], trainingTraceTruncated: { value: false },
+    redisEvidence: newRedisEvidence(),
   }
   const totalCharge = () => round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0))
-  const pgEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections,
-    trainingCalls: ctx.trainingCalls, trainingTraceTruncated: ctx.trainingTraceTruncated.value } : {}
+  const runtimeEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections,
+    trainingCalls: ctx.trainingCalls, trainingTraceTruncated: ctx.trainingTraceTruncated.value } : dataTarget?.kind === 'redis' && appSpec.data.redis ? { redis: ctx.redisEvidence } : {}
   try {
     if (dataTarget?.kind === 'postgres') {
       for (const [name, expr] of Object.entries(appSpec.data.postgres?.globals ?? {})) if (expr.kind === 'literal') ctx.globals[name] = expr.value
       execOps(appSpec.data.postgres?.clientOps ?? [], ctx.globals, { ...ctx, depth: 0 })
     }
-    const value = callFunction(functionName, args, ctx, 0)
-    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...pgEvidence() }
+    if (dataTarget?.kind === 'redis' && appSpec.data.redis) {
+      for (const [name, expr] of Object.entries(appSpec.data.redis.globals)) if (expr.kind === 'literal') ctx.globals[name] = expr.value
+      execOps(appSpec.data.redis.clientOps, ctx.globals, { ...ctx, depth: 0 })
+    }
+    const returned = callFunction(functionName, args, ctx, 0)
+    const value = appSpec.data.redis ? redisSnapshot(returned, fail) : returned
+    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...runtimeEvidence() }
   } catch (error) {
     if (!(error instanceof StopExecution)) throw error
-    return { sandbox: ctx.sandboxBox.value, status: statusFor(error.errorPayload.code), value: null, error: error.errorPayload, calls, totalCharge: totalCharge(), ...pgEvidence() }
+    return { sandbox: ctx.sandboxBox.value, status: statusFor(error.errorPayload.code), value: null, error: error.errorPayload, calls, totalCharge: totalCharge(), ...runtimeEvidence() }
   }
 }
 
@@ -138,7 +145,7 @@ function execStatement(op, locals, ctx) {
     case 'raise-not-implemented': return fail('DATA_UNSUPPORTED', `Not supported by the simulator: ${op.functionName} is not completed yet.`)
     case 'for': {
       const iterable = evalExpr(op.iterable, locals, ctx)
-      if (ctx.dataTarget?.kind === 'postgres' && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
+      if (['postgres', 'redis'].includes(ctx.dataTarget?.kind) && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
       for (const item of Array.isArray(iterable) ? iterable : []) {
         locals[op.name] = item
         const signal = execOps(op.body, locals, ctx)
@@ -168,6 +175,8 @@ function evalCompare(test, locals, ctx) {
     case '!=': return !valuesEqual(left, right)
     case '<': return left < right
     case '>=': return left >= right
+    case '<=': return left <= right
+    case '>': return left > right
     case 'is': return isNone(right) ? isNone(left) : left === right
     case 'is not': return isNone(right) ? !isNone(left) : left !== right
     default: return fail('DATA_UNSUPPORTED', `Not supported by the simulator: comparison '${test.op}'`)
@@ -182,6 +191,12 @@ function evalExpr(expr, locals, ctx) {
     case 'list': return expr.items.map((item) => evalExpr(item, locals, ctx))
     case 'tuple': return expr.items.map((item) => evalExpr(item, locals, ctx))
     case 'fstring': return expr.parts.map(part => pythonPgStr(evalExpr(part, locals, ctx))).join('')
+    case 'redis-add': {
+      const left = evalExpr(expr.left, locals, ctx); const right = evalExpr(expr.right, locals, ctx)
+      if (typeof left === 'string' && typeof right === 'string' && left.length + right.length <= 65536) return left + right
+      return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: Redis string concatenation requires bounded strings')
+    }
+    case 'redis-helper': return evalRedisHelper(expr.name, expr.args.map(arg => evalExpr(arg, locals, ctx)), ctx, fail)
     case 'sequence-method': {
       const target = evalExpr(expr.target, locals, ctx); const value = evalExpr(expr.value, locals, ctx)
       if (expr.method === 'append' && Array.isArray(target) && target.length < 1024) { target.push(value); return null }
@@ -213,6 +228,13 @@ function evalExpr(expr, locals, ctx) {
 function evalBuiltin(expr, locals, ctx) {
   const value = evalExpr(expr.args[0], locals, ctx)
   switch (expr.name) {
+    case 'float': {
+      const text = value?.redisKind === 'bytes' ? redisText(value, fail) : value
+      if (typeof text !== 'number' && (typeof text !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text.trim()))) return fail('ValueError', 'could not convert string to float')
+      const number = Number(text)
+      if (!Number.isFinite(number)) return fail('ValueError', 'Redis float must be finite')
+      return number
+    }
     case 'list': return Array.isArray(value) ? value.slice() : value == null ? [] : Array.from(value)
     case 'len': return Array.isArray(value) || typeof value === 'string' ? value.length : value && typeof value === 'object' ? Object.keys(value).length : 0
     case 'str': return ctx.dataTarget?.kind === 'postgres' ? pythonPgStr(value) : pythonStr(value)
@@ -251,6 +273,7 @@ function evalCallSdk(expr, locals, ctx) {
   const { receiver, call } = expr
   const argValues = Object.fromEntries(Object.entries(expr.args ?? {}).map(([key, value]) => [key, evalExpr(value, locals, ctx)]))
   if (call.startsWith('postgres.')) return evalPgCall(expr, argValues, locals, ctx)
+  if (call.startsWith('redis.')) return evalRedisCall(call, argValues, expr.target ? evalExpr(expr.target, locals, ctx) : null, ctx, fail)
   const ref = { account: ctx.account, database: ctx.database, container: receiver }
   const container = findContainer(ctx.sandboxBox.value, ref)
   if (!container) return fail('NotFound', `Resource Not Found (container '${receiver}')`)

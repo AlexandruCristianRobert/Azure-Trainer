@@ -8,6 +8,7 @@
 import { parser } from '@lezer/python'
 import { lookupCall, SDK_CALLS } from './sdk-catalog.js'
 import { CONSISTENCY_ORDER } from './cosmos-cost.js'
+import { REDIS_HELPER_FILES, REDIS_HELPER_ARITIES } from '../../data/templates/data-python/redis-runtime.js'
 
 const ignored = new Set(['(', ')', '[', ']', '{', '}', ',', ':', 'AssignOp', 'for', 'in', 'if', 'elif', 'else', 'return', 'raise', '\n', 'Comment'])
 const kids = (n) => { const r = []; for (let c = n?.firstChild; c; c = c.nextSibling) r.push(c); return r }
@@ -33,10 +34,15 @@ export function parseDataApp(files, manifest = {}) {
   const manifestBackend = manifest.dataBackend ?? (receiverTypes.some(type => type.startsWith('pg-')) ? 'postgres'
     : receiverTypes.some(type => type.startsWith('cosmos-')) ? 'cosmos' : null)
   const postgresManifest = manifestBackend === 'postgres'
-  const runtimeFiles = postgresManifest ? manifest.runtimeFiles ?? [] : []
+  const redis = manifestBackend === 'redis'
+  const runtimeFiles = postgresManifest || redis ? manifest.runtimeFiles ?? [] : []
+  if (redis && (!runtimeFiles.includes('training_runtime.py') || manifest.fixedFiles?.['training_runtime.py'] !== REDIS_HELPER_FILES['training_runtime.py']
+    || Object.keys(REDIS_HELPER_ARITIES).some(name => !manifest.runtimeFunctions?.includes(name)))) {
+    diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Redis helpers require their canonical protected runtime manifest.', path: 'training_runtime.py', line: 1, column: 1 })
+  }
   for (const path of runtimeFiles) {
     if (typeof path !== 'string' || typeof manifest.fixedFiles?.[path] !== 'string' || files[path] !== manifest.fixedFiles[path]) {
-      diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'PostgreSQL runtime files must match their protected scaffold.', path, line: 1, column: 1 })
+      diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `${redis ? 'Redis' : 'PostgreSQL'} runtime files must match their protected scaffold.`, path, line: 1, column: 1 })
     }
   }
   if (diagnostics.length) return { appSpec: null, diagnostics }
@@ -58,7 +64,7 @@ export function parseDataApp(files, manifest = {}) {
     for (const n of kids(tree.topNode).filter((x) => x.name === 'AssignStatement')) {
       const p = parts(n).filter(c => c.name !== 'TypeDef'); if (p.length === 2 && p[0].name === 'VariableName') { const v = scalar(p[1], text); if (v !== undefined) topConstants[raw(p[0], text)] = v }
     }
-    return [path, { text, tree, topConstants }]
+    return [path, { text, tree, topConstants, ...(redis ? redisImports(tree, text) : {}) }]
   }))
 
   // Captured client constants and pool constructors are immutable build data.
@@ -72,8 +78,8 @@ export function parseDataApp(files, manifest = {}) {
       : imported[0]?.name === 'import' && imported.some((part, index) => part.name === 'VariableName'
         && ['import', ','].includes(imported[index - 1]?.name) && ['psycopg', 'psycopg_pool'].includes(raw(part, files[path])))
   }))
-  const globalConstants = pg ? { ...fileCtx['clients.py'].topConstants } : {}
-  const globalTypes = { ...(manifest.receivers ?? {}) }
+  const globalConstants = pg || redis ? { ...fileCtx['clients.py'].topConstants } : {}
+  const globalTypes = redis ? {} : { ...(manifest.receivers ?? {}) }
   const globals = {}
   const clientOps = []
 
@@ -97,6 +103,33 @@ export function parseDataApp(files, manifest = {}) {
     }
   }
   if (diagnostics.length) return { appSpec: null, diagnostics }
+  if (redis) {
+    for (const path of filePaths.filter(path => !runtimeFiles.includes(path))) {
+      const ctx = fileCtx[path]
+      const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
+      const collision = findNode(ctx.tree.topNode, node => {
+        if (node.name === 'AssignStatement') return protectedNames.has(raw(parts(node)[0], ctx.text))
+        if (node.name === 'ParamList') return parts(node).some(part => part.name === 'VariableName' && protectedNames.has(raw(part, ctx.text)))
+        if (node.name === 'ForStatement') return protectedNames.has(raw(parts(node)[0], ctx.text))
+        if (node.name === 'FunctionDefinition') return protectedNames.has(raw(kids(node).find(part => part.name === 'VariableName'), ctx.text))
+        return false
+      })
+      if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
+      for (const [name, binding] of Object.entries(ctx.importBindings)) if (protectedNames.has(name) && binding !== `training_runtime.${ctx.redisHelpers[name] ?? name}`) {
+        diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected Redis helper '${name}' cannot be rebound.`, path, line: 1, column: 1 })
+      }
+      const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => ['redis', 'redis.Redis'].includes(binding)).map(([name]) => name))
+      const constructorCollision = findNode(ctx.tree.topNode, node => {
+        if (node.name === 'AssignStatement') return constructorNames.has(raw(parts(node)[0], ctx.text))
+        if (node.name === 'ParamList') return parts(node).some(part => part.name === 'VariableName' && constructorNames.has(raw(part, ctx.text)))
+        if (node.name === 'FunctionDefinition') return constructorNames.has(raw(kids(node).find(part => part.name === 'VariableName'), ctx.text))
+        if (node.name === 'ForStatement') return constructorNames.has(raw(parts(node)[0], ctx.text))
+        return false
+      })
+      if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
+    }
+  }
+  if (diagnostics.length) return { appSpec: null, diagnostics }
   const locate = (name) => {
     if (protectedFunctions.has(name)) return protectedFunctions.get(name)
     for (const path of filePaths) { const node = funcNode(fileCtx[path].tree, fileCtx[path].text, name); if (node) return { path, node } }
@@ -107,8 +140,8 @@ export function parseDataApp(files, manifest = {}) {
   const queued = new Set()
   const pending = []
   const enqueue = (name) => { if (!queued.has(name)) { queued.add(name); pending.push(name) } }
-  if (pg) {
-    const clientCtx = { ...fileCtx['clients.py'], path: 'clients.py', manifest, diagnostics, enqueue, locate, types: globalTypes, scope: new Set(), globalConstants, pg: true, moduleScope: true }
+  if (pg || redis) {
+    const clientCtx = { ...fileCtx['clients.py'], path: 'clients.py', manifest, diagnostics, enqueue, locate, types: globalTypes, scope: new Set(), globalConstants, pg, redis, moduleScope: true }
     for (const node of kids(clientsTree.topNode).filter(n => n.name === 'AssignStatement')) {
       const p = parts(node).filter(n => n.name !== 'TypeDef')
       if (p.length !== 2 || p[0].name !== 'VariableName') { unsupported(clientCtx, node, 'this client assignment'); break }
@@ -119,8 +152,8 @@ export function parseDataApp(files, manifest = {}) {
     }
   }
   for (const name of manifest.editZones ?? []) if (locate(name)) enqueue(name)
-  if (pg) {
-    for (const name of manifest.runtimeFunctions ?? []) if (locate(name)) enqueue(name)
+  if (pg || redis) {
+    if (!redis) for (const name of manifest.runtimeFunctions ?? []) if (locate(name)) enqueue(name)
     for (const route of Object.values(manifest.routes ?? {})) {
       const name = typeof route === 'string' ? route : route?.functionName ?? route?.function
       if (name && locate(name)) enqueue(name)
@@ -131,12 +164,35 @@ export function parseDataApp(files, manifest = {}) {
     const name = pending.shift()
     const found = locate(name)
     if (!found) continue
-    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg })
+    if (redis && protectedFunctions.has(name) && Object.hasOwn(REDIS_HELPER_ARITIES, name)) continue
+    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg, redis })
   }
 
   if (diagnostics.length) return { appSpec: null, diagnostics }
   return { appSpec: { data: { version: 1, client: { consistency }, functions, ...(pg ? { postgres: { globals, clientOps,
-    ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}) } }, diagnostics: [] }
+    ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}), ...(redis ? { redis: { globals, clientOps } } : {}) } }, diagnostics: [] }
+}
+
+// Read only parsed ImportStatement nodes: comments and string literals cannot
+// grant constructor/helper authority. Aliases bind to the imported identity.
+function redisImports(tree, text) {
+  const importBindings = {}
+  for (const node of kids(tree.topNode).filter(node => node.name === 'ImportStatement')) {
+    const source = raw(node, text).trim()
+    const from = /^from\s+([\w.]+)\s+import\s+(.+)$/.exec(source)
+    const imported = from ? from[2] : /^import\s+(.+)$/.exec(source)?.[1]
+    for (const item of (imported ?? '').replace(/[()]/g, '').split(',')) {
+      const match = /^\s*([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(item)
+      if (match) importBindings[match[2] ?? match[1]] = from ? `${from[1]}.${match[1]}` : match[1]
+    }
+  }
+  const redisConstructors = {}; const redisHelpers = {}
+  for (const [name, binding] of Object.entries(importBindings)) {
+    if (binding === 'redis') redisConstructors[`${name}.Redis`] = 'redis.Redis'
+    if (binding === 'redis.Redis') redisConstructors[name] = 'redis.Redis'
+    if (binding.startsWith('training_runtime.') && Object.hasOwn(REDIS_HELPER_ARITIES, binding.slice(17))) redisHelpers[name] = binding.slice(17)
+  }
+  return { importBindings, redisConstructors, redisHelpers }
 }
 
 function readClientConsistency(tree, text, diagnostics) {
@@ -237,7 +293,7 @@ function lowerCompare(node, ctx) {
   }
   if (cs[1]?.name === 'CompareOp') {
     const op = raw(cs[1], ctx.text)
-    if (!['==', '!=', '<', '>='].includes(op)) return unsupported(ctx, node, `the '${op}' comparison`)
+    if (!['==', '!=', '<', '>=', ...(ctx.redis ? ['<=', '>'] : [])].includes(op)) return unsupported(ctx, node, `the '${op}' comparison`)
     return { kind: 'compare', op, left: lowerExpr(left, ctx), right: lowerExpr(cs[2], ctx) }
   }
   return unsupported(ctx, node, describe(node))
@@ -269,6 +325,10 @@ function lowerExpr(node, ctx) {
   }
   if (node.name === 'ArrayExpression' || node.name === 'TupleExpression') { const items = parts(node).map((c) => lowerExpr(c, ctx)); return diagnostics.length ? null : { kind: node.name === 'TupleExpression' ? 'tuple' : 'list', items } }
   if (node.name === 'ParenthesizedExpression') return lowerExpr(parts(node)[0], ctx)
+  if (ctx.redis && node.name === 'BinaryExpression') {
+    const p = kids(node)
+    if (p.length === 3 && raw(p[1], text) === '+') return { kind: 'redis-add', left: lowerExpr(p[0], ctx), right: lowerExpr(p[2], ctx) }
+  }
   if (node.name === 'FormatString' && ctx.pg) {
     const source = raw(node, text); const bounds = stringParts(source.replace(/^[fF]/, ''))
     if (!bounds) return unsupported(ctx, node, 'this f-string')
@@ -350,11 +410,12 @@ function lowerCall(node, ctx) {
   const { text, manifest, diagnostics } = ctx
   const callee = kids(node)[0]
   const args = argumentsOfWithText(kids(node).find((c) => c.name === 'ArgList'), text)
-  const constructorKey = ctx.pg && PG_CONSTRUCTORS[raw(callee, text)]
+  const constructorKey = ctx.redis ? ctx.redisConstructors[raw(callee, text)] : ctx.pg && PG_CONSTRUCTORS[raw(callee, text)]
   // Local connect helpers take priority over the imported psycopg constructor.
   if (constructorKey && !(callee.name === 'VariableName' && ctx.locate?.(raw(callee, text)))) {
     const entry = SDK_CALLS[constructorKey]
     const boundArgs = bindArgs(entry, args, node, raw(callee, text), ctx)
+    if (ctx.redis && boundArgs?.protocol && (boundArgs.protocol.kind !== 'literal' || boundArgs.protocol.value !== 2)) return unsupported(ctx, node, 'Redis protocol other than literal 2')
     return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}), ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
   }
   if (callee.name === 'MemberExpression') {
@@ -364,7 +425,7 @@ function lowerCall(node, ctx) {
       if (args.keywords.length || args.positional.length !== 1) return unsupported(ctx, node, `this '.${property}()' call`)
       return { kind: 'sequence-method', method: property, target: lowerExpr(base, ctx), value: lowerExpr(args.positional[0], ctx) }
     }
-    if (property === 'get') {
+    if (property === 'get' && !(ctx.redis && ctx.types?.[raw(base, text)] === 'redis-client')) {
       if (args.keywords.length || args.positional.length < 1 || args.positional.length > 2) return unsupported(ctx, node, "this '.get()' call")
       const key = scalar(args.positional[0], text)
       if (typeof key !== 'string') return unsupported(ctx, args.positional[0], 'a .get() key that is not a string literal')
@@ -373,20 +434,25 @@ function lowerCall(node, ctx) {
       return diagnostics.length ? null : result
     }
     if (base.name === 'VariableName' || ctx.pg) {
-      const target = ctx.pg ? lowerExpr(base, ctx) : null
-      const receiverType = target?.receiverType ?? manifest.receivers?.[raw(base, text)]
+      const target = ctx.pg || ctx.redis ? lowerExpr(base, ctx) : null
+      const receiverType = target?.receiverType ?? (!ctx.redis ? manifest.receivers?.[raw(base, text)] : undefined)
       if (receiverType) {
         const entry = lookupCall(receiverType, property)
         if (!entry) return unsupported(ctx, node, `'${property}' on '${raw(base, text)}'`)
         const boundArgs = bindArgs(entry, args, node, property, ctx)
-        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), ...(receiverType.startsWith('pg-') ? { target } : {}), call: entry.key, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}) }
+        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), ...(receiverType.startsWith('pg-') || receiverType === 'redis-client' ? { target } : {}), call: entry.key, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}) }
       }
     }
     return unsupported(ctx, node, 'this method call')
   }
   if (callee.name === 'VariableName') {
     const name = raw(callee, text)
-    if (BUILTINS.has(name) || name === 'embed' || (ctx.pg && name === 'training_answer')) {
+    if (ctx.redis && ctx.redisHelpers[name]) {
+      const helper = ctx.redisHelpers[name]
+      if (args.keywords.length || !REDIS_HELPER_ARITIES[helper].includes(args.positional.length)) return unsupported(ctx, node, `'${name}(...)' arguments`)
+      return { kind: 'redis-helper', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }
+    }
+    if (BUILTINS.has(name) || (name === 'embed' && !ctx.redis) || (ctx.redis && name === 'float') || (ctx.pg && name === 'training_answer')) {
       const arity = name === 'training_answer' ? 2 : 1
       if (args.keywords.length || args.positional.length !== arity) return unsupported(ctx, node, `'${name}(...)'`)
       const values = args.positional.map(arg => lowerExpr(arg, ctx))
@@ -425,6 +491,10 @@ function argumentsOfWithText(node, text) {
 
 function bindArgs(entry, args, node, label, ctx) {
   const { params, required = [], keywordOnly = [] } = entry
+  if (entry.variadic) {
+    if (args.keywords.length || !args.positional.length) { unsupported(ctx, node, `'${label}(...)' arguments`); return null }
+    return { [entry.variadic]: { kind: 'list', items: args.positional.map(arg => lowerExpr(arg, ctx)) } }
+  }
   // keywordOnly params (e.g. query_items_change_feed's start_time, matching
   // the real SDK) are valid as `name=value` but never bind to a position.
   const positionalParams = params.filter((p) => !keywordOnly.includes(p))
@@ -438,6 +508,7 @@ function bindArgs(entry, args, node, label, ctx) {
   }
   const missingParam = required.find((p) => !Object.hasOwn(values, p))
   if (missingParam) {
+    if (ctx.redis) { unsupported(ctx, node, `missing '${missingParam}' argument to '${label}(...)'`); return null }
     ctx.diagnostics.push({ code: 'SDK_ARGUMENT', message: `TypeError: ${label}() missing required argument '${missingParam}'`, ...at(ctx.text, node, ctx.path) })
     return null
   }
