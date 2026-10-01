@@ -591,7 +591,7 @@ export function applyRunAction(run, action, lab) {
     validateBehavioralRun(result.run, lab)
     return result
   }
-  if (action.type === 'data-request' || action.type === 'data-worker') {
+  if (action.type === 'data-request' || action.type === 'data-worker' || action.type === 'data-load') {
     const data = applyDataAction(run, action, lab)
     const refreshed = refreshKubernetesDependencies(run, data.run, lab)
     const result = { ...data, run: refreshed }

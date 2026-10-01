@@ -20,6 +20,8 @@ import { getDeploymentPods } from './reconcile.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { recordVerification } from '../labEngine/evidence.js'
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
+import { simulatePoolLoad } from '../data/pg-pool.js'
+import { pgDsnPort } from '../../data/labs/data-journey/postgres-helpers.js'
 
 const round2 = (n) => Math.round(n * 100) / 100
 const NO_READY_ENDPOINTS = Object.freeze({ error: 'ServiceUnavailable' })
@@ -77,7 +79,14 @@ function validWorkerStep(step) {
 
 export function validDataScenario(scenario, expectedKind) {
   if (!isPlainObject(scenario) || scenario.kind !== expectedKind || scenario.version !== 1) return false
-  if (!validTarget(scenario.target, expectedKind === 'data-request')) return false
+  if (!validTarget(scenario.target, expectedKind !== 'data-worker')) return false
+  if (expectedKind === 'data-load') {
+    return Object.keys(scenario).sort().join(',') === 'args,kind,replicas,requestsPerSecond,route,seconds,target,version'
+      && scenario.replicas === 'deployment' && typeof scenario.route === 'string' && !!scenario.route
+      && Array.isArray(scenario.args) && isJsonValue(scenario.args)
+      && Number.isFinite(scenario.requestsPerSecond) && scenario.requestsPerSecond >= 0
+      && Number.isFinite(scenario.seconds) && scenario.seconds > 0
+  }
   if (!Array.isArray(scenario.steps) || !scenario.steps.length) return false
   return scenario.steps.every(expectedKind === 'data-request' ? validRequestStep : validWorkerStep)
 }
@@ -91,6 +100,7 @@ function runRequestSteps(run, lab, manifest, target, steps) {
   let sandbox = run.sandbox
   let status = 200
   let value = null
+  let error = null
   // Every step's own return value, in order (Task 9 review: a multi-step
   // scenario's `value` only ever keeps the LAST step's result, so a Task
   // whose check needs more than one step's result - e.g. 'similar', which
@@ -101,16 +111,18 @@ function runRequestSteps(run, lab, manifest, target, steps) {
   let stale = false
   for (const step of steps) {
     if (status !== 200) break
-    const functionName = manifest.routes[step.route]
-    const result = runDataFunction({ appSpec, sandbox, account, database, functionName, args: step.args, nowMs, scenarioState, changeFeed: CHANGE_FEED_HOOK })
+    const route = manifest.routes[step.route]
+    const functionName = typeof route === 'string' ? route : route?.functionName ?? route?.function
+    const result = runDataFunction({ appSpec, sandbox, account, database, ...(lab.capabilities?.dataPostgres ? { dataTarget: lab.dataTarget } : {}), functionName, args: step.args, nowMs, scenarioState, changeFeed: CHANGE_FEED_HOOK })
     sandbox = result.sandbox
     calls = calls.concat(result.calls)
     value = result.value
     values.push(result.value)
     status = result.status
+    if (lab.capabilities?.dataPostgres && result.error) error = result.error
     if (result.calls.some((call) => call.stale)) stale = true
   }
-  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
+  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0)), stale, ...(error ? { error } : {}) }
 }
 
 function runWorkerSteps(run, lab, manifest, target, steps) {
@@ -174,14 +186,40 @@ function runWorkerSteps(run, lab, manifest, target, steps) {
       }
     }
   }
-  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
+  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0)), stale }
+}
+
+function runLoad(run, lab, manifest, scenario) {
+  const request = runRequestSteps(run, lab, manifest, scenario.target, [{ route: scenario.route, args: scenario.args }])
+  const appSpec = findServiceAppSpec(run, scenario.target)
+  const sqlCalls = request.calls.filter(call => typeof call.sql === 'string')
+  const connections = [...new Set(sqlCalls.map(call => call.connection))]
+  const port = pgDsnPort(appSpec)
+  const mode = connections.length === 1
+    ? connections[0] === 'bouncer' && port === 6432 ? 'pgbouncer'
+      : connections[0] === 'pooled' && port === 5432 ? 'pool'
+        : connections[0] === 'new' && port === 5432 ? 'per-request' : null
+    : null
+  const pools = Object.values(appSpec?.data?.postgres?.globals ?? {}).filter(expr => expr.kind === 'call-sdk' && expr.call === 'postgres.pool.ConnectionPool' && expr.lifetime === 'module')
+  const maximums = pools.map(pool => pool.args?.max_size?.kind === 'literal' ? pool.args.max_size.value : null)
+  const poolMaxSize = pools.length === 1 && Number.isInteger(maximums[0]) && maximums[0] > 0 ? maximums[0] : null
+  const deployment = run.runtime.kubernetes?.clusters?.[scenario.target.clusterId]?.resources?.[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]
+  const replicas = deployment?.spec?.replicas
+  const server = request.sandbox.postgresServers?.find(server => server.name === lab.dataTarget.server && server.resourceGroup === lab.dataTarget.resourceGroup)
+  if (request.status !== 200 || !sqlCalls.length || !mode || !server || ((mode === 'pool' || mode === 'pgbouncer') && poolMaxSize === null)) {
+    return { ...request, status: request.status === 200 ? 400 : request.status, load: { served: 0, failed: Math.round(scenario.requestsPerSecond * scenario.seconds), p95Ms: 0, throughputRps: 0, peakServerConnections: 0, errors: [request.error?.message ?? request.value?.error ?? 'Not supported by the simulator: load requires a successful SQL request and a recognized deployed connection configuration.'], mode } }
+  }
+  const load = simulatePoolLoad({ replicas, requestsPerSecond: scenario.requestsPerSecond, seconds: scenario.seconds, mode, poolMaxSize: poolMaxSize ?? 0, server })
+  return { ...request, status: load.errors.length || load.failed ? 503 : 200, load: { ...load, mode, replicas, poolMaxSize } }
 }
 
 export function applyDataAction(run, action, lab) {
-  if (lab?.capabilities?.dataCosmos !== true) {
-    return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message: 'This Lab does not declare the dataCosmos capability.' }] }
+  const postgres = lab?.capabilities?.dataPostgres === true
+  if (lab?.capabilities?.dataCosmos !== true && !postgres) {
+    return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message: 'This Lab does not declare a data capability.' }] }
   }
-  if (!['data-request', 'data-worker'].includes(action.type) || Object.keys(action).sort().join(',') !== 'scenarioId,type' || typeof action.scenarioId !== 'string') {
+  const kinds = postgres ? ['data-request', 'data-load'] : ['data-request', 'data-worker']
+  if (!kinds.includes(action.type) || Object.keys(action).sort().join(',') !== 'scenarioId,type' || typeof action.scenarioId !== 'string') {
     return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message: 'Data requests accept only a declared scenarioId; outcomes cannot be supplied by the caller.' }] }
   }
   const scenario = lab.scenarios?.[action.scenarioId]
@@ -191,16 +229,17 @@ export function applyDataAction(run, action, lab) {
   const task = lab.tasks.find((item) => item.verification?.scenarioId === action.scenarioId && item.verification?.scenarioVersion === scenario.version)
   if (!task) return { run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message: 'No Task verifies this data scenario.' }] }
   const manifest = getProjectManifest(run.project.manifestId)
-  const outcome = action.type === 'data-request'
+  const outcome = action.type === 'data-load' ? runLoad(run, lab, manifest, scenario)
+    : action.type === 'data-request'
     ? runRequestSteps(run, lab, manifest, scenario.target, scenario.steps)
     : runWorkerSteps(run, lab, manifest, scenario.target, scenario.steps)
   const completed = outcome.status === 200
-  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value, values: outcome.values }
+  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value, values: outcome.values, ...(outcome.error ? { error: outcome.error } : {}), ...(outcome.load ?? {}) }
   const next = recordVerification({ ...run, sandbox: outcome.sandbox }, lab, task.id, {
     scenarioId: action.scenarioId, scenarioVersion: scenario.version,
     outcome: completed ? 'passed' : 'failed', completed,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: run.runtime.simTimeMs, measurements,
   })
-  const text = `${action.type === 'data-request' ? 'Data request' : 'Data worker'} ${action.scenarioId}: HTTP ${outcome.status}`
+  const text = `${action.type === 'data-load' ? 'Data load' : action.type === 'data-request' ? 'Data request' : 'Data worker'} ${action.scenarioId}: HTTP ${outcome.status}`
   return { run: next, lines: [{ kind: completed ? 'out' : 'err', text, status: outcome.status, measurements }], portalEvents: [], diagnostics: [] }
 }

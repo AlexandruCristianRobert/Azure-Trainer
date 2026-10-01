@@ -257,7 +257,8 @@ async function introduceIntegrationIncident() {
   } catch (reason) { error.value = reason.message; statusMessage.value = 'The assistant incident did not advance.' }
 }
 const dataCosmosCapable = computed(() => run.lab?.capabilities?.dataCosmos === true)
-const dataScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'data-request' || scenario.kind === 'data-worker'))
+const dataPostgresCapable = computed(() => run.lab?.capabilities?.dataPostgres === true)
+const dataScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'data-request' || scenario.kind === 'data-worker' || (dataPostgresCapable.value && scenario.kind === 'data-load')))
 const dataChoice = ref('')
 watch(dataScenarios, values => { if (!values.some(([id]) => id === dataChoice.value)) dataChoice.value = values[0]?.[0] ?? '' }, { immediate: true })
 const dataTask = computed(() => run.lab?.tasks?.find(task => task.verification?.scenarioId === dataChoice.value))
@@ -265,6 +266,14 @@ const dataEvidence = computed(() => {
   const id = dataTask.value && run.behavioralRun?.evidence.currentEvidenceByTask[dataTask.value.id]
   return id ? run.behavioralRun.evidence.experimentsById[id] : null
 })
+const postgresCalls = computed(() => (dataEvidence.value?.measurements?.calls ?? []).filter(call => typeof call.sql === 'string'))
+const postgresRows = computed(() => {
+  const measurements = dataEvidence.value?.measurements
+  if (Array.isArray(measurements?.value)) return measurements.value.slice(0, 5)
+  return postgresCalls.value.at(-1)?.rows?.slice(0, 5) ?? []
+})
+const postgresLatency = computed(() => postgresCalls.value.reduce((sum, call) => sum + (call.latencyMs ?? 0), 0))
+const postgresMode = computed(() => dataEvidence.value?.measurements?.mode ?? postgresCalls.value.at(-1)?.connection ?? 'unavailable')
 async function sendData(scenarioId = dataChoice.value) {
   const scenario = run.lab?.scenarios?.[scenarioId]
   if (!scenario) return
@@ -428,14 +437,48 @@ async function copyLogCommand(command) {
         </template>
       </section>
     </section>
+    <section v-if="dataPostgresCapable" class="aks-probe-controls" aria-label="PostgreSQL experiment controls">
+      <h3>PostgreSQL requests and load</h3>
+      <p>Run a declared scenario against the current Service and its captured image. Load uses the Deployment's current replica count.</p>
+      <div v-if="dataScenarios.length" class="experiment-tool__controls">
+        <label>Declared verification<select v-model="dataChoice" :disabled="locked"><option v-for="[id, scenario] in dataScenarios" :key="id" :value="id">{{ id }}{{ scenario.kind === 'data-load' ? ' (load)' : '' }}</option></select></label>
+        <button class="btn btn--primary" type="button" :disabled="locked || !dataChoice" @click="sendData()">Run simulated scenario</button>
+      </div>
+      <p v-else class="experiment-tool__empty">This Lab has no declared PostgreSQL verification scenarios.</p>
+      <section class="experiment-tool__response" aria-label="Latest PostgreSQL result">
+        <h3>Latest PostgreSQL result</h3>
+        <p>Simulated estimate — not an Azure guarantee.</p>
+        <p v-if="!dataEvidence">Run a declared scenario to inspect its rows, query plan and connection behavior.</p>
+        <template v-else>
+          <strong>Status: HTTP {{ dataEvidence.measurements.status }}</strong>
+          <p v-if="dataEvidence.measurements.error" role="status">{{ dataEvidence.measurements.error.code }}: {{ dataEvidence.measurements.error.message }}</p>
+          <p>Request latency: {{ postgresLatency.toFixed(2) }} ms. Connection mode: {{ postgresMode }}.</p>
+          <ul v-if="postgresCalls.length"><li v-for="(call, index) in postgresCalls" :key="index">Query plan: {{ call.plan?.node ?? 'No plan' }}<template v-if="call.plan?.index"> ({{ call.plan.index }})</template>. Latency: {{ (call.latencyMs ?? 0).toFixed(2) }} ms.<template v-if="call.plan?.index && /hnsw|ivfflat/.test(call.plan.node ?? '')"> Recall: {{ ((call.recall ?? call.plan.recall ?? 0) * 100).toFixed(1) }}%.</template></li></ul>
+          <h4>Rows (first 5)</h4>
+          <div v-if="postgresRows.length" class="aks-postgres-results"><table><thead><tr><th scope="col">ID</th><th scope="col">Document</th><th scope="col">Metadata</th></tr></thead><tbody><tr v-for="(row, index) in postgresRows" :key="index"><td>{{ row.id ?? 'unavailable' }}</td><td>{{ row.document_id ?? row.id ?? 'unavailable' }}</td><td>{{ JSON.stringify(row.metadata ?? { product: row.product, version: row.version, language: row.language }) }}</td></tr></tbody></table></div>
+          <p v-else>No rows returned.</p>
+          <template v-if="dataEvidence.measurements.served != null">
+            <h4>Load results</h4>
+            <dl class="aks-postgres-load"><dt>Served / failed</dt><dd>{{ dataEvidence.measurements.served }} / {{ dataEvidence.measurements.failed }}</dd><dt>p95 latency</dt><dd>{{ dataEvidence.measurements.p95Ms.toFixed(2) }} ms</dd><dt>Throughput</dt><dd>{{ dataEvidence.measurements.throughputRps.toFixed(2) }} requests/s</dd><dt>Peak server connections</dt><dd>{{ dataEvidence.measurements.peakServerConnections }}</dd><dt>Replicas / pool maximum</dt><dd>{{ dataEvidence.measurements.replicas ?? 'unavailable' }} / {{ dataEvidence.measurements.poolMaxSize ?? 'none' }}</dd></dl>
+            <ul v-if="dataEvidence.measurements.errors?.length" aria-label="Load errors"><li v-for="message in dataEvidence.measurements.errors" :key="message">{{ message }}</li></ul>
+          </template>
+          <pre>{{ JSON.stringify(dataEvidence.measurements.value, null, 2) }}</pre>
+        </template>
+      </section>
+    </section>
     <p v-if="!scenarios.length && !probeScenarios.length && !resourceScenarios.length && !releaseScenarios.length && !releaseFinalScenarios.length && !releaseMilestones.length && !dataScenarios.length" class="experiment-tool__empty">This Lab has no declared Kubernetes verification scenarios.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="statusMessage" role="status" aria-live="polite">{{ statusMessage }}</p>
-    <section v-if="!dataCosmosCapable" class="experiment-tool__response"><h3>Latest result</h3><p v-if="!latestEvidence">No request has been recorded for this declared verification.</p><template v-else><p v-if="latestEvidence.measurements?.transport">Transport: {{ latestEvidence.measurements.transport.ok ? 'Succeeded' : `Failed (${latestEvidence.measurements.transport.reason})` }}</p><strong v-if="latestEvidence.measurements?.status != null">HTTP {{ latestEvidence.measurements?.status }}</strong><p v-else>No HTTP response was received.</p><p v-if="latestEvidence.measurements?.diagnosticCode" role="status">Diagnostic: {{ latestEvidence.measurements.diagnosticCode }}</p><pre>{{ JSON.stringify(latestEvidence.measurements?.body, null, 2) }}</pre><p>Evidence: {{ latestEvidence.id }} · {{ latestEvidence.outcome }}</p><template v-if="latestEvidence.measurements?.dependencyTrace?.length"><h4>Redacted operation trace</h4><pre>{{ JSON.stringify(latestEvidence.measurements.dependencyTrace, null, 2) }}</pre></template></template></section>
+    <section v-if="!dataCosmosCapable && !dataPostgresCapable" class="experiment-tool__response"><h3>Latest result</h3><p v-if="!latestEvidence">No request has been recorded for this declared verification.</p><template v-else><p v-if="latestEvidence.measurements?.transport">Transport: {{ latestEvidence.measurements.transport.ok ? 'Succeeded' : `Failed (${latestEvidence.measurements.transport.reason})` }}</p><strong v-if="latestEvidence.measurements?.status != null">HTTP {{ latestEvidence.measurements?.status }}</strong><p v-else>No HTTP response was received.</p><p v-if="latestEvidence.measurements?.diagnosticCode" role="status">Diagnostic: {{ latestEvidence.measurements.diagnosticCode }}</p><pre>{{ JSON.stringify(latestEvidence.measurements?.body, null, 2) }}</pre><p>Evidence: {{ latestEvidence.id }} · {{ latestEvidence.outcome }}</p><template v-if="latestEvidence.measurements?.dependencyTrace?.length"><h4>Redacted operation trace</h4><pre>{{ JSON.stringify(latestEvidence.measurements.dependencyTrace, null, 2) }}</pre></template></template></section>
   </section>
 </template>
 
 <style scoped>
+.aks-postgres-results { overflow-x: auto; }
+.aks-postgres-results table { width: 100%; border-collapse: collapse; text-align: left; }
+.aks-postgres-results th, .aks-postgres-results td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.aks-postgres-load { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 1fr); gap: 6px 12px; max-width: 560px; }
+.aks-postgres-load dd { margin: 0; }
 .aks-probe-controls { margin: 22px 0; padding: 16px; border: 1px solid var(--border); background: var(--surface-subtle, var(--surface)); }
 .aks-probe-controls > p { max-width: 78ch; line-height: 1.5; }
 .aks-probe-controls__table { max-width: 100%; overflow-x: auto; }
