@@ -22,6 +22,15 @@ const evidence = computed(() => selected.value ? latestEvidenceForApp(run.behavi
 const response = computed(() => selected.value ? latestRequestForApp(run.scrollback, appArmId(selected.value)) : null)
 const logs = computed(() => (run.behavioralRun?.runtime?.logs ?? []).filter((line) => !selected.value || line.appId === appArmId(selected.value)).slice(-30).reverse())
 const locked = computed(() => run.loading || run.readOnly || !!run.completedAt || !!run.storageError || run.busy)
+const redisScenarios = computed(() => Object.entries(run.lab?.scenarios ?? {}).filter(([, scenario]) => scenario.kind === 'data-cache'))
+const redisResult = computed(() => [...(run.scrollback ?? [])].reverse().find(line => line.measurements?.requests && line.measurements?.hitRatio !== undefined)?.measurements)
+async function runRedis(scenarioId) {
+  error.value = ''
+  try {
+    const result = await run.dispatchBehavioral({ type: 'data-cache', scenarioId })
+    if (result?.effects?.diagnostics?.length) error.value = result.effects.diagnostics.map(item => item.message).join(' ')
+  } catch (reason) { error.value = reason.message }
+}
 async function send() {
   error.value = ''
   try {
@@ -34,6 +43,23 @@ async function send() {
 
 <template>
   <section class="experiment-tool" aria-label="Experiment Controls">
+    <section v-if="run.lab?.capabilities?.dataRedis" aria-label="Redis workload controls">
+      <h2>Redis cache workloads</h2>
+      <p>Requests use the deployed application. Advances move simulated time immediately.</p>
+      <div class="experiment-tool__controls"><button v-for="[id] in redisScenarios" :key="id" class="btn" type="button" :disabled="locked" @click="runRedis(id)">{{ id }}</button></div>
+      <p v-if="error" role="alert">{{ error }}</p>
+      <div v-if="redisResult" class="experiment-tool__response">
+        <h3>Redis results</h3><p>{{ redisResult.estimate }}</p>
+        <p>HTTP {{ redisResult.status }} · {{ redisResult.total }} answer requests · {{ Math.round(redisResult.hitRatio * 100) }}% cache hits</p>
+        <p>Response hits: {{ redisResult.responseHits }} · Semantic hits: {{ redisResult.semanticHits }} · Origin calls: {{ redisResult.originCalls }}</p>
+        <p>Stale answers: {{ redisResult.staleAnswers }} · Cross-filter answers: {{ redisResult.crossFilterAnswers }} · Maximum observed cache age: {{ redisResult.maxAgeSeconds === null ? 'unknown' : `${redisResult.maxAgeSeconds}s` }}</p>
+        <p>Memory: {{ redisResult.usedBytes }} bytes · Persistent keys: {{ redisResult.persistentKeys }} · Expired keys: {{ redisResult.expiredKeys }} · Rejected writes: {{ redisResult.rejectedWrites }}</p>
+        <p v-if="!redisResult.provenanceValid || !redisResult.answersCorrect" role="status">Some responses lack valid operation provenance or do not match the current scoped source answer.</p>
+        <p v-if="redisResult.traceTruncated" role="status">A request exceeded the operation trace bound; trace-based proof is unavailable.</p>
+        <details><summary>Request statuses and bodies</summary><pre>{{ JSON.stringify(redisResult.requests, null, 2) }}</pre></details>
+        <details><summary>Redis operation trace</summary><p v-if="redisResult.displayTraceTruncated">Display limited to 256 operations; measurements include all complete request frames.</p><pre>{{ JSON.stringify(redisResult.calls, null, 2) }}</pre></details>
+      </div>
+    </section>
     <AksExperimentPanel v-if="run.lab?.capabilities?.kubernetes" />
     <template v-else>
     <header><h2>Experiment Controls</h2><p>Simulated requests use the active deployment's captured source and configuration.</p></header>

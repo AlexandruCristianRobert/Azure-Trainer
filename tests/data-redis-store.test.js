@@ -30,6 +30,15 @@ it('expires at the boundary and SET without EX clears an old TTL', () => {
     code: 'DATA_UNSUPPORTED', message: expect.stringMatching(/^Not supported by the simulator:/),
   })
   expect(isSandboxShape(JSON.parse(JSON.stringify(sb)))).toBe(true)
+  const key = state => getRedisCluster(state, { resourceGroup: target.resourceGroup, name: target.cluster }).database.keys.a
+  expect(key(sb).writtenAtMs).toBe(3100)
+  sb = executeRedis(sb, target, 'GET', ['a'], { nowMs: 3200 }).sandbox
+  sb = executeRedis(sb, target, 'EXPIRE', ['a', 3], { nowMs: 3300 }).sandbox
+  expect(key(sb)).toMatchObject({ writtenAtMs: 3100, lastAccessMs: 3200 })
+  delete key(sb).writtenAtMs
+  expect(isSandboxShape(sb)).toBe(true)
+  key(sb).writtenAtMs = -1
+  expect(isSandboxShape(sb)).toBe(false)
 })
 
 it('preserves hash TTL and rejects wrong-type reads', () => {
@@ -38,6 +47,7 @@ it('preserves hash TTL and rejects wrong-type reads', () => {
   const added = executeRedis(sb, target, 'HSET', ['h', { product: 'contoso-backup' }], { nowMs: 1000 })
   expect(added.value).toBe(1)
   sb = added.sandbox
+  expect(getRedisCluster(sb, { resourceGroup: target.resourceGroup, name: target.cluster }).database.keys.h.writtenAtMs).toBe(1000)
   expect(executeRedis(sb, target, 'TTL', ['h'], { nowMs: 1500 }).value).toBe(1)
   expect(executeRedis(sb, target, 'GET', ['h'], { nowMs: 1500 }).error.message).toContain('WRONGTYPE')
   expect(executeRedis(sb, target, 'TTL', ['absent'], { nowMs: 1500 }).value).toBe(-2)
@@ -89,6 +99,7 @@ it('rejects over-budget writes atomically and reuses expired capacity', () => {
   expect(rejected.error.message).toContain('OOM')
   expect(rejected.error.code).toBe('ResponseError')
   expect(rejected.measurements).toMatchObject({ usedBytes: 68, rejectedWrites: 1 })
+  expect(getRedisCluster(rejected.sandbox, { resourceGroup: target.resourceGroup, name: target.cluster }).database.keys.a.writtenAtMs).toBe(0)
   expect(executeRedis(rejected.sandbox, target, 'GET', ['a'], { nowMs: 500 }).value).toBe('old')
   const accepted = executeRedis(rejected.sandbox, target, 'SET', ['b', 'new'], { nowMs: 1000 })
   expect(accepted.error).toBeUndefined()

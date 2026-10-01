@@ -122,7 +122,7 @@ function run(database, command, args, nowMs) {
       if (seconds <= 0 || !Number.isSafeInteger(expiresAtMs)) fail("ERR invalid expire time in 'set' command")
     }
     const key = keyName(args[0])
-    write(database, key, { type: 'string', value: scalar(args[1]), expiresAtMs, lastAccessMs: nowMs }, nowMs)
+    write(database, key, { type: 'string', value: scalar(args[1]), expiresAtMs, lastAccessMs: nowMs, writtenAtMs: nowMs }, nowMs)
     return 'OK'
   }
   arity(command, args, ['EXPIRE', 'HSET'].includes(command) ? 2 : 1)
@@ -150,7 +150,7 @@ function run(database, command, args, nowMs) {
       if (!Object.hasOwn(value, field)) added++
       assign(value, field, scalar(fieldValue))
     }
-    write(database, key, { type: 'hash', value, expiresAtMs: entry?.expiresAtMs ?? null, lastAccessMs: nowMs }, nowMs)
+    write(database, key, { type: 'hash', value, expiresAtMs: entry?.expiresAtMs ?? null, lastAccessMs: nowMs, writtenAtMs: nowMs }, nowMs)
     return added
   }
   database.stats[entry ? 'hits' : 'misses']++

@@ -21,6 +21,7 @@ import { DIAGNOSIS_MANIFEST } from '../../data/templates/aks-python/diagnosis.js
 import { CAPSTONE_MANIFEST as AKS_CAPSTONE_MANIFEST } from '../../data/templates/aks-python/capstone.js'
 import { COSMOS_MANIFEST } from '../../data/templates/data-python/cosmos.js'
 import { POSTGRES_MANIFEST } from '../../data/templates/data-python/postgres.js'
+import { REDIS_MANIFEST } from '../../data/templates/data-python/redis.js'
 import { POSTGRES_INDEPENDENT_MANIFEST } from '../../data/templates/data-python/postgres-independent.js'
 
 const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROBE_MANIFEST.id]: PROBE_MANIFEST,
@@ -35,7 +36,7 @@ const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROB
   [CONNECTIVITY_INDEPENDENT_MANIFEST.id]: CONNECTIVITY_INDEPENDENT_MANIFEST, [INTEGRATION_MANIFEST.id]: INTEGRATION_MANIFEST,
   [HEALTH_MANIFEST.id]: HEALTH_MANIFEST, [RESOURCE_MANIFEST.id]: RESOURCE_MANIFEST, [RELEASE_MANIFEST.id]: RELEASE_MANIFEST,
   [DIAGNOSIS_MANIFEST.id]: DIAGNOSIS_MANIFEST, [AKS_CAPSTONE_MANIFEST.id]: AKS_CAPSTONE_MANIFEST,
-  [COSMOS_MANIFEST.id]: COSMOS_MANIFEST, [POSTGRES_MANIFEST.id]: POSTGRES_MANIFEST,
+  [COSMOS_MANIFEST.id]: COSMOS_MANIFEST, [POSTGRES_MANIFEST.id]: POSTGRES_MANIFEST, [REDIS_MANIFEST.id]: REDIS_MANIFEST,
   [POSTGRES_INDEPENDENT_MANIFEST.id]: POSTGRES_INDEPENDENT_MANIFEST })
 
 export function getProjectManifest(manifestId) { return manifests[manifestId] ?? PROJECT_MANIFEST }

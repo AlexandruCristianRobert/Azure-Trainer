@@ -43,6 +43,7 @@ function validRedisValue(value) {
 function validRedisKey(key) {
   return object(key) && ['string', 'hash'].includes(key.type)
     && (key.expiresAtMs === null || finiteNonnegative(key.expiresAtMs)) && finiteNonnegative(key.lastAccessMs)
+    && (key.writtenAtMs === undefined || finiteNonnegative(key.writtenAtMs))
     && (key.type === 'string' ? validRedisValue(key.value) : object(key.value) && Object.values(key.value).every(validRedisValue))
 }
 function validRedisIndex(index, name) {
