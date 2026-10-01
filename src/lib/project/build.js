@@ -35,7 +35,10 @@ export function buildImage(run, { registryId, loginServer, image, file = 'Docker
   const project = parseProject(files, manifest)
   const docker = manifest.language === 'python' ? parsePythonDockerfile(files.Dockerfile, { buildFiles: manifest.buildFiles }) : parseDockerfile(files.Dockerfile)
   diagnostics.push(...project.diagnostics, ...docker.diagnostics)
-  if (!diagnostics.length && project.appSpec.listeningPort !== docker.dockerSpec.listeningPort) diagnostics.push({ code: 'PORT_MISMATCH', message: 'Application and Dockerfile listening ports must match.', path: 'Dockerfile', line: 1, column: 1 })
+  // A data app's appSpec (ADR-0002/0003) has no `listeningPort` - server.py's
+  // port is a fixed scaffold file, not a learner-editable constant - so there
+  // is nothing to cross-check against the Dockerfile's EXPOSE here.
+  if (!diagnostics.length && !manifest.dataApp && project.appSpec.listeningPort !== docker.dockerSpec.listeningPort) diagnostics.push({ code: 'PORT_MISMATCH', message: 'Application and Dockerfile listening ports must match.', path: 'Dockerfile', line: 1, column: 1 })
   if (diagnostics.length) return { artifacts, artifact: null, diagnostics, nextSequence: run?.nextSequence }
   const sourceHash = projectSourceHash(selectedFiles); const id = `build-${run.nextSequence}`
   const artifact = {
