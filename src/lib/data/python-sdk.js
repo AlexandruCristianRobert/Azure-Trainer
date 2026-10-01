@@ -124,7 +124,8 @@ export function parseDataApp(files, manifest = {}) {
   }
 
   if (diagnostics.length) return { appSpec: null, diagnostics }
-  return { appSpec: { data: { version: 1, client: { consistency }, functions, ...(pg ? { postgres: { globals, clientOps } } : {}) } }, diagnostics: [] }
+  return { appSpec: { data: { version: 1, client: { consistency }, functions, ...(pg ? { postgres: { globals, clientOps,
+    ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}) } }, diagnostics: [] }
 }
 
 function readClientConsistency(tree, text, diagnostics) {

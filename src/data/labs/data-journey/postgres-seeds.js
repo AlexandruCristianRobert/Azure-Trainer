@@ -79,6 +79,17 @@ export function seedPostgresPoolingGuided(run) {
   ] })
 }
 
+export function seedPostgresIndependent(run) {
+  // Reproduce Lab 7's optimized base state independently. The caller's
+  // unfinished audience edit zones are built, and supplied v3 is not loaded.
+  const seeded = { ...run, ...seedPostgresPoolingGuided(run) }
+  return initialized(applyPostgresSeedActions(seeded, [
+    command(`az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name pgbouncer.enabled --value true`),
+    command(`az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name pgbouncer.default_pool_size --value 20`),
+    command('kubectl scale deployment/assistant-api -n assistant --replicas 6'),
+  ]))
+}
+
 export function seedPostgresTroubleshooting(run) {
   // The incompatible distance index was built before the compute downgrade.
   // A later, visible maintenance stage drops it; no hidden incident flags.

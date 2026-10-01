@@ -1,7 +1,8 @@
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { parsePythonProject } from '../../../lib/project/python.js'
-import { POSTGRES_MANIFEST, POSTGRES_DSN, POSTGRES_SOLUTION_FILES, POSTGRES_SOLUTION_FUNCTIONS, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
+import { getProjectManifest } from '../../../lib/project/manifests.js'
+import { POSTGRES_DSN, POSTGRES_SOLUTION_FILES, POSTGRES_SOLUTION_FUNCTIONS, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
 
 export const PG_GROUP = 'rg-assistant'
 export const PG_SERVER = 'pg-assistant'
@@ -86,6 +87,7 @@ function fieldValue(context, target, field) {
   }
   if ((match = /^code:([^:]+):([^:]+)$/.exec(field)) && identifier(match[1]) && identifier(match[2])) return pgDeployedArtifact(context, target, match[1])?.appSpec?.data?.functions?.[match[2]] ?? null
   if ((match = /^pg:table:([^:]+)$/.exec(field)) && identifier(match[1])) return database?.tables?.find(item => item.name === match[1])?.columns ?? null
+  if ((match = /^pg:rows:([^:]+)$/.exec(field)) && identifier(match[1])) return database?.tables?.find(item => item.name === match[1])?.rows ?? null
   if ((match = /^pg:index:([^:]+)$/.exec(field)) && identifier(match[1])) {
     // Definitions only: estimates/build timings do not change an index's role.
     return (database?.indexes ?? []).filter(item => item.table === match[1]).map(({ sizeMb, buildSeconds, ...definition }) => definition).sort((a, b) => a.name.localeCompare(b.name))
@@ -113,7 +115,7 @@ export function pgLoadScenario({ route = 'GET /retrieve', args, requestsPerSecon
 }
 export function pgDeployedFunctionsCurrent(context, names, target = PG_TARGET, deployment = 'assistant-api') {
   const captured = pgDeployedArtifact(context, target, deployment)?.appSpec
-  const parsed = parsePythonProject(context.project.savedFiles, POSTGRES_MANIFEST)
+  const parsed = parsePythonProject(context.project.savedFiles, getProjectManifest(context.project.manifestId))
   return !!captured && !parsed.diagnostics.length && names.every(name => JSON.stringify(captured.data?.functions?.[name] ?? null) === JSON.stringify(parsed.appSpec?.data?.functions?.[name] ?? null))
 }
 // Historical exact/naive evidence deliberately omits repaired index/pool fields.

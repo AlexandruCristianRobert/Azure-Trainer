@@ -1,4 +1,6 @@
 import { executePg, loadCorpus } from './pg-engine.js'
+import { SUPPORT_V3_CORPUS } from '../../data/fixtures/data/corpus-v3.js'
+import { POSTGRES_INDEPENDENT_MANIFEST, POSTGRES_V3_LOAD } from '../../data/templates/data-python/postgres-independent.js'
 
 const out = text => ({ text, kind: 'out' })
 const err = text => ({ text, kind: 'err' })
@@ -91,13 +93,15 @@ export function runPsql(sandbox, tokens, context) {
         const result = { kind: 'file', error: { code: 'OperationalError', message: `psql: error: ${action.value}: No such saved project file` } }
         results.push(result); lines.push(...resultLines(result)); break
       }
-      if (path === 'load.sql' && /^\s*-- simulator:load-corpus\s*$/.test(sql)) {
+      const v3Loader = path === 'load-v3.sql' && sql === POSTGRES_V3_LOAD
+        && context?.run?.project?.manifestId === POSTGRES_INDEPENDENT_MANIFEST.id
+      if (v3Loader || path === 'load.sql' && /^\s*-- simulator:load-corpus\s*$/.test(sql)) {
         // Establish the same connection checks as SQL, even for this fixed COPY
         // stand-in. Loading validates both tables and commits them together.
         const checked = executePg(current, { ...ref, sql: '-- connection check', session })
         if (checked.results.some(result => result.error)) { results.push(...checked.results); lines.push(...checked.results.flatMap(resultLines)); break }
         try {
-          const loaded = loadCorpus(current, ref)
+          const loaded = loadCorpus(current, { ...ref, ...(v3Loader ? { corpus: SUPPORT_V3_CORPUS } : {}) })
           current = loaded.sandbox
           const result = { kind: 'load-corpus', rowCount: loaded.rowCount, logicalRows: loaded.logicalRows }
           results.push(result); lines.push(...resultLines(result)); continue

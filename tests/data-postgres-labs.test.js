@@ -6,6 +6,45 @@ import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 describe('PostgreSQL data Labs', () => {
+  it('Lab 9 independently onboards v3 audiences with SQL-grounded retrieval, indexed metadata and six-replica load', () => {
+    // Ignoring audience, returning canned rows, preloading v3 or accepting
+    // stale deployed evidence must prevent independent completion.
+    const lab = labById('data-postgres-independent')
+    expect(lab).toBeDefined()
+    const fresh = createBehavioralRun(lab, { attemptId: 'postgres-independent-fresh' })
+    expect(evaluateLab(lab, fresh).tasks.filter(task => task.done)).toEqual([])
+    expect(Object.keys(fresh.evidence.experimentsById)).toEqual([])
+    expect(fresh.sandbox.postgresServers[0].databases[0].tables.find(table => table.name === 'documents').rows.some(row => row.version === 'v3')).toBe(false)
+    const loadedSeed = applyRunAction(fresh, { type: 'command', line: 'psql "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge user=assistant_admin" -f load-v3.sql' }, lab)
+    expect(loadedSeed.lines.some(line => line.kind === 'err')).toBe(false)
+    const ignoredAudience = applyRunAction(loadedSeed.run, { type: 'data-request', scenarioId: 'v3-retrieval' }, lab)
+    expect(ignoredAudience.lines[0].measurements.values.map(rows => rows.map(row => row.id))).toEqual([[33, 34], [33, 34], [37, 38], [37, 38]])
+    expect(evaluateLab(lab, ignoredAudience.run).tasks.filter(task => task.done)).toEqual([])
+    const { run, state } = replaySolution(lab)
+    expect(state.tasks.filter(task => !task.done).map(task => task.id)).toEqual([])
+    expect(state.isComplete).toBe(true)
+    const proof = id => run.evidence.experimentsById[run.evidence.currentEvidenceByTask[id]].measurements
+    const retrieved = proof('v3-retrieval')
+    expect(retrieved.values.map(rows => rows.map(row => row.id))).toEqual([[33, 34], [35, 36], [37, 38], [39, 40]])
+    for (let stepIndex = 0; stepIndex < 4; stepIndex++) {
+      const calls = retrieved.calls.filter(call => call.plan && call.stepIndex === stepIndex)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].rows).toEqual(retrieved.values[stepIndex])
+      expect(calls[0].plan.recall).toBeGreaterThanOrEqual(0.95)
+      expect(calls[0].latencyMs).toBeLessThanOrEqual(20)
+    }
+    const metadata = proof('audience-indexed')
+    expect(metadata.values.map(rows => rows.map(row => row.id))).toEqual([[17], [18], [19], [20]])
+    expect(metadata.calls.filter(call => call.plan).every(call => !!call.plan.index)).toBe(true)
+    expect(proof('scale-stable')).toMatchObject({ status: 200, replicas: 6, failed: 0, throughputRps: 1000, poolMaxSize: 5, mode: 'pgbouncer' })
+    expect(proof('scale-stable').calls.filter(call => call.plan)[0].rows.map(row => row.id)).toEqual([33, 34])
+    const changed = applyRunAction(run, { type: 'command', line: 'psql "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge user=assistant_admin" -c "DROP INDEX chunks_embedding_hnsw"' }, lab)
+    expect(changed.lines.some(line => line.kind === 'err')).toBe(false)
+    expect(evaluateLab(lab, changed.run).tasks.find(task => task.id === 'v3-retrieval').done).toBe(false)
+    const replaced = applyRunAction(run, { type: 'command', line: 'psql "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge user=assistant_admin" -f load.sql' }, lab)
+    expect(replaced.lines.some(line => line.kind === 'err')).toBe(false)
+    expect(evaluateLab(lab, replaced.run).tasks.filter(task => task.done)).toEqual([])
+  })
   it('Lab 5 starts without index proofs and completes every Task through its ordered Solutions', () => {
     // Missing registration, a pre-solved seed, or stale/wrong query evidence
     // must prevent a learner from completing this guided Lab.

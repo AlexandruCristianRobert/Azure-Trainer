@@ -17,6 +17,7 @@ import { CONSISTENCY_ORDER, pointReadCharge, writeCharge, queryCharge } from './
 import { findContainer, upsertItem, readItem } from './cosmos-store.js'
 import { embed } from '../../data/fixtures/data/knowledge.js'
 import { CORPUS, corpusQuestions } from '../../data/fixtures/data/corpus.js'
+import { SUPPORT_V3_CORPUS, SUPPORT_V3_ALL_QUESTIONS } from '../../data/fixtures/data/corpus-v3.js'
 import { executePg } from './pg-engine.js'
 
 const MAX_DEPTH = 8
@@ -218,7 +219,8 @@ function evalBuiltin(expr, locals, ctx) {
     case 'embed': {
       const deployment = ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'
       if (ctx.dataTarget?.kind !== 'postgres') return embed(value, deployment)
-      const vector = corpusQuestions().find(question => question.text === value)?.vector ?? Array(8).fill(0)
+      const questions = ctx.appSpec.data.postgres?.fixture === 'support-v3' ? SUPPORT_V3_ALL_QUESTIONS : corpusQuestions()
+      const vector = questions.find(question => question.text === value)?.vector ?? Array(8).fill(0)
       return deployment === 'embeddings-v2' ? [...vector, 0, 0, 0, 0] : [...vector]
     }
     case 'training_answer': {
@@ -226,11 +228,12 @@ function evalBuiltin(expr, locals, ctx) {
       const context = evalExpr(expr.args[1], locals, ctx)
       const trainingArgs = trainingSnapshot([value, context])
       const top = context?.sources?.[0]
-      const passage = CORPUS.chunks.find(chunk => chunk.id === top)
+      const v3 = ctx.appSpec.data.postgres?.fixture === 'support-v3'
+      const passage = (v3 ? SUPPORT_V3_CORPUS : CORPUS).chunks.find(chunk => chunk.id === top)
       const result = top == null || typeof context?.passages !== 'string' || !context.passages
         || !passage || !context.passages.includes(passage.content)
         ? 'I could not find a relevant passage in the supplied sources.'
-        : corpusQuestions().find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
+        : (v3 ? SUPPORT_V3_ALL_QUESTIONS : corpusQuestions()).find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
       recordTrainingCall(ctx, 'training_answer', trainingArgs, result)
       return result
     }
