@@ -33,7 +33,8 @@ async function submit() {
   histIndex.value = -1
   draft.value = ''
   try { await run.execute(line) } catch { /* Lab Panel shows the session error. */ }
-  scrollToBottom()
+  await scrollToBottom()
+  focus()
 }
 
 function onKeydown(e) {

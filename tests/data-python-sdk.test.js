@@ -12,6 +12,29 @@ const manifest = { editZones: ['get_session', 'recent'], receivers: { sessions: 
 const files = (app, clients = 'from azure.cosmos import CosmosClient\nclient = CosmosClient(URL, credential=KEY, consistency_level="Session")\n') => ({ 'app.py': app, 'clients.py': clients })
 
 describe('parseDataApp', () => {
+  it('distinguishes actually used pools while preserving identity across checkouts', () => {
+    const dataTarget = { kind: 'postgres', server: 'pg-assistant', resourceGroup: 'rg-assistant', database: 'knowledge' }
+    let sandbox = createResourceGroup(createSandbox(), { name: 'rg-assistant', location: 'eastus' }).sandbox
+    sandbox = createPostgresServer(sandbox, { ...dataTarget, name: dataTarget.server }).sandbox
+    sandbox = createPostgresDatabase(sandbox, { ...dataTarget, name: 'knowledge' }).sandbox
+    sandbox = executePg(sandbox, { ...dataTarget, sql: 'CREATE TABLE documents (id bigint PRIMARY KEY); INSERT INTO documents (id) VALUES (1)' }).sandbox
+    const clients = 'from psycopg_pool import ConnectionPool\nDSN = "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge"\npool = ConnectionPool(DSN, max_size=5)\nsecond = ConnectionPool(DSN, max_size=5)\n'
+    const app = `from clients import pool, second
+def query():
+    with pool.connection() as conn:
+        conn.execute("SELECT id FROM documents").fetchall()
+    with pool.connection() as conn:
+        conn.execute("SELECT id FROM documents").fetchall()
+    with second.connection() as conn:
+        return conn.execute("SELECT id FROM documents").fetchall()
+`
+    const parsed = parseDataApp(files(app, clients), { editZones: ['query'], receivers: { pool: 'pg-pool', second: 'pg-pool' } })
+    expect(parsed.diagnostics).toEqual([])
+    const result = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget, functionName: 'query' })
+    expect(result.status).toBe(200)
+    expect(result.value).toEqual([[1]])
+    expect(result.calls.map(call => call.poolIdentity)).toEqual([1, 1, 2])
+  })
   it('selects PostgreSQL from trusted metadata or actual imports without diverting Cosmos for comments or strings', () => {
     const app = 'def get_session(session_id):\n    return sessions.read_item(item=session_id, partition_key=session_id)\n'
     for (const noise of ['# psycopg ConnectionPool\n', 'NOTE = "psycopg ConnectionPool"\n', 'import psycopg\n']) {

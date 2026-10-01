@@ -211,9 +211,11 @@ function runLoad(run, lab, manifest, scenario) {
   // Only the pool used by actual SQL can vouch for reusable app clients.
   // Direct PgBouncer SQL has no app pool, even if an unused global exists.
   const usedMaximum = sqlCalls[0]?.poolMaxSize
+  const usedPool = sqlCalls[0]?.poolIdentity
   const usesModulePool = Number.isInteger(usedMaximum) && usedMaximum > 0
-    && sqlCalls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === usedMaximum)
-  const usesDirectClients = sqlCalls.every(call => call.poolLifetime === null && call.poolMaxSize === null)
+    && Number.isInteger(usedPool) && usedPool > 0
+    && sqlCalls.every(call => call.poolLifetime === 'module' && call.poolMaxSize === usedMaximum && call.poolIdentity === usedPool)
+  const usesDirectClients = sqlCalls.every(call => call.poolLifetime === null && call.poolMaxSize === null && call.poolIdentity === null)
   const poolMaxSize = usesModulePool ? usedMaximum : usesDirectClients ? 0 : null
   const deployment = run.runtime.kubernetes?.clusters?.[scenario.target.clusterId]?.resources?.[`Deployment/${scenario.target.namespace}/${scenario.target.deploymentName}`]
   const replicas = deployment?.spec?.replicas
