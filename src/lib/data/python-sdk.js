@@ -66,7 +66,31 @@ export function parseDataApp(files, manifest = {}) {
   const globals = {}
   const clientOps = []
 
-  const locate = (name) => { for (const path of filePaths) { const node = funcNode(fileCtx[path].tree, fileCtx[path].text, name); if (node) return { path, node } } return null }
+  const protectedFunctions = new Map()
+  if (runtimeFiles.length) {
+    for (const name of manifest.runtimeFunctions ?? []) {
+      const definitions = filePaths.flatMap(path => {
+        const node = funcNode(fileCtx[path].tree, fileCtx[path].text, name)
+        return node ? [{ path, node }] : []
+      })
+      const protectedDefinitions = definitions.filter(({ path }) => runtimeFiles.includes(path))
+      if (protectedDefinitions.length !== 1) {
+        diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected runtime function '${name}' must have one fixed module definition.`, path: runtimeFiles[0], line: 1, column: 1 })
+      } else {
+        const definition = protectedDefinitions[0]
+        protectedFunctions.set(name, definition)
+        for (const collision of definitions.filter(({ path }) => path !== definition.path)) {
+          diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected runtime function '${name}' cannot be redefined.`, ...at(fileCtx[collision.path].text, collision.node, collision.path) })
+        }
+      }
+    }
+  }
+  if (diagnostics.length) return { appSpec: null, diagnostics }
+  const locate = (name) => {
+    if (protectedFunctions.has(name)) return protectedFunctions.get(name)
+    for (const path of filePaths) { const node = funcNode(fileCtx[path].tree, fileCtx[path].text, name); if (node) return { path, node } }
+    return null
+  }
 
   const functions = {}
   const queued = new Set()

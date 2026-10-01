@@ -6,11 +6,23 @@ import { createResourceGroup } from '../src/lib/sandbox/ops.js'
 import { createPostgresServer, createPostgresDatabase, setPostgresParameter } from '../src/lib/sandbox/postgres.js'
 import { executePg, loadCorpus } from '../src/lib/data/pg-engine.js'
 import { parsePgSql } from '../src/lib/data/pg-sql.js'
+import { POSTGRES_MANIFEST, POSTGRES_STARTER_FILES } from '../src/data/templates/data-python/postgres.js'
 
 const manifest = { editZones: ['get_session', 'recent'], receivers: { sessions: 'cosmos-container' } }
 const files = (app, clients = 'from azure.cosmos import CosmosClient\nclient = CosmosClient(URL, credential=KEY, consistency_level="Session")\n') => ({ 'app.py': app, 'clients.py': clients })
 
 describe('parseDataApp', () => {
+  it('rejects learner functions that shadow a protected PostgreSQL runtime route', () => {
+    const baseline = parseDataApp(POSTGRES_STARTER_FILES, POSTGRES_MANIFEST)
+    expect(baseline.diagnostics).toEqual([])
+    expect(baseline.appSpec.data.functions.exact_baseline.body[0].source.path).toBe('baseline.py')
+    for (const path of ['app.py', 'clients.py', 'worker.py']) {
+      const tampered = { ...POSTGRES_STARTER_FILES, [path]: (POSTGRES_STARTER_FILES[path] ?? '') + '\ndef exact_baseline(question):\n    return []\n' }
+      const result = parseDataApp(tampered, POSTGRES_MANIFEST)
+      expect(result.appSpec).toBeNull()
+      expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'SCAFFOLD_MODIFIED', path })])
+    }
+  })
   it('recognizes read_item with keyword arguments', () => {
     const r = parseDataApp(files('def get_session(session_id):\n    return sessions.read_item(item=session_id, partition_key=session_id)\n'), manifest)
     expect(r.diagnostics).toEqual([])

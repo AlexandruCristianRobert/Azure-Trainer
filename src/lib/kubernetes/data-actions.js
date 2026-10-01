@@ -21,7 +21,7 @@ import { getProjectManifest } from '../project/manifests.js'
 import { recordVerification } from '../labEngine/evidence.js'
 import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { simulatePoolLoad } from '../data/pg-pool.js'
-import { pgDsnPort } from '../../data/labs/data-journey/postgres-helpers.js'
+import { pgDsnPort, pgDeployedArtifact } from '../../data/labs/data-journey/postgres-helpers.js'
 
 const round2 = (n) => Math.round(n * 100) / 100
 const NO_READY_ENDPOINTS = Object.freeze({ error: 'ServiceUnavailable' })
@@ -40,13 +40,8 @@ function podAppSpec(run, clusterId, pod) {
 // Mirrors requests.js's Service-selector Pod lookup for the `assistant-api`
 // Deployment (kind: 'data-request' scenarios are routed through a Service).
 function findServiceAppSpec(run, target) {
-  const cluster = run.runtime.kubernetes?.clusters?.[target.clusterId]
-  const service = cluster?.resources?.[`Service/${target.namespace}/${target.serviceName}`]
-  if (!service) return null
-  const pod = readyPods(run, target.clusterId, target.namespace, target.deploymentName)
-    .filter((candidate) => Object.entries(service.spec.selector ?? {}).every(([key, value]) => candidate.metadata.labels?.[key] === value))
-    .sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))[0]
-  return pod ? podAppSpec(run, target.clusterId, pod) : null
+  const artifact = pgDeployedArtifact(run, target)
+  return artifact?.appSpec?.data ? artifact.appSpec : null
 }
 
 // `feedback-worker` has no Service (see COSMOS_MANIFEST's k8s files); its

@@ -39,3 +39,23 @@ The single throwaway parser script was run inline with Node; no test file was re
 | Final `npm.cmd run build` | Exit 0; 527 modules, Vite 4.04 s | 4.758 s |
 
 Retained verification command wall time totals **14.432 seconds** (unrounded values summed); final checks total **4.840 seconds**. Scoped diff review and `git diff --check` found no whitespace errors. Ordinary LF/CRLF Git notices and the existing Vite large-bundle advisory remain. Small simulation/UI checks were intentionally limited to parser assertions, build and source review; no app request/load/SQL execution or browser inspection was added. Future Labs provide their own scenarios, task checks, learner-built-image guards and ordered seed/solution replay. Fixture helper v3 extension remains Task 12's explicit scope.
+
+## Review fix round 1 — protected routes and Service-selected evidence
+
+Addressed the two review findings from `22e7bd8`, with receiving-code-review, systematic-debugging, TDD and verification-before-completion guidance constrained by the controller's explicit test authorization.
+
+The function locator previously searched app.py before fixed baseline.py. Appending a learner `exact_baseline` function could therefore replace the simulator route while the fixed HTTP server still imported the baseline module. The recognizer now resolves declared protected runtime functions from their fixed runtime modules, requires one protected definition, and rejects conflicting definitions in app.py, clients.py, worker.py or another discovered module with `SCAFFOLD_MODIFIED`. Exactly one focused permanent core regression was authorized and added to `tests/data-python-sdk.test.js`. It checks that the unchanged scaffold lowers its protected source, and that learner function collisions prevent an appSpec from being produced. No other permanent test was added.
+
+The dependency artifact helper previously selected a ready Deployment Pod without applying its Service selector. `pgDeployedArtifact` is now the shared Service-aware artifact lookup used by requests, load and dependency selectors. It preserves deterministic ready-Pod selection and immutable snapshot reads, returns null for absent Services or no matching ready endpoint, respects explicit service aliases, and defaults to the assistant-api Service for `PG_TARGET`. The default Deployment resolves from `target.deploymentName` or assistant-api; the existing explicit third Deployment argument remains supported. Cosmos service requests use the same selector/ready-Pod semantics they used previously; worker lookup remains Deployment-based.
+
+A single throwaway artifact-selection script constructed two real sandbox resource records for ready Pods owned by one Deployment: the lexically first Pod was excluded by the Service selector and captured a different image/function/DSN. The check confirmed the selected Pod supplies image, code and DSN dependencies; default/explicit targets and an explicit Service alias agree; absent, unready and unselected endpoints return null. The script was removed after execution. No AKS or browser test path was run.
+
+| Fix verification | Result | Command wall time |
+| --- | --- | --- |
+| `npm.cmd test -- tests/data-python-sdk.test.js` red | 7 pass, new collision regression fails with learner appSpec accepted | 1.443 s |
+| Same explicit SDK path green | 8/8 pass after protected-function resolution | 1.360 s |
+| Throwaway `node task7-artifact-smoke.mjs` | Exit 0; Service artifact and dependency selection checks pass; script removed | 0.222 s |
+| Final explicit SDK path | 8/8 pass | 1.503 s |
+| Final `npm.cmd run build` | Exit 0; 527 modules, Vite 4.39 s | 5.123 s |
+
+Fix-round validation command wall time totals **9.651 seconds** (unrounded values summed). Final SDK/build checks total **6.625 seconds**. Scoped source/diff review and `git diff --check` pass; the existing large-bundle advisory remains. No broader suite, additional core regression, permanent noncore test, browser/network/Python/Azure work or subagent was used. Controller ledger edits remain excluded from the fix commit.

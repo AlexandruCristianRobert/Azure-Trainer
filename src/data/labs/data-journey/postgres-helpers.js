@@ -15,13 +15,17 @@ export const PG_TARGET = Object.freeze({ ...PG_DATA_TARGET, clusterId: PG_CLUSTE
 export const PG_REQUEST_TARGET = Object.freeze({ clusterId: PG_CLUSTER_ID, namespace: PG_NAMESPACE, serviceName: 'assistant-api', deploymentName: 'assistant-api' })
 export const PG_ESTIMATE_LABEL = 'Simulated estimate — not an Azure guarantee.'
 
-// Use the same running Pod snapshot as data-actions, never a saved source file
-// or a mutable published tag that could have changed since the Pod started.
-export function pgDeployedArtifact(context, target, deploymentName = 'assistant-api') {
+// Shared Service endpoint selection for requests, load and dependencies. Read
+// its running Pod snapshot, never saved files or a mutable published tag.
+export function pgDeployedArtifact(context, target, deploymentName = target?.deploymentName ?? 'assistant-api') {
   const { clusterId, namespace } = target
-  if (!context.runtime?.kubernetes?.clusters?.[clusterId]) return null
+  const cluster = context.runtime?.kubernetes?.clusters?.[clusterId]
+  const serviceName = target.serviceName ?? 'assistant-api'
+  const service = cluster?.resources?.[`Service/${namespace}/${serviceName}`]
+  if (!service) return null
   const pod = getDeploymentPods(context, clusterId, namespace, deploymentName)
     .filter(pod => pod.status?.phase === 'Running' && pod.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'))
+    .filter(pod => Object.entries(service.spec.selector ?? {}).every(([key, value]) => pod.metadata.labels?.[key] === value))
     .sort((a, b) => a.metadata.uid.localeCompare(b.metadata.uid))[0]
   const snapshot = pod && context.runtime.kubernetes?.clusters?.[clusterId]?.podSnapshots?.[pod.metadata.uid]
   return snapshot ? context.artifacts.buildsById?.[snapshot.artifactId] ?? null : null
