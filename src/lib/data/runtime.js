@@ -22,7 +22,7 @@ const round2 = (n) => Math.round(n * 100) / 100
 const stripInternal = (item) => Object.fromEntries(Object.entries(item ?? {}).filter(([key]) => !key.startsWith('_')))
 const pythonStr = (value) => (value === null || value === undefined ? 'None' : value === true ? 'True' : value === false ? 'False' : String(value))
 
-const STATUS_BY_CODE = { BadRequest: 400, SDK_ARGUMENT: 400, NotFound: 404, CosmosResourceNotFoundError: 404, Conflict: 409, TooManyRequests: 429 }
+const STATUS_BY_CODE = { BadRequest: 400, SDK_ARGUMENT: 400, NotFound: 404, CosmosResourceNotFoundError: 404, Conflict: 409, CosmosResourceExistsError: 409, TooManyRequests: 429 }
 const statusFor = (code) => STATUS_BY_CODE[code] ?? 500
 
 class StopExecution extends Error {
@@ -83,6 +83,7 @@ function execStatement(op, locals, ctx) {
     case 'assign': locals[op.name] = evalExpr(op.value, locals, ctx); return null
     case 'return': return { kind: 'return', value: evalExpr(op.value, locals, ctx) }
     case 'expr': evalExpr(op.value, locals, ctx); return null
+    case 'raise-not-implemented': return fail('DATA_UNSUPPORTED', `Not supported by the simulator: ${op.functionName} is not completed yet.`)
     case 'for': {
       const iterable = evalExpr(op.iterable, locals, ctx)
       for (const item of Array.isArray(iterable) ? iterable : []) {
@@ -184,8 +185,18 @@ function execReadItem(container, ref, argValues, ctx, receiver) {
     if (ctx.currentFunctionName === 'read_lease') return null
     return fail('CosmosResourceNotFoundError', 'Entity with the specified id does not exist in the system.')
   }
+  const writtenThisRequest = (ctx.consistency === 'Eventual' || ctx.consistency === 'ConsistentPrefix') && ctx.scenarioState?.writesThisRequest?.has(`${receiver}:${id}`)
+  // Teaching approximation: under a consistency level weaker than Session, a
+  // just-CREATED item (no _previous) has not replicated yet, so this same
+  // request's very next read of it still sees "not found" - an Eventual or
+  // ConsistentPrefix read is never guaranteed read-your-writes. An UPDATED
+  // item still has a _previous version to fall back to and is marked stale,
+  // as before.
+  if (writtenThisRequest && !item._previous) {
+    return fail('CosmosResourceNotFoundError', 'Entity with the specified id does not exist in the system.')
+  }
   let stale = false
-  if ((ctx.consistency === 'Eventual' || ctx.consistency === 'ConsistentPrefix') && ctx.scenarioState?.writesThisRequest?.has(`${receiver}:${id}`) && item._previous) {
+  if (writtenThisRequest && item._previous) {
     item = item._previous
     stale = true
   }
@@ -210,7 +221,10 @@ function execQueryItems(container, argValues, ctx, receiver) {
 }
 
 function execWrite(ref, argValues, ctx, receiver, call) {
-  const { sandbox: nextSandbox, item } = upsertItem(ctx.sandboxBox.value, ref, argValues.body, { nowMs: ctx.nowMs })
+  const { sandbox: nextSandbox, item, created } = upsertItem(ctx.sandboxBox.value, ref, argValues.body, { nowMs: ctx.nowMs })
+  if (call === 'cosmos.container.create_item' && !created) {
+    return fail('CosmosResourceExistsError', 'Entity with the specified id already exists in the system.')
+  }
   ctx.sandboxBox.value = nextSandbox
   const updatedContainer = findContainer(nextSandbox, ref)
   const charge = writeCharge(item, updatedContainer.indexingPolicy)

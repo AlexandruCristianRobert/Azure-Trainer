@@ -13,7 +13,7 @@ export const SDK_CALLS = {
   'cosmos.container.upsert_item': { kind: 'method', receiver: 'cosmos-container', params: ['body'], required: ['body'] },
   'cosmos.container.create_item': { kind: 'method', receiver: 'cosmos-container', params: ['body'], required: ['body'] },
   'cosmos.container.delete_item': { kind: 'method', receiver: 'cosmos-container', params: ['item', 'partition_key'], required: ['item', 'partition_key'] },
-  'cosmos.container.query_items_change_feed': { kind: 'method', receiver: 'cosmos-container', params: ['start_time', 'continuation', 'partition_key', 'max_item_count'], required: [] },
+  'cosmos.container.query_items_change_feed': { kind: 'method', receiver: 'cosmos-container', params: ['start_time', 'continuation', 'partition_key', 'max_item_count'], required: [], keywordOnly: ['start_time'] },
   'cosmos.container.last_continuation': { kind: 'attribute', receiver: 'cosmos-container', path: 'client_connection.last_response_headers["etag"]' },
 }
 

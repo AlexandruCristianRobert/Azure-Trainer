@@ -60,7 +60,7 @@ export function parseDataApp(files, manifest = {}) {
     const name = pending.shift()
     const found = locate(name)
     if (!found) continue
-    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], path: found.path, manifest, diagnostics, enqueue })
+    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], path: found.path, manifest, diagnostics, enqueue, functionName: name })
   }
 
   if (diagnostics.length) return { appSpec: null, diagnostics }
@@ -129,8 +129,12 @@ function lowerStatement(node, ctx) {
   if (node.name === 'RaiseStatement') {
     const call = kids(node).find((c) => c.name === 'CallExpression')
     if (call?.firstChild?.name === 'VariableName' && raw(call.firstChild, text) === 'NotImplementedError') {
-      diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: this function is not completed yet', ...at(text, node, path) })
-      return null
+      // Review ruling: an edit zone that still raises NotImplementedError is
+      // not a build-blocking diagnostic (that would stop a learner from
+      // building a partially-finished app). It lowers to an op that fails
+      // only when this function is actually CALLED, with a DATA_UNSUPPORTED
+      // diagnostic at call time instead.
+      return { op: 'raise-not-implemented', functionName: ctx.functionName, source: at(text, node, path) }
     }
     return unsupported(ctx, node, 'raise statements')
   }
@@ -282,10 +286,13 @@ function argumentsOfWithText(node, text) {
 }
 
 function bindArgs(entry, args, node, label, ctx) {
-  const { params, required = [] } = entry
-  if (args.positional.length > params.length) { unsupported(ctx, node, `too many arguments to '${label}(...)'`); return null }
+  const { params, required = [], keywordOnly = [] } = entry
+  // keywordOnly params (e.g. query_items_change_feed's start_time, matching
+  // the real SDK) are valid as `name=value` but never bind to a position.
+  const positionalParams = params.filter((p) => !keywordOnly.includes(p))
+  if (args.positional.length > positionalParams.length) { unsupported(ctx, node, `too many arguments to '${label}(...)'`); return null }
   const values = {}
-  args.positional.forEach((argNode, i) => { values[params[i]] = lowerExpr(argNode, ctx) })
+  args.positional.forEach((argNode, i) => { values[positionalParams[i]] = lowerExpr(argNode, ctx) })
   for (const [kw, argNode] of args.keywords) {
     if (!params.includes(kw)) { unsupported(ctx, node, `the keyword argument '${kw}' to '${label}(...)'`); return null }
     if (Object.hasOwn(values, kw)) { unsupported(ctx, node, `the duplicate argument '${kw}' to '${label}(...)'`); return null }
