@@ -42,3 +42,20 @@ Total verification tool wall time: **34.732 seconds** (tests 25.448 s; builds 9.
 - `docs/superpowers/data-postgres-task-11-report.md`: this report.
 
 Reviewed owned code and diff for order, standalone prerequisites, narrow fields, current captured artifacts, actual result/plan correlation, seed-only faults, scale-after-apply, and import-cycle scope. The learner-build gap found in self-review was fixed and covered by the existing new `it`. No unresolved correctness concerns. Accepted limitations: the maintenance incident is visibly staged, and ANN under-fill is latent until the wrong distance index is repaired. Both preserve the existing simulator formulas. The production build retains the existing large-chunk advisory; no new build failure or test warning was observed. The controller-owned progress ledger was left out of this commit. Git reports routine LF-to-CRLF warnings on touched text files.
+
+## Fix round 1: correlate retained request proofs with deployed connections
+
+Base `14ff7d3`. The reviewer identified that quote-safe, index-rebuilt and filtered-complete omitted source/connection dependencies. Reproduced before editing: replay all Solutions, save clients.py with port=6432 changed to port=1234, build the changed image, apply/restart/scale to six without rerunning scenarios. Those three Tasks remained done even though a fresh question-with-quote request returned HTTP 500 OperationalError, `ERROR: connection refused`. The previous artifact-current predicate established the current saved deployment, but retained measurements were not dependency-correlated with it.
+
+Added a local shared `connectionFields` list to every request verification: deployed source hash (`images:assistant-api`, which includes immutable DSN/pool globals), connect function, DSN port and pgBouncer enablement. Quote, index rebuild and filtered retrieval now use those dependencies; latency was made consistent and load reuses the same list. Server PgBouncer enablement is the parameter read by actual SQL connection validation. Request-only checks do not acquire unrelated replica/max_connections/default_pool_size dependencies; those remain on the load check, and SKU/build-memory remain on the index rebuild check. No core change or new permanent test was needed.
+
+Verified existing standalone Solutions already refresh earlier request proofs after every later source/connection change: latency reruns quote, rebuild and filter rerun the three earlier requests, and the final pool/PgBouncer deployment reruns all four before load. Full ordered replay still completes all five Outcomes with the expanded dependency captures.
+
+| Command | Result | Tool wall time |
+| --- | --- | --- |
+| `node .lab8-invalid-port-probe.mjs` before fix | Exit 1 / expected RED assertion: retainedDone=[quote-safe,index-rebuilt,filtered-complete], freshStatus=500, freshError.code=OperationalError, message=`ERROR: connection refused`. | 2.194 s |
+| Same disposable probe after fix | Exit 0: retainedDone=[], freshStatus=500, same connection-refused error. All old successful proofs now become incomplete after the changed deployed connection. | 2.199 s |
+| `npm.cmd test -- tests/data-postgres-labs.test.js` | Exit 0, 4/4 passed; Lab 8 2339ms; Vitest duration 6.29 s. Fresh five-unsatisfied state and complete ordered replay remain covered by the existing test. | 7.084 s |
+| `npm.cmd run build` | Exit 0; 532 modules transformed; Vite built in 3.96 s. Existing large-chunk advisory only. | 4.641 s |
+
+Fix verification elapsed: **16.119 seconds** tool wall time. The disposable invalid-port probe was removed after verification; no extra permanent tests, browser/full/AKS/Container Apps suites, network, Azure or Python execution were added. Self-review checked each affected field list against actual `pg-engine` connection validation and inspected the existing refresh order. Owned files for this fix: the Lab and this appended report. No unresolved concerns; controller-owned progress ledger remains excluded.

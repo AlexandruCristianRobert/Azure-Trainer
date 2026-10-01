@@ -98,6 +98,9 @@ function loadStable(context) {
 }
 const tables = ['pg:table:chunks', 'pg:table:documents']
 const retrieval = [...tables, 'code:assistant-api:retrieve_passages', 'pg:index:chunks']
+// Source captures the immutable DSN/pool globals as well as function bodies.
+// SQL connection success also depends on PgBouncer availability at port 6432.
+const connectionFields = ['images:assistant-api', 'code:assistant-api:connect', 'dsnPort:assistant-api', 'pg:param:pgbouncer.enabled']
 const request = args => pgRequestScenario([{ route: 'GET /retrieve', args }])
 const filteredArgs = [QUESTION.text, QUESTION.product, QUESTION.version, QUESTION.language]
 
@@ -129,32 +132,32 @@ export const postgresTroubleshootingLab = {
       explanation: 'The deployed retrieval interpolates the question into an f-string SQL exclusion. An apostrophe terminates the SQL string. Remove that unnecessary exclusion and bind vectors/filters with psycopg parameters. The quote-bearing question is unknown to the fixed fixture, so successful retrieval returns an empty list rather than a fabricated answer.',
       hints: ['Inspect retrieve_passages and the SQL error reported by question-with-quote.', 'Use %s placeholders with separate arguments. Build/deploy the repaired app before verification.'],
       examNote: 'Bind SQL parameters separately; string interpolation is unsafe and breaks on quoted user text.',
-      fields: [...tables, 'code:assistant-api:retrieve_passages'], verification: { scenarioId: 'question-with-quote', scenarioVersion: 1 }, check: quoteSafe,
+      fields: [...tables, 'code:assistant-api:retrieve_passages', ...connectionFields], verification: { scenarioId: 'question-with-quote', scenarioVersion: 1 }, check: quoteSafe,
       solution: { steps: [...deploy(LOW_APP), scenario('question-with-quote')] } }),
     pgTask({ id: 'latency-restored', stageId: 'latency', text: 'Restore retrieve-latency to cosine HNSW and total latency below 100ms.',
       explanation: 'The existing index uses vector_l2_ops but the app orders with <=>, so PostgreSQL cannot use it for cosine search. Inspect the plan, restore compute/build memory, drop the mismatched index and create vector_cosine_ops. Verify actual global rows [17,9]. This repair does not yet fix the low candidate budget used for metadata filtering. ' + PG_ESTIMATE_LABEL,
       hints: ['Match <=> with vector_cosine_ops; CREATE IF NOT EXISTS cannot replace an existing L2 definition.', 'Use GeneralPurpose Standard_D2ds_v5 and maintenance_work_mem=65536 kB before rebuilding.'],
       examNote: 'An ANN index opclass must match the query distance operator.',
-      fields: [...retrieval, 'images:assistant-api', 'dsnPort:assistant-api', 'pg:param:pgbouncer.enabled'],
+      fields: [...retrieval, ...connectionFields],
       verification: { scenarioId: 'retrieve-latency', scenarioVersion: 1 }, check: latencyRestored,
       solution: { steps: [...ready, ...deploy(LOW_APP), scenario('question-with-quote'), scenario('retrieve-latency')] } }),
     pgTask({ id: 'index-rebuilt', stageId: 'maintenance', text: 'Enact the maintenance incident, then restore a working cosine HNSW index.',
       explanation: 'This separate stage starts with visible commands: DROP INDEX IF EXISTS chunks_embedding_hnsw; scale to Burstable Standard_B1ms; set maintenance_work_mem=1024 kB. Try CREATE INDEX to observe the build-budget error. Recover with GeneralPurpose (at least two vCores), enough build memory, and a cosine HNSW index. The graph needs 12,500 kB under the declared formula. The Solution includes incident enactment and recovery; no hidden state switch is used. ' + PG_ESTIMATE_LABEL,
       hints: ['Run the three maintenance commands described above after diagnosing latency; the two incidents occur at different times.', 'Restore Standard_D2ds_v5 and maintenance_work_mem=65536, create cosine HNSW, then run index-rebuilt and refresh retrieval proofs.'],
       examNote: 'HNSW builds need sufficient maintenance_work_mem and sustained compute.',
-      fields: [...retrieval, 'pg:sku', 'pg:param:maintenance_work_mem'], verification: { scenarioId: 'index-rebuilt', scenarioVersion: 1 }, check: indexRebuilt,
+      fields: [...retrieval, ...connectionFields, 'pg:sku', 'pg:param:maintenance_work_mem'], verification: { scenarioId: 'index-rebuilt', scenarioVersion: 1 }, check: indexRebuilt,
       solution: { steps: [...maintenanceIncident, ...ready, ...deploy(LOW_APP), ...refresh] } }),
     pgTask({ id: 'filtered-complete', stageId: 'filters', text: 'Make retrieve-filtered return both matching passages [1,2].',
       explanation: 'After cosine HNSW is available, ef_search=4 with iterative_scan=off can under-fill the SQL LIMIT after product/version/language filtering. Increase the candidate budget and enable iterative scans within every retrieval transaction. Join documents for metadata filters and return the SQL-produced rows. Refresh earlier verifications after editing shared retrieval. ' + PG_ESTIMATE_LABEL,
       hints: ['Inspect the actual filtered rows after the latency repair.', 'Use hnsw.ef_search=50 and hnsw.iterative_scan=relaxed_order (strict_order also works).'],
       examNote: 'Iterative ANN scans expand candidates until filtered LIMIT is filled; partial indexes require same-table predicates.',
-      fields: retrieval, verification: { scenarioId: 'retrieve-filtered', scenarioVersion: 1 }, check: filteredComplete,
+      fields: [...retrieval, ...connectionFields], verification: { scenarioId: 'retrieve-filtered', scenarioVersion: 1 }, check: filteredComplete,
       solution: { steps: [...ready, ...deploy(FINAL_APP), ...refresh, scenario('retrieve-filtered')] } }),
     pgTask({ id: 'load-stable', stageId: 'load', text: 'Recover load-600rps at six replicas: zero failures and p95 at most 12ms.',
       explanation: 'clients.py opens a new connection per request. At six replicas the declared cold-burst model exceeds 47 available slots of max_connections=50. Deploy a module pool with max_size=5; the actual retrieval must use that pool. The complete Solution also enables built-in PgBouncer with default_pool_size=20 and port 6432. Applying YAML resets replicas to two, so scale to six after apply. Refresh every request proof after the final build. ' + PG_ESTIMATE_LABEL,
       hints: ['Use one module-level ConnectionPool and return pool.connection() from connect(). Six times max_size must fit within 47 slots.', 'PgBouncer requires GeneralPurpose or MemoryOptimized, pgbouncer.enabled=true and DSN port=6432.'],
       examNote: 'Reuse connections and size pools per replica; PgBouncer multiplexes clients onto fewer server connections.',
-      fields: [...retrieval, 'images:assistant-api', 'code:assistant-api:connect', 'replicas:assistant-api', 'dsnPort:assistant-api', 'pg:sku', 'pg:param:max_connections', 'pg:param:pgbouncer.enabled', 'pg:param:pgbouncer.default_pool_size'],
+      fields: [...retrieval, ...connectionFields, 'replicas:assistant-api', 'pg:sku', 'pg:param:max_connections', 'pg:param:pgbouncer.default_pool_size'],
       verification: { scenarioId: 'load-600rps', scenarioVersion: 1 }, check: loadStable,
       solution: { steps: [...ready, parameter('max_connections', 50), parameter('pgbouncer.enabled', 'true'), parameter('pgbouncer.default_pool_size', 20),
         ...deploy(FINAL_APP, BOUNCER_CLIENTS), ...refresh, scenario('retrieve-filtered'), scenario('load-600rps')] } }),
