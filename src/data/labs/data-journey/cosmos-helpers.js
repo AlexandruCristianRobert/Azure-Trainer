@@ -21,6 +21,19 @@ import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES } from '../../templates/data-pyt
 //   - 'clientConsistency': clients.py's own `consistency_level`
 //   - 'accountConsistency': the account's default consistency level
 //   - 'indexing:<container>': that container's current indexing policy
+//   - 'code:<deploymentName>:<functionName>': the DEPLOYED (build-captured)
+//     appSpec's op list for just that one function, from the same artifact
+//     `podAppSpec` (kubernetes/data-actions.js) reads at request time - never
+//     live `project.savedFiles` - so a Task that cares about one function's
+//     *deployed* behavior doesn't go stale every time that Deployment is
+//     rebuilt for an unrelated function's fix, only when ITS OWN function's
+//     deployed behavior actually changes (Task 10 review fix round 1: Lab 3
+//     Tasks sharing one Deployment across different incidents need this
+//     narrower field, not the whole-image 'images:<deploymentName>' hash)
+//   - 'deployedConsistency:<deploymentName>': the DEPLOYED appSpec's own
+//     `client.consistency` (same build-captured artifact as 'code:', not
+//     live clients.py) - narrower than 'clientConsistency' for a Task that
+//     only cares about what's actually *running*, not the saved source
 // The returned key is distinct per field set (sorted and joined into the
 // key), so two Tasks only share a dependency key - and so only go stale
 // together - when they truly depend on the exact same fields; a Task
@@ -29,11 +42,19 @@ import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES } from '../../templates/data-pyt
 // field regardless of which ones a Task asked for, over-coupling every
 // verification Task in a Lab to every tracked field - Review Focus #5 /
 // fix round 1 Important finding 2.)
-const deploymentSourceHash = (context, clusterId, namespace, deploymentName) => {
+const deploymentImageArtifact = (context, clusterId, namespace, deploymentName) => {
   const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
   const image = resources[`Deployment/${namespace}/${deploymentName}`]?.spec?.template?.spec?.containers?.[0]?.image ?? null
   const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
-  return artifactId ? context.artifacts.buildsById?.[artifactId]?.sourceHash ?? null : null
+  return artifactId ? context.artifacts.buildsById?.[artifactId] ?? null : null
+}
+const deploymentSourceHash = (context, clusterId, namespace, deploymentName) => deploymentImageArtifact(context, clusterId, namespace, deploymentName)?.sourceHash ?? null
+// Mirrors `podAppSpec` (kubernetes/data-actions.js): the build-captured
+// appSpec frozen on the artifact a Deployment's Pods are currently running,
+// never the learner's live, possibly-unbuilt `project.savedFiles`.
+const deployedAppSpec = (context, clusterId, namespace, deploymentName) => {
+  const artifact = deploymentImageArtifact(context, clusterId, namespace, deploymentName)
+  return artifact?.appSpec?.data ? artifact.appSpec : null
 }
 const DATA_DEPENDENCY_FIELDS = (context, { clusterId, namespace, account, database }, field) => {
   if (field === 'images') {
@@ -53,6 +74,20 @@ const DATA_DEPENDENCY_FIELDS = (context, { clusterId, namespace, account, databa
     const cosmosAccount = (context.sandbox.cosmosAccounts ?? []).find((item) => item.name === account)
     const cosmosDatabase = cosmosAccount?.databases?.find((item) => item.name === database)
     return { [field]: cosmosDatabase?.containers?.find((item) => item.name === containerName)?.indexingPolicy ?? null }
+  }
+  if (field.startsWith('code:')) {
+    const rest = field.slice('code:'.length)
+    const separator = rest.indexOf(':')
+    if (separator === -1) throw new Error(`Invalid data dependency field '${field}': expected 'code:<deploymentName>:<functionName>'.`)
+    const deploymentName = rest.slice(0, separator)
+    const functionName = rest.slice(separator + 1)
+    if (!deploymentName || !functionName) throw new Error(`Invalid data dependency field '${field}': expected 'code:<deploymentName>:<functionName>'.`)
+    return { [field]: deployedAppSpec(context, clusterId, namespace, deploymentName)?.data?.functions?.[functionName] ?? null }
+  }
+  if (field.startsWith('deployedConsistency:')) {
+    const deploymentName = field.slice('deployedConsistency:'.length)
+    if (!deploymentName) throw new Error(`Invalid data dependency field '${field}': expected 'deployedConsistency:<deploymentName>'.`)
+    return { [field]: deployedAppSpec(context, clusterId, namespace, deploymentName)?.data?.client?.consistency ?? null }
   }
   throw new Error(`Unknown data dependency field '${field}'.`)
 }
@@ -82,6 +117,20 @@ export const ASSISTANT_CLUSTER_ID = `/subscriptions/${SUBSCRIPTION_ID}/resourceG
 export const ASSISTANT_NAMESPACE = 'assistant'
 export const ASSISTANT_ACCOUNT = 'cosmos-assistant'
 export const ASSISTANT_DATABASE = 'assistant'
+
+// Lab 2's own `capability`/`leases`/`worker-deployed` command text (Task 10
+// review fix round 1 Minor finding): seedCosmosTroubleshooting (cosmos-seeds.js)
+// needs to replay these same three steps to reach "full Lab 2 end state"
+// before baking in its own incidents, so they're shared constants here
+// rather than copied literals - this module must never import a Lab module
+// itself (that's what caused the Task 10 ESM import-cycle bug), so these
+// stay plain strings built from the identifiers already above, not read off
+// cosmosVectorGuidedLab.tasks.
+export const VECTOR_CAPABILITY_COMMAND = `az cosmosdb update --name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --capabilities EnableNoSQLVectorSearch`
+export const LEASES_CREATE_COMMAND = `az cosmosdb sql container create --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name leases --partition-key-path /id --throughput 400`
+export const WORKER_BUILD_V3_COMMAND = `az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v3 .`
+export const WORKER_DEPLOYMENT_YAML_V3 = COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v3')
+export const WORKER_APPLY_COMMAND = 'kubectl apply -f k8s/worker.yaml'
 
 // The assistant-api Deployment/Service pair (Task 7's template) is the
 // `data-request` target for every Lab 1-4 scenario that calls through the

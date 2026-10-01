@@ -17,6 +17,24 @@
 // Session; (4) worker.py's process_changes reads from "Now" and never saves
 // its lease. `initialProjectFiles` below is exactly that faulty source -
 // see the seed's own comment for why the seed can never change it.
+//
+// CONTEXT.md: a Solution is the complete worked answer to a Task, and the
+// Lab is order-free, so every Task below has its OWN complete, standalone
+// Solution - its own file edit (when it has a code incident), its own
+// `az acr build` at its own distinct tag, its own k8s yaml edit and
+// `kubectl apply`, then its own scenario run - never relying on an earlier
+// Task's Solution having already run (Task 10 review fix round 1: an
+// earlier draft had `fresh-read` only re-run its scenario, relying on
+// `session-budget` to have already fixed app.py/clients.py and rebuilt).
+// `session-budget` and `fresh-read` both rebuild/redeploy assistant-api
+// (incidents 1 and 3 are both baked into that one image) - safe because
+// each Task's dependency fields (below) snapshot only its OWN function's
+// (or the deployed client's own) build-captured behavior, via
+// cosmos-helpers.js's `code:<deployment>:<function>` /
+// `deployedConsistency:<deployment>` fields - never the whole image's
+// hash - so rebuilding assistant-api again for one incident never stales
+// another incident's already-passing evidence, regardless of which Task
+// runs first or how many times the shared Deployment gets rebuilt.
 import { COSMOS_MANIFEST, COSMOS_SOLUTION_FILES } from '../../templates/data-python/cosmos.js'
 import { writeCharge } from '../../../lib/data/cosmos-cost.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
@@ -71,14 +89,12 @@ if (TROUBLESHOOTING_WORKER_PY === COSMOS_SOLUTION_FILES['worker.py']) throw new 
 const initialFiles = { ...COSMOS_SOLUTION_FILES, 'app.py': TROUBLESHOOTING_APP_PY, 'clients.py': TROUBLESHOOTING_CLIENTS_PY, 'worker.py': TROUBLESHOOTING_WORKER_PY }
 
 // --- Fix targets (indexing fixes take effect immediately - no rebuild/
-// redeploy needed). `session-budget` and `fresh-read` share the
-// assistant-api Deployment (incidents 1 and 3 are both baked into the same
-// image), and a Task's own dependency fields must never go stale because a
-// *later* Task's Solution deploys a newer build (Review ruling 15 from Lab
-// 2) - so `session-budget`'s own Solution fixes both app.py and clients.py
-// and performs the one assistant-api rebuild/redeploy for both incidents;
-// `fresh-read`'s Solution only re-verifies against that same build.
+// redeploy needed). Every code-fixing Task below rebuilds/redeploys at its
+// own distinct tag, even though `session-budget` and `fresh-read` share the
+// assistant-api Deployment - see the module comment for why that no longer
+// stales either Task's evidence.
 const DEPLOYMENT_V5 = COSMOS_SOLUTION_FILES['k8s/deployment.yaml'].replace('assistant:v1', 'assistant:v5')
+const DEPLOYMENT_V6 = COSMOS_SOLUTION_FILES['k8s/deployment.yaml'].replace('assistant:v1', 'assistant:v6')
 const WORKER_V7 = COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v7')
 
 const FIXED_SESSIONS_IDX_JSON = '{"indexingMode":"consistent","automatic":true,"includedPaths":[{"path":"/*"}],"excludedPaths":[{"path":"/_etag/?"},{"path":"/text/?"}],"compositeIndexes":[[{"path":"/userId","order":"ascending"},{"path":"/createdAt","order":"descending"}]]}'
@@ -196,12 +212,6 @@ export const cosmosTroubleshootingLab = {
       { action: 'batch' },
     ]),
   },
-  // Safe completion order (mirrors Labs 1/2's own "stages/tasks follow one
-  // safe order" pattern): `session-budget` carries the only assistant-api
-  // rebuild (see its Solution's comment) and must be completed before
-  // `ordered-restored`/`write-cost`/`fresh-read` are verified, or their own
-  // evidence - recorded against the still-faulty pre-rebuild image - would
-  // go stale the moment that rebuild finally happens.
   tasks: [
     cosmosTask({
       id: 'session-budget', stageId: 'diagnose',
@@ -210,12 +220,9 @@ export const cosmosTroubleshootingLab = {
       hints: ['Run the get-session scenario and look at the RU charge shown for the read call in the result card, not the total.', 'A charge far above a few RU on a single small item is the signature of a scan, not a point read; a point read\'s own call type is reported alongside its charge.'],
       examNote: 'A point read (id + partition key) is the cheapest operation: ~1 RU per 1 KB; a query that cannot target one partition scans instead.',
       check: sessionBudgetReady,
-      // Also carries clients.py's fix (incident 3, verified by `fresh-read`)
-      // and the one assistant-api rebuild both incidents need - see the
-      // constants above for why.
-      solution: { steps: [file('app.py'), file('clients.py'), ...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v5 .`), { kind: 'file', path: 'k8s/deployment.yaml', content: DEPLOYMENT_V5 }, ...commands('kubectl apply -f k8s/deployment.yaml'), scenario('get-session')] },
+      solution: { steps: [file('app.py'), ...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v5 .`), { kind: 'file', path: 'k8s/deployment.yaml', content: DEPLOYMENT_V5 }, ...commands('kubectl apply -f k8s/deployment.yaml'), scenario('get-session')] },
       verification: { scenarioId: 'get-session', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'clientConsistency', 'accountConsistency'],
+      fields: ['code:assistant-api:get_session'],
     }),
     cosmosTask({
       id: 'ordered-restored', stageId: 'diagnose',
@@ -226,7 +233,7 @@ export const cosmosTroubleshootingLab = {
       check: orderedRestoredReady,
       solution: { steps: [...commands(`az cosmosdb sql container update --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name sessions --idx '${FIXED_SESSIONS_IDX_JSON}'`), scenario('user-sessions-ordered')] },
       verification: { scenarioId: 'user-sessions-ordered', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'indexing:sessions'],
+      fields: ['indexing:sessions', 'code:assistant-api:recent_sessions_for_user'],
     }),
     cosmosTask({
       id: 'write-cost', stageId: 'diagnose',
@@ -237,7 +244,7 @@ export const cosmosTroubleshootingLab = {
       check: writeCostReady,
       solution: { steps: [...commands(`az cosmosdb sql container update --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name qa_history --idx '${FIXED_QA_IDX_JSON}'`), scenario('remember-answer')] },
       verification: { scenarioId: 'remember-answer', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'indexing:qa_history'],
+      fields: ['indexing:qa_history', 'code:assistant-api:remember_answer'],
     }),
     cosmosTask({
       id: 'fresh-read', stageId: 'diagnose',
@@ -246,12 +253,14 @@ export const cosmosTroubleshootingLab = {
       hints: ['Run the write-then-read scenario and check the stale flag in the result card.', 'Session consistency guarantees read-your-writes for the client holding the session token; a weaker level does not.'],
       examNote: 'Session consistency guarantees read-your-writes for the client holding the session token; Eventual does not.',
       check: freshReadReady,
-      // clients.py's fix and the assistant-api rebuild it needs are already
-      // in `session-budget`'s own Solution (see that constant's comment);
-      // this Task only re-verifies against that same deployed build.
-      solution: { steps: [scenario('write-then-read')] },
+      // Also fixes app.py (so this Task's own build serves a point read
+      // again, not just a corrected consistency level): this Task must
+      // stand alone, and freshReadReady - like Lab 1's own pointReadReady -
+      // requires an actual read_item call, since query_items never reports
+      // staleness at all (see that check's own comment).
+      solution: { steps: [file('app.py'), file('clients.py'), ...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v6 .`), { kind: 'file', path: 'k8s/deployment.yaml', content: DEPLOYMENT_V6 }, ...commands('kubectl apply -f k8s/deployment.yaml'), scenario('write-then-read')] },
       verification: { scenarioId: 'write-then-read', scenarioVersion: 1 },
-      fields: ['images:assistant-api', 'clientConsistency', 'accountConsistency'],
+      fields: ['deployedConsistency:assistant-api', 'accountConsistency'],
     }),
     cosmosTask({
       id: 'feed-complete', stageId: 'diagnose',
@@ -262,7 +271,7 @@ export const cosmosTroubleshootingLab = {
       check: feedCompleteReady,
       solution: { steps: [file('worker.py'), ...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v7 .`), { kind: 'file', path: 'k8s/worker.yaml', content: WORKER_V7 }, ...commands('kubectl apply -f k8s/worker.yaml'), scenario('feed-restart')] },
       verification: { scenarioId: 'feed-restart', scenarioVersion: 1 },
-      fields: ['images:feedback-worker'],
+      fields: ['code:feedback-worker:process_changes', 'code:feedback-worker:save_lease'],
     }),
   ],
 }

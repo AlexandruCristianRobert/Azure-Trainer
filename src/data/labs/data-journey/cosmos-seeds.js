@@ -10,7 +10,10 @@ import { applyRunAction } from '../../../lib/labEngine/actions.js'
 import { upsertItem } from '../../../lib/data/cosmos-store.js'
 import { cloneSandbox } from '../../../lib/sandbox/model.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
-import { ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY } from './cosmos-helpers.js'
+import {
+  ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
+  LEASES_CREATE_COMMAND, VECTOR_CAPABILITY_COMMAND, WORKER_APPLY_COMMAND, WORKER_BUILD_V3_COMMAND, WORKER_DEPLOYMENT_YAML_V3,
+} from './cosmos-helpers.js'
 import { cosmosSdkGuidedLab } from './cosmos-sdk-guided.lab.js'
 import { COSMOS_SOLUTION_FILES } from '../../templates/data-python/cosmos.js'
 
@@ -132,25 +135,27 @@ export function seedCosmosVectorGuided(run) {
 // and sets faulty indexing policies (incident 2). It reaches "full Lab 2 end
 // state" the same way seedCosmosVectorGuided reaches "Lab 1 end state" above
 // - by replaying Lab 2's own Tasks on top of seedCosmosVectorGuided's own
-// output, rather than a from-scratch replay. The replayed commands below are
-// copied from cosmos-vector-guided.lab.js's own `capability`/`leases`/
-// `worker-deployed` Tasks (not imported from that module - cosmos-seeds.js
-// is already imported BY it for seedCosmosVectorGuided, and Lab 1 already
-// forms the same kind of cycle with this file; adding a second Lab on the
-// other side of it broke both Labs' bundling under this project's ESM
-// tooling, so this seed only ever imports Lab 1's Lab object, never Lab 2's);
-// `qa-container` (that Task's own command) is replaced below by the faulty
-// variant (incident 2), and `code-vectors`/`code-feed` (those Tasks' own
-// `file` steps, to app.py/worker.py) are never replayed at all - this Lab's
-// `initialProjectFiles` (cosmos-troubleshooting.lab.js) are already the
-// faulty source for those two files, a full implementation rather than
-// NotImplementedError starters, so it parses and builds as-is, and nothing
-// here may overwrite it back to correct. `createBehavioralRun` (labEngine/
-// run.js) builds `run.project` from `initialProjectFiles` *before* calling
-// this function, and only this function's `sandbox`/`artifacts`/`runtime`/
-// `nextSequence` survive past it - so the learner's own project files are
-// exactly that faulty source throughout, regardless of what this seed's own
-// scratch `seeded.project` does along the way.
+// output, rather than a from-scratch replay. The `capability`/`leases`/
+// `worker-deployed` steps below use cosmos-helpers.js's shared command/yaml
+// constants - the same ones cosmos-vector-guided.lab.js's own Tasks use -
+// rather than importing `cosmosVectorGuidedLab` itself: cosmos-seeds.js is
+// already imported BY that module for `seedCosmosVectorGuided`, and Lab 1
+// already forms the same kind of cycle with this file, but adding a SECOND
+// such cycle (importing Lab 2's Lab object here) broke both Labs' bundling
+// under this project's ESM tooling (Task 10 review fix round 1), so this
+// file must only ever import Lab 1's Lab object, never read Tasks off a
+// second Lab module. `qa-container` (that Task's own command) is replaced
+// below by the faulty variant (incident 2), and `code-vectors`/`code-feed`
+// (those Tasks' own `file` steps, to app.py/worker.py) are never replayed at
+// all - this Lab's `initialProjectFiles` (cosmos-troubleshooting.lab.js) are
+// already the faulty source for those two files, a full implementation
+// rather than NotImplementedError starters, so it parses and builds as-is,
+// and nothing here may overwrite it back to correct. `createBehavioralRun`
+// (labEngine/run.js) builds `run.project` from `initialProjectFiles` *before*
+// calling this function, and only this function's `sandbox`/`artifacts`/
+// `runtime`/`nextSequence` survive past it - so the learner's own project
+// files are exactly that faulty source throughout, regardless of what this
+// seed's own scratch `seeded.project` does along the way.
 export const VECTOR_EMBEDDINGS_JSON = '{"vectorEmbeddings":[{"path":"/embedding","dataType":"float32","dimensions":8,"distanceFunction":"cosine"}]}'
 export const FAULTY_QA_IDX_JSON = '{"indexingMode":"consistent","automatic":true,"includedPaths":[{"path":"/*"}],"excludedPaths":[{"path":"/_etag/?"}],"vectorIndexes":[{"path":"/embedding","type":"quantizedFlat"}]}'
 const FAULTY_SESSIONS_IDX_JSON = '{"indexingMode":"consistent","automatic":true,"includedPaths":[{"path":"/*"}],"excludedPaths":[{"path":"/_etag/?"},{"path":"/text/?"}],"compositeIndexes":[]}'
@@ -181,12 +186,12 @@ export function seedCosmosTroubleshooting(run) {
   // and deploy feedback-worker - that build captures this Lab's still-faulty
   // worker.py as-is (never touched above), so incident 4 needs no further
   // rebuild here.
-  act({ type: 'command', line: `az cosmosdb update --name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --capabilities EnableNoSQLVectorSearch` })
+  act({ type: 'command', line: VECTOR_CAPABILITY_COMMAND })
   act({ type: 'command', line: `az cosmosdb sql container create --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name qa_history --partition-key-path /product --throughput 400 --vector-embeddings '${VECTOR_EMBEDDINGS_JSON}' --idx '${FAULTY_QA_IDX_JSON}'` })
-  act({ type: 'command', line: `az cosmosdb sql container create --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name leases --partition-key-path /id --throughput 400` })
-  act({ type: 'command', line: `az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v3 .` })
-  act({ type: 'save-file', path: 'k8s/worker.yaml', text: COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v3') })
-  act({ type: 'command', line: 'kubectl apply -f k8s/worker.yaml' })
+  act({ type: 'command', line: LEASES_CREATE_COMMAND })
+  act({ type: 'command', line: WORKER_BUILD_V3_COMMAND })
+  act({ type: 'save-file', path: 'k8s/worker.yaml', text: WORKER_DEPLOYMENT_YAML_V3 })
+  act({ type: 'command', line: WORKER_APPLY_COMMAND })
 
   // Incidents 1/3 (app.py's get_session, clients.py's consistency): rebuild
   // and redeploy assistant-api now - its Lab 1/2-prerequisite deployment

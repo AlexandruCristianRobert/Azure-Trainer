@@ -20,7 +20,8 @@ import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { DATA_FIXTURES } from '../../fixtures/data/knowledge.js'
 import {
   ASSISTANT_ACCOUNT, ASSISTANT_CLUSTER_ID, ASSISTANT_DATABASE, ASSISTANT_GROUP, ASSISTANT_NAMESPACE, ASSISTANT_REGISTRY,
-  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, file, findReturnCall, parsed, scenario,
+  commands, cosmosEvidence, cosmosRequestScenario, cosmosWorkerScenario, cosmosTask, file, findReturnCall, LEASES_CREATE_COMMAND, parsed, scenario,
+  VECTOR_CAPABILITY_COMMAND, WORKER_APPLY_COMMAND, WORKER_BUILD_V3_COMMAND, WORKER_DEPLOYMENT_YAML_V3,
 } from './cosmos-helpers.js'
 import { seedCosmosVectorGuided } from './cosmos-seeds.js'
 
@@ -37,7 +38,6 @@ const LAB2_APP_PY = COSMOS_SOLUTION_FILES['app.py'].slice(0, solutionTail) + COS
 const initialFiles = { ...COSMOS_STARTER_FILES, 'app.py': LAB2_APP_PY }
 
 const IMAGE_V3 = `${ASSISTANT_REGISTRY}.azurecr.io/assistant:v3`
-const WORKER_DEPLOYMENT_V3 = COSMOS_SOLUTION_FILES['k8s/worker.yaml'].replace('assistant:v1', 'assistant:v3')
 
 // Finds every 'call-sdk' / 'call-local' / 'sdk-attribute' expression anywhere
 // in a function body (recursing through if/for), for process_changes's
@@ -187,7 +187,7 @@ export const cosmosVectorGuidedLab = {
       hints: ['An account capability is a separate, additive update from its consistency level.', 'Use `az cosmosdb update --capabilities EnableNoSQLVectorSearch`.'],
       examNote: 'Vector search is enabled per account before creating vector containers.',
       check: capabilityReady,
-      solution: { steps: commands(`az cosmosdb update --name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --capabilities EnableNoSQLVectorSearch`) },
+      solution: { steps: commands(VECTOR_CAPABILITY_COMMAND) },
     }),
     cosmosTask({
       id: 'qa-container', stageId: 'vectors',
@@ -225,7 +225,7 @@ export const cosmosVectorGuidedLab = {
       hints: ['One worker keeps one checkpoint row, keyed by its own identity - partition on /id.', 'Use `az cosmosdb sql container create` with `--partition-key-path /id`.'],
       examNote: 'The lease container stores processor checkpoints.',
       check: leasesReady,
-      solution: { steps: commands(`az cosmosdb sql container create --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name leases --partition-key-path /id --throughput 400`) },
+      solution: { steps: commands(LEASES_CREATE_COMMAND) },
     }),
     cosmosTask({
       id: 'code-feed', stageId: 'feed',
@@ -243,7 +243,7 @@ export const cosmosVectorGuidedLab = {
       hints: ['Build before editing k8s/worker.yaml so the tag it references already exists in the registry.', 'Use `az acr build --registry acrassistant --image assistant:v3 .`, retag k8s/worker.yaml\'s image to `acrassistant.azurecr.io/assistant:v3`, then `kubectl apply -f k8s/worker.yaml`.'],
       examNote: 'The processor runs as its own worker, separate from the API.',
       check: workerDeployed,
-      solution: { steps: [...commands(`az acr build --registry ${ASSISTANT_REGISTRY} --image assistant:v3 .`), { kind: 'file', path: 'k8s/worker.yaml', content: WORKER_DEPLOYMENT_V3 }, ...commands('kubectl apply -f k8s/worker.yaml')] },
+      solution: { steps: [...commands(WORKER_BUILD_V3_COMMAND), { kind: 'file', path: 'k8s/worker.yaml', content: WORKER_DEPLOYMENT_YAML_V3 }, ...commands(WORKER_APPLY_COMMAND)] },
     }),
     cosmosTask({
       id: 'no-miss', stageId: 'feed',
