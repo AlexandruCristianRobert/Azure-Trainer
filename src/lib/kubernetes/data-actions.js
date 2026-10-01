@@ -112,7 +112,9 @@ function runRequestSteps(run, lab, manifest, target, steps) {
     const functionName = typeof route === 'string' ? route : route?.functionName ?? route?.function
     const result = runDataFunction({ appSpec, sandbox, account, database, ...(lab.capabilities?.dataPostgres ? { dataTarget: lab.dataTarget } : {}), functionName, args: step.args, nowMs, scenarioState, changeFeed: CHANGE_FEED_HOOK })
     sandbox = result.sandbox
-    calls = calls.concat(result.calls)
+    calls = calls.concat(lab.capabilities?.dataPostgres
+      ? result.calls.map(call => typeof call.sql === 'string' ? { ...call, stepIndex: values.length } : call)
+      : result.calls)
     if (lab.capabilities?.dataPostgres) {
       // Step index binds detached request-local training inputs/results to the
       // corresponding actual response in measurements.values.

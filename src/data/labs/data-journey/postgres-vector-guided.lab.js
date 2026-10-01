@@ -74,6 +74,8 @@ function filtered(context) {
 function answered(context) {
   const measurements = proof(context, 'answer')
   const calls = selects(measurements)
+  const knownCalls = calls.filter(call => call.stepIndex === 0)
+  const unknownCalls = calls.filter(call => call.stepIndex === 1)
   const training = measurements?.trainingCalls ?? []
   const builders = training.filter(call => call.stepIndex === 0 && call.functionName === 'build_context')
   const helpers = training.filter(call => call.stepIndex === 0 && call.functionName === 'training_answer')
@@ -81,12 +83,13 @@ function answered(context) {
     && measurements?.status === 200 && same(measurements.values, [
       { answer: QUESTION.answer, sources: QUESTION.expectedChunkIds },
       { answer: "I couldn't find that in the documentation.", sources: [] },
-    ]) && calls.length === 2 && same(calls[0].rows.map(row => row.id), QUESTION.expectedChunkIds) && same(calls[1].rows, [])
+    ]) && calls.length === 2 && knownCalls.length === 1 && unknownCalls.length === 1
+    && same(knownCalls[0].rows.map(row => row.id), QUESTION.expectedChunkIds) && same(unknownCalls[0].rows, [])
     && measurements.trainingTraceTruncated === false
-    && builders.some(builder => same(builder.args, [calls[0].rows])
-      && same(builder.result?.sources, calls[0].rows.map(row => row.id))
+    && builders.some(builder => same(builder.args, [knownCalls[0].rows])
+      && same(builder.result?.sources, knownCalls[0].rows.map(row => row.id))
       && typeof builder.result?.passages === 'string'
-      && calls[0].rows.every(row => builder.result.passages.includes(row.content))
+      && knownCalls[0].rows.every(row => builder.result.passages.includes(row.content))
       && helpers.some(helper => same(helper.args, [QUESTION.text, builder.result])
         && helper.result === measurements.values[0].answer
         && same(builder.result.sources, measurements.values[0].sources)))
