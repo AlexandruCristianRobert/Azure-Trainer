@@ -29,7 +29,15 @@ export function parseDataApp(files, manifest = {}) {
   if (typeof files?.['clients.py'] !== 'string') { missing('clients.py'); return { appSpec: null, diagnostics } }
   if (typeof files?.['app.py'] !== 'string') { missing('app.py'); return { appSpec: null, diagnostics } }
 
-  const filePaths = ['app.py', ...(typeof files['worker.py'] === 'string' ? ['worker.py'] : []), 'clients.py']
+  const postgresManifest = Object.values(manifest.receivers ?? {}).some(type => type.startsWith('pg-'))
+  const runtimeFiles = postgresManifest ? manifest.runtimeFiles ?? [] : []
+  for (const path of runtimeFiles) {
+    if (typeof path !== 'string' || typeof manifest.fixedFiles?.[path] !== 'string' || files[path] !== manifest.fixedFiles[path]) {
+      diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'PostgreSQL runtime files must match their protected scaffold.', path, line: 1, column: 1 })
+    }
+  }
+  if (diagnostics.length) return { appSpec: null, diagnostics }
+  const filePaths = [...new Set(['app.py', ...(typeof files['worker.py'] === 'string' ? ['worker.py'] : []), 'clients.py', ...runtimeFiles])]
   const clientsTree = parser.parse(files['clients.py'])
   const trees = Object.fromEntries(filePaths.map((path) => [path, parser.parse(files[path])]))
   for (const [path, tree] of filePaths.map((p) => [p, trees[p]])) {
@@ -289,8 +297,17 @@ function functionReceiverType(name, ctx) {
   if (!source) return undefined
   const ret = findNode(bodyOf(found.node), n => n.name === 'ReturnStatement')
   const call = ret && kids(ret).find(n => n.name === 'CallExpression')
-  const key = call && PG_CONSTRUCTORS[raw(kids(call)[0], source)]
-  return SDK_CALLS[key]?.returns
+  const callee = call && kids(call)[0]
+  const key = callee && PG_CONSTRUCTORS[raw(callee, source)]
+  if (key) return SDK_CALLS[key]?.returns
+  if (callee?.name === 'MemberExpression') {
+    const member = kids(callee)
+    const base = member[0]
+    const property = member.find(n => n.name === 'PropertyName')
+    const type = base?.name === 'VariableName' && ctx.globalTypes?.[raw(base, source)]
+    if (type === 'pg-pool' && property && raw(property, source) === 'connection') return lookupCall(type, 'connection')?.returns
+  }
+  return undefined
 }
 
 function lowerCall(node, ctx) {
