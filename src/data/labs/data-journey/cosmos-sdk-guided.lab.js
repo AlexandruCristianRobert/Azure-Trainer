@@ -113,7 +113,9 @@ const orderedReady = (context) => {
 const readYourWritesReady = (context) => {
   if (!deployed(context)) return false
   const record = cosmosEvidence(context, 'read-your-writes', 'write-then-read')
-  return !!record && record.measurements.status === 200 && record.measurements.stale === false
+  if (!record || record.measurements.status !== 200 || record.measurements.stale !== false) return false
+  const readCall = record.measurements.calls?.find((call) => call.call === 'cosmos.container.read_item')
+  return !!readCall && readCall.consistency === 'Session'
 }
 
 export const cosmosSdkGuidedLab = {
@@ -218,7 +220,10 @@ export const cosmosSdkGuidedLab = {
       check: pointReadReady,
       solution: { steps: [scenario('get-session')] },
       verification: { scenarioId: 'get-session', scenarioVersion: 1 },
-      fields: ['images', 'clientConsistency', 'accountConsistency'],
+      // The DEPLOYED client's own consistency (review fix), not the live
+      // clients.py text, so saving clients.py without rebuilding/deploying
+      // doesn't stale this Task's already-passing evidence.
+      fields: ['images', 'deployedConsistency:assistant-api', 'accountConsistency'],
     }),
     cosmosTask({
       id: 'cross-partition', stageId: 'verify',
@@ -251,7 +256,9 @@ export const cosmosSdkGuidedLab = {
       check: readYourWritesReady,
       solution: { steps: [scenario('write-then-read')] },
       verification: { scenarioId: 'write-then-read', scenarioVersion: 1 },
-      fields: ['images', 'clientConsistency', 'accountConsistency'],
+      // See 'point-read' above: the DEPLOYED client's own consistency, not
+      // the live clients.py text.
+      fields: ['images', 'deployedConsistency:assistant-api', 'accountConsistency'],
     }),
   ],
 }
