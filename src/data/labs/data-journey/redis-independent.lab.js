@@ -40,46 +40,23 @@ const correct = m => m?.status === 200 && m.answersCorrect === true && m.provena
   && m.ageKnown === true && Number.isFinite(m.maxAgeSeconds) && m.maxAgeSeconds <= 60
   && m.rejectedWrites === 0 && m.persistentKeys === 0 && m.usedBytes <= 64 * 1024
 
-// Lifetime grading follows actual successful Redis operations, not Python spelling.
-// A SET followed by EXPIRE in the same request is equally valid as SET EX.
-function boundedWrites(m) {
-  const lifetimes = new Map()
-  for (const [position, entry] of m.calls.entries()) {
-    if (entry.error) continue
-    const [key] = entry.args
-    if (entry.command === 'SET' && entry.value === 'OK') lifetimes.set(key, {
-      stepIndex: entry.stepIndex, seconds: entry.args[2] === 'EX' ? Number(entry.args[3]) : null,
-    })
-    if (entry.command === 'HSET') lifetimes.set(key, { stepIndex: entry.stepIndex, seconds: lifetimes.get(key)?.seconds ?? null })
-    if (entry.command === 'EXPIRE' && entry.value === 1) {
-      const seconds = Number(entry.args[1])
-      if (seconds < 1 || seconds > 60) return false
-      lifetimes.set(key, { stepIndex: entry.stepIndex, seconds })
-    }
-    if (entry.command === 'DEL') {
-      for (const name of entry.args) lifetimes.delete(name)
-    }
-    // At the next request boundary each newly written cache entry must expire.
-    const next = m.calls[position + 1]
-    if (!next || next.stepIndex !== entry.stepIndex) {
-      if ([...lifetimes.values()].some(value => value.seconds === null || value.seconds < 1 || value.seconds > 60)) return false
-    }
-  }
-  return true
-}
+// Complete request-boundary facts accept SET+EXPIRE and preserved HASH TTLs
+// without grading the presentation-only operation list or Python spelling.
+const boundedWrites = m => m.requests.every(({ cacheEffects: effects }) => effects?.complete === true
+  && effects.persistentKeys === 0 && Number.isFinite(effects.maxRemainingTtlSeconds)
+  && effects.maxRemainingTtlSeconds >= 0 && effects.maxRemainingTtlSeconds <= 60)
 function freshness(context) {
   const m = measurement(context, 'immediate-freshness')
   if (!learnerDeployed(context) || !correct(m) || !boundedWrites(m) || m.total !== 6) return false
   const [backupPrime, supportPrime, invalidation, exact, similar, supportExact, supportSimilar] = m.requests
-  const deleted = m.calls.filter(call => call.stepIndex === invalidation?.stepIndex && call.command === 'DEL' && !call.error && call.value > 0)
-  const primedKeys = m.calls.filter(call => call.stepIndex === backupPrime?.stepIndex && !call.error && ['SET', 'HSET'].includes(call.command))
-    .map(call => call.args[0])
+  const deleted = invalidation.cacheEffects.removedKeys
+  const primedKeys = backupPrime.cacheEffects.writtenKeys
   return backupPrime?.originCalls === 1 && supportPrime?.originCalls === 1
-    && ['ka:answer:contoso-backup:', 'ka:sem:contoso-backup:'].every(prefix => primedKeys.some(key => key.startsWith(prefix)
-      && deleted.some(call => call.args.includes(key))))
-    && !m.calls.some(call => call.stepIndex < invalidation.stepIndex && call.command === 'DEL'
-      && call.args.some(key => primedKeys.includes(key)))
-    && !deleted.some(call => call.args.some(key => key.startsWith('ka:answer:contoso-support:') || key.startsWith('ka:sem:contoso-support:')))
+    && [['ka:answer:contoso-backup:', 'string'], ['ka:sem:contoso-backup:', 'hash']].every(([prefix, type]) => primedKeys.some(entry => entry.key.startsWith(prefix)
+      && entry.type === type && deleted.some(removed => removed.command === 'DEL' && removed.key === entry.key && removed.type === type)))
+    && !m.requests.filter(entry => entry.stepIndex < invalidation.stepIndex).some(entry => entry.cacheEffects.removedKeys
+      .some(removed => primedKeys.some(primed => primed.key === removed.key)))
+    && !deleted.some(entry => entry.key.startsWith('ka:answer:contoso-support:') || entry.key.startsWith('ka:sem:contoso-support:'))
     && exact?.atMs === invalidation.atMs && similar?.atMs === invalidation.atMs
     && exact.originCalls === 1 && similar.originCalls === 1
     && exact.body?.sourceRevision === 2 && similar.body?.sourceRevision === 2

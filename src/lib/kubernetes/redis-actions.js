@@ -69,6 +69,56 @@ function acceptedReads(calls, body, beforeKeys, nowMs) {
   }
   return { gets, searches }
 }
+// Separate bounded grading facts from the capped presentation trace. Replaying
+// successful mutations identifies the keys actually removed, including DEL
+// with absent/duplicate arguments, while HSET preserves an existing expiry.
+function cacheEffects(calls, beforeKeys, afterKeys, nowMs, complete) {
+  const entries = new Map(Object.entries(beforeKeys).filter(([, entry]) => entry.expiresAtMs === null || entry.expiresAtMs > nowMs)
+    .map(([key, entry]) => [key, { type: entry.type, expiresAtMs: entry.expiresAtMs }]))
+  const writes = new Set()
+  const removed = new Map()
+  let bounded = true
+  const noteRemoval = (key, entry, command) => {
+    if (!owned(key)) return
+    const identity = JSON.stringify([key, command])
+    if (!removed.has(identity) && removed.size >= 256) { bounded = false; return }
+    removed.set(identity, { key, type: entry.type, command })
+  }
+  for (const call of calls) {
+    if (call.error) continue
+    const key = String(call.args[0])
+    if (call.command === 'SET' && call.value === 'OK') {
+      entries.set(key, { type: 'string', expiresAtMs: call.args[2] === 'EX' ? nowMs + Number(call.args[3]) * 1000 : null })
+      if (owned(key)) writes.add(key)
+    } else if (call.command === 'HSET' && Number.isInteger(call.value) && call.value >= 0) {
+      entries.set(key, { type: 'hash', expiresAtMs: entries.get(key)?.expiresAtMs ?? null })
+      if (owned(key)) writes.add(key)
+    } else if (call.command === 'EXPIRE' && call.value === 1 && entries.has(key)) {
+      if (Number(call.args[1]) <= 0) {
+        noteRemoval(key, entries.get(key), 'EXPIRE')
+        entries.delete(key)
+      } else entries.get(key).expiresAtMs = nowMs + Number(call.args[1]) * 1000
+    } else if (call.command === 'DEL' && Number.isInteger(call.value) && call.value > 0) {
+      for (const argument of call.args) {
+        const name = String(argument)
+        if (!entries.has(name)) continue
+        noteRemoval(name, entries.get(name), 'DEL')
+        entries.delete(name)
+      }
+    }
+  }
+  if (writes.size > 256) bounded = false
+  const writtenKeys = [...writes].slice(0, 256).filter(key => afterKeys[key]
+    && (afterKeys[key].expiresAtMs === null || afterKeys[key].expiresAtMs > nowMs))
+    .map(key => ({ key, type: afterKeys[key].type }))
+  let persistentKeys = 0
+  let maxRemainingTtlSeconds = 0
+  for (const entry of Object.values(afterKeys)) {
+    if (entry.expiresAtMs === null) persistentKeys++
+    else if (entry.expiresAtMs > nowMs) maxRemainingTtlSeconds = Math.max(maxRemainingTtlSeconds, (entry.expiresAtMs - nowMs) / 1000)
+  }
+  return { complete: complete && bounded, writtenKeys, removedKeys: [...removed.values()], persistentKeys, maxRemainingTtlSeconds }
+}
 const invalid = (run, message) => ({ run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message }] })
 export function applyRedisAction(run, action, lab) {
   const manifest = getProjectManifest(run.project.manifestId)
@@ -116,7 +166,8 @@ export function applyRedisAction(run, action, lab) {
     measurements.originCalls += frame?.originCalls ?? 0
     if (result.status !== 200) measurements.status = result.status
     const request = { stepIndex, route: step.route, args: step.args, atMs: nowMs, status: result.status, body: result.value,
-      originCalls: frame?.originCalls ?? 0, responseHit: false, semanticHit: false, expectedAnswer: false, provenance: false }
+      originCalls: frame?.originCalls ?? 0, responseHit: false, semanticHit: false, expectedAnswer: false, provenance: false,
+      cacheEffects: cacheEffects(calls, beforeKeys, databaseOf(sandbox, lab.dataTarget)?.keys ?? {}, nowMs, complete) }
     if (step.route === 'POST /invalidate') request.provenance = complete && result.status === 200
     else {
       measurements.total++

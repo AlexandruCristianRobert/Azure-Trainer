@@ -116,3 +116,63 @@ Reviewed workload order/20-GET denominator, four scope-distinct answers/source I
 Fixed revision-2 source updates are idempotent on repeated workloads. The Solution runs immediate freshness first to prove a real revision-1→2 transition, then the main workload at revision 2. The main workload still declares its update/invalidation boundary and executes the real revision-1→2 transition when run by itself on a fresh seed (also exercised by the exact-only negative). No revision-reset core action was added to manufacture a transition. The main reuse proof and freshness proof remain independent measurement snapshots; cache contents/time are not dependency fingerprints.
 
 Handoff accurately lists unmerged/unpublished branch state, prior task implementation/review evidence, nine new permanent core cases (4 storage, 3 search, 2 SDK; final named files total 20 including the 11 earlier SDK cases), bounded verification and in-process versus manual distinction. Lab 12/final branch review and controller final named-file tests/build are pending at worker handoff. Publishing needs user integration direction. The existing Vite bundle advisory and excluded browser/legacy journey coverage remain. The temporary-harness completion assertion is explicitly disclosed above; the final tightened predicate passed only its controller-authorized affected scenario, with no further verification matrix.
+
+## Review fix round 1 — complete cache facts before the display cap
+
+Review of `3385875` found one Important issue: Lab 12's lifetime and deletion predicates still inspected `measurements.calls`, which is capped at 256 for presentation. One hundred harmless GETs per answer hid the German exact SET EX=61 from that list, allowing the lifetime contract to pass; the same cap could hide valid invalidation DELs and falsely fail freshness. This section supersedes the original lifetime/deletion implementation descriptions above.
+
+The controller authorized a narrow `redis-actions.js` evidence extension and Lab predicate correction. Every request now derives `request.cacheEffects` from its complete runtime frame **before** the presentation cap:
+
+- `complete`: runtime frame completeness plus bounded mutation-summary completeness; incomplete runtime frames remain untrusted. Presentation truncation alone never fails this fact.
+- `writtenKeys`: at most 256 `{key,type}` identities actually written successfully and still live at that request boundary. It carries no cached payload or uncapped operation dump.
+- `removedKeys`: at most 256 `{key,type,command}` identities actually removed by successful DEL or nonpositive EXPIRE. The observer replays successful SET/HSET/EXPIRE/DEL against live pre-request key metadata. Missing or duplicate DEL arguments do not invent removals. HSET retains an existing expiry, SET replaces it, and successful EXPIRE applies the actual native result.
+- `persistentKeys` and `maxRemainingTtlSeconds`: scalar facts from the actual live key state at each completed request boundary, including keys outside the two standard namespaces. This permits SET followed by EXPIRE within a request and preserved HSET TTLs while rejecting a surviving 61-second lifetime or persistent key immediately, even if it disappears later in the workload.
+
+The returned facts are plain bounded JSON, not internal Maps or raw full traces. Mutation identity overflow makes only `cacheEffects.complete` false, so the Lab refuses unsupported proof rather than accepting an incomplete summary. No persistent sandbox schema, parser, SDK, storage/search engine, supported syntax or legacy Lab predicate was changed. Complete-frame `traceTruncated` still fails normal provenance/completion; `displayTraceTruncated` remains presentation-only.
+
+Lab 12 lifetime checks now consume all request-boundary facts. Immediate freshness consumes the actual priming `writtenKeys`, invalidation `removedKeys` and earlier requests' removals. It requires matching actual string/hash key identities and DEL command type for both primed Backup caches, rejects premature removal, rejects actual Support removals and still requires the immediate current source payloads plus Support exact/semantic hits. No predicate grades `measurements.calls` or exact canonical source text.
+
+### RED
+
+Appended the regression mode to the **existing ignored** `task-8-check.mjs`; no permanent test or additional scratch file. Command: `node .superpowers/sdd/2026-10-01-data-labs-10-12/task-8-check.mjs --trace-cap-regression`. Exit 1; tool wall **1.5079711s**:
+
+```text
+hiddenTTL61: displayTruncated=true frameTruncated=false visibleBadTTL=0 hitRatio=0.45 done=true
+AssertionError: hidden TTL61 must fail even when display trace is capped
+true !== false
+```
+
+The regression deploys the learner code through real save/build/distinct-image/apply actions. Each answer performs 100 harmless missing GETs, each request frame stays below its 256-operation limit, and German exact writes have TTL 61. Actual correct answers and 0.45 hitRatio remain intact; only the capped display loses the bad writes.
+
+### GREEN and one build
+
+Same command after the correction, exit 0; first tool wall **3.2385813s**, program **2954ms**. Hidden TTL61 was rejected, valid TTL60 noisy code passed both scenarios, and `evaluateLab` on the **original consistent two-task Lab** returned `isComplete=true`. This resolves the original temporary three-task harness identity verification limitation without rerunning the earlier walkthrough/negative matrix.
+
+Extended assertions in that same two-case regression to cover the required alternative expiry operations and actual deletion identities: the valid implementation uses SET followed by EXPIRE, performs another HSET after establishing expiry (preserving that TTL), and includes duplicate real-key and absent-key arguments in each DEL. Re-ran only this affected regression command, exit 0; tool wall **3.4844701s**, program **3202ms**:
+
+```text
+hiddenTTL61: displayTruncated=true frameTruncated=false visibleBadTTL=0 hitRatio=0.45 done=false
+validTTL60: freshnessDone=true workloadDone=true isComplete=true hitRatio=0.45
+  displayTruncated=true frameTruncated=false; SETthenEXPIRE+HSETpreservedTTL valid,
+  actualRemoved2 despite duplicate/absentDEL; program 3202ms
+```
+
+The valid freshness request's removal summary contains exactly the two real primed Backup identities and excludes the nonexistent argument. Both 20-request and freshness proofs pass despite their display cap. No extra original exact-only negative, original ordinary solution replay, or source-generation matrix was rerun.
+
+Single `npm.cmd run build`, exit 0; stopwatch **5.0613443s**, tool wall **5.1075217s**:
+
+```text
+vite v6.4.3 building for production...
+✓ 554 modules transformed.
+dist/index.html                       0.88 kB │ gzip:   0.46 kB
+dist/assets/LabPage-BM7-q5me.css     10.22 kB │ gzip:   1.90 kB
+dist/assets/index-A8FG7ZL2.css       43.07 kB │ gzip:   8.25 kB
+dist/assets/vendor-Cot1qApE.js       98.85 kB │ gzip:  38.44 kB
+dist/assets/LabPage-B1lqgTgg.js     308.03 kB │ gzip:  79.49 kB
+dist/assets/index-Bo20RRKs.js     2,415.24 kB │ gzip: 653.90 kB
+(!) Some chunks are larger than 500 kB after minification.
+✓ built in 4.20s
+Task8 fix build elapsed: 5.0613443s; exit: 0
+```
+
+Fix-round verification tool wall **13.3385442s**, well below 30 minutes. No named core files, full suite, AKS/ACA tests, PostgreSQL replays, browser tests, installs, network or real Python/Azure execution were run. Final shared-core checks and branch review remain controller-owned. Self-review checked native positive mutation-result handling, absent/duplicate arguments, live-entry filtering, SET/HSET expiry semantics, scalar lifetime coverage of arbitrary key namespaces, bounded persistable facts and no use of display trace in Lab 12 grading. `git diff --check` passed with normal LF/CRLF advisories. Controller progress ledger remains untouched.
