@@ -55,7 +55,7 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 
 ## Tasks
 - [x] Task1 resource/CLI/portal/fixtures
-- [ ] Task2 storage/TTL/memory
+- [x] Task2 storage/TTL/memory
 - [ ] Task3 search/redis-cli
 - [ ] Task4 SDK/runtime/helpers
 - [ ] Task5 template/workload/evidence
@@ -64,7 +64,9 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 - [ ] Task8 Lab12 Independent/handoff
 
 Task 1: complete (c89dd02..af71ed9, spec and quality approved by /root/review_redis_resource; zero findings). Disposable checks + one build, verification ~7.3s; no permanent tests/excluded suites. Report data-redis-task-1-report.md. Browser rendering unverified.
-Task 2: in progress. Base recorded at dispatch after controller ledger commit.
+Task 2: complete (c84d7b4..c310732, spec and quality approved by /root/review_redis_store; zero findings). Four store tests and one build; verification8.792s. Shared Blade formula; no persisted shape change. Report data-redis-task-2-report.md.
+Task 3: in progress. Base recorded at dispatch after controller ledger commit.
+Ruling: native SCAN may return one bounded snapshot batch with cursor0 and treat COUNT as a hint; SDK scan_iter adapts native SCAN rather than a fake SCAN_ITER command — avoids unnecessary iterator machinery while preserving deletion-safe taught behavior — cost: general incremental cursor traversal is outside the simulator subset.
 Ruling: Task2 replaces Redis Blade's temporary memory accounting with its shared redisMemory helper — otherwise adding the cost model duplicates a logic block and risks teaching drift — cost: narrow extra consumer edit in the same task, no UI redesign.
 Ruling: Task1 may add the Redis collection cascade to deleteResourceGroup in src/lib/sandbox/ops.js — otherwise normal owned-group deletion leaves orphan Redis resources and invalid saves — cost: one additional shared cleanup branch, checked by the same disposable probe.
 Ruling: Task1 registers the Redis CLI group in conventional src/lib/az/commands/index.js rather than a special run.js tree patch — existing CLI construction owns registration there — cost: one additional listed integration file, less divergent routing. Persist binary exactly as {redisKind:'bytes',base64:string}; resource validators must not substitute numeric-array blobs.
