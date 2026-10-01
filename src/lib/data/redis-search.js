@@ -109,7 +109,9 @@ function search(index, sample, args) {
     }).sort((a, b) => a.distance - b.distance || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, k)
   return [ranked.length, ...ranked.flatMap(doc => {
     const payload = own(doc.hash, 'payload')
-    return [doc.key, [...(typeof payload === 'string' || typeof payload === 'number' ? ['payload', String(payload)] : []), 'distance', String(doc.distance)]]
+    const returnedPayload = payload?.redisKind === 'bytes' ? { ...payload }
+      : typeof payload === 'string' || typeof payload === 'number' ? String(payload) : undefined
+    return [doc.key, [...(returnedPayload !== undefined ? ['payload', returnedPayload] : []), 'distance', String(doc.distance)]]
   })]
 }
 

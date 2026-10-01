@@ -27,7 +27,7 @@ describe('parseDataApp', () => {
     const answer = redisSourceAnswer({ product: 'contoso-backup', version: 'v1', language: 'en' }, question)
     sandbox = executeRedis(created.sandbox, target, 'HSET', ['ka:sem:contoso-backup:v1:en:seed', { product: 'contoso-backup', version: 'v1', language: 'en', payload: JSON.stringify(answer), embedding: float32Blob(redisEmbed(question)) }]).sandbox
     const app = `from clients import cache
-from training_runtime import embed, pack_embedding, decode_search, decode_answer
+from training_runtime import embed, pack_embedding, decode_search, decode_answer, encode_answer, semantic_key
 def semantic_lookup(question, product, version, language, threshold):
     query = "(@product:{" + product + "} @version:{" + version + "} @language:{" + language + "})=>[KNN 1 @embedding $vec AS distance]"
     raw = cache.execute_command("FT.SEARCH", "idx:semantic", query, "PARAMS", 2,
@@ -38,9 +38,12 @@ def semantic_lookup(question, product, version, language, threshold):
         if float(row["distance"]) <= threshold:
             return decode_answer(row["payload"])
     return None
+def semantic_store(question, product, version, language, answer):
+    cache.hset(semantic_key(question, product, version, language), mapping={"product": product, "version": version, "language": language, "payload": encode_answer(answer), "embedding": pack_embedding(embed(question))})
+    return answer
 `
     const files = { ...REDIS_HELPER_FILES, 'app.py': app, 'clients.py': 'import redis as cache_sdk\ncache = cache_sdk.Redis("redis-assistant.eastus.redis.training.invalid", 10000, password="Training-Only-Redis-Key", ssl=True, decode_responses=False, protocol=2)\n' }
-    const manifest = { ...REDIS_RUNTIME_MANIFEST, editZones: ['semantic_lookup'], routes: { 'GET /answer': 'semantic_lookup' } }
+    const manifest = { ...REDIS_RUNTIME_MANIFEST, editZones: ['semantic_lookup', 'semantic_store'], routes: { 'GET /answer': 'semantic_lookup' } }
     const parsed = parseDataApp(files, manifest)
     expect(parsed.diagnostics).toEqual([])
     const result = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'semantic_lookup', args: [question, 'contoso-backup', 'v1', 'en', 0.05], nowMs: 0 })
@@ -50,6 +53,15 @@ def semantic_lookup(question, product, version, language, threshold):
     expect(result.redis.originCalls).toBe(0)
     result.value.answer = 'detached'
     expect(sandbox.redisClusters[0].database.keys['ka:sem:contoso-backup:v1:en:seed'].value.payload).toBe(JSON.stringify(answer))
+    const cleared = executeRedis(result.sandbox, target, 'DEL', ['ka:sem:contoso-backup:v1:en:seed']).sandbox
+    const stored = runDataFunction({ appSpec: parsed.appSpec, sandbox: cleared, dataTarget: target, functionName: 'semantic_store', args: [question, 'contoso-backup', 'v1', 'en', answer], nowMs: 0 })
+    expect(stored.status).toBe(200)
+    expect(Object.values(stored.sandbox.redisClusters[0].database.keys)[0].value.payload).toMatchObject({ redisKind: 'bytes' })
+    const sdkHit = runDataFunction({ appSpec: parsed.appSpec, sandbox: stored.sandbox, dataTarget: target, functionName: 'semantic_lookup', args: [question, 'contoso-backup', 'v1', 'en', 0.05], nowMs: 0 })
+    expect(sdkHit.status).toBe(200)
+    expect(sdkHit.value).toEqual(answer)
+    expect(sdkHit.redis.originCalls).toBe(0)
+    expect(sdkHit.redis.calls[0].value[2]).toContainEqual(expect.objectContaining({ redisKind: 'bytes' }))
   })
   it('executes Redis miss, real SET EX and repeat hit with one protected scoped origin call', () => {
     const target = REDIS_TARGET
@@ -106,12 +118,23 @@ def bounded_trace(keys):
     expect(parseDataApp({ ...files, 'app.py': app.replace('mapping={"payload": encode_answer({"answer": "learner value"})}', '{"payload": encode_answer({"answer": "learner value"})}') }, manifest).diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
     expect(parseDataApp({ ...files, 'training_runtime.py': files['training_runtime.py'] + '\n# changed\n' }, manifest).diagnostics[0].code).toBe('SCAFFOLD_MODIFIED')
     expect(parseDataApp({ ...files, 'app.py': app + '\nresponse_key = "shadow"\n' }, manifest).diagnostics.some(d => d.code === 'SCAFFOLD_MODIFIED')).toBe(true)
+    for (const binding of ['unused, response_key = (None, None)', '(unused, [response_key]) = (None, [None])', 'unused = response_key = None', 'response_key += "shadow"', 'for unused, response_key in []:\n    pass', 'del response_key', 'if (response_key := None):\n    pass', 'try:\n    pass\nexcept ValueError as response_key:\n    pass', 'from other import (\n    unused,\n    response_key\n)', 'def unused():\n    from other import response_key']) {
+      const shadowed = parseDataApp({ ...files, 'app.py': app + `\n${binding}\n` }, manifest)
+      expect.soft(shadowed.diagnostics.some(d => d.code === 'SCAFFOLD_MODIFIED'), binding).toBe(true)
+    }
+    const constructorShadow = parseDataApp({ ...files, 'app.py': 'from redis import Redis as ImportedClient\n' + app + '\nunused, ImportedClient = (None, None)\n' }, manifest)
+    expect.soft(constructorShadow.diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
     const wrongConnection = parseDataApp({ ...files, 'clients.py': files['clients.py'].replace('ssl=True', 'ssl=False') }, manifest)
     const disconnected = runDataFunction({ appSpec: wrongConnection.appSpec, sandbox, dataTarget: target, functionName: 'cached_answer', args: [question, 'contoso-backup', 'v1', 'en', 60] })
     expect(disconnected.error.code).toBe('ConnectionError')
     expect(JSON.stringify(disconnected.redis)).not.toContain('Training-Only-Redis-Key')
     const hash = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: target, functionName: 'hash_check', nowMs: 0 })
-    expect(hash.value).toEqual({ value: { answer: 'learner value' }, ttl: 60, exists: 1 })
+    expect.soft(hash.error?.code).toBe('DATA_UNSUPPORTED')
+    expect(hash.error.message).toMatch(/^Not supported by the simulator:/)
+    const decoded = parseDataApp({ ...files, 'clients.py': files['clients.py'].replace('decode_responses=False', 'decode_responses=True') }, manifest)
+    expect(decoded.diagnostics).toEqual([])
+    const decodedHash = runDataFunction({ appSpec: decoded.appSpec, sandbox, dataTarget: target, functionName: 'hash_check', nowMs: 0 })
+    expect(decodedHash.value).toEqual({ value: { answer: 'learner value' }, ttl: 60, exists: 1 })
     const invalidated = runDataFunction({ appSpec: parsed.appSpec, sandbox: one.sandbox, dataTarget: target, functionName: 'invalidate', nowMs: 0 })
     expect(invalidated.status).toBe(200)
     expect(Object.keys(invalidated.sandbox.redisClusters[0].database.keys)).toEqual([])

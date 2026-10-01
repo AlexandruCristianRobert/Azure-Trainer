@@ -107,26 +107,23 @@ export function parseDataApp(files, manifest = {}) {
     for (const path of filePaths.filter(path => !runtimeFiles.includes(path))) {
       const ctx = fileCtx[path]
       const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
-      const collision = findNode(ctx.tree.topNode, node => {
-        if (node.name === 'AssignStatement') return protectedNames.has(raw(parts(node)[0], ctx.text))
-        if (node.name === 'ParamList') return parts(node).some(part => part.name === 'VariableName' && protectedNames.has(raw(part, ctx.text)))
-        if (node.name === 'ForStatement') return protectedNames.has(raw(parts(node)[0], ctx.text))
-        if (node.name === 'FunctionDefinition') return protectedNames.has(raw(kids(node).find(part => part.name === 'VariableName'), ctx.text))
-        return false
-      })
+      const collision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, protectedNames, ctx.text))
       if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
-      for (const [name, binding] of Object.entries(ctx.importBindings)) if (protectedNames.has(name) && binding !== `training_runtime.${ctx.redisHelpers[name] ?? name}`) {
-        diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected Redis helper '${name}' cannot be rebound.`, path, line: 1, column: 1 })
-      }
       const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => ['redis', 'redis.Redis'].includes(binding)).map(([name]) => name))
-      const constructorCollision = findNode(ctx.tree.topNode, node => {
-        if (node.name === 'AssignStatement') return constructorNames.has(raw(parts(node)[0], ctx.text))
-        if (node.name === 'ParamList') return parts(node).some(part => part.name === 'VariableName' && constructorNames.has(raw(part, ctx.text)))
-        if (node.name === 'FunctionDefinition') return constructorNames.has(raw(kids(node).find(part => part.name === 'VariableName'), ctx.text))
-        if (node.name === 'ForStatement') return constructorNames.has(raw(parts(node)[0], ctx.text))
+      const constructorCollision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, constructorNames, ctx.text))
+      if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
+      findNode(ctx.tree.topNode, node => {
+        if (node.name !== 'ImportStatement') return false
+        for (const [name, binding] of redisImportEntries(node, ctx.text)) {
+          if (name === '*') diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: wildcard imports can rebind protected Redis identities.', ...at(ctx.text, node, path) })
+          else if (protectedNames.has(name) && binding !== `training_runtime.${ctx.redisHelpers[name] ?? name}`) {
+            diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected Redis helper '${name}' cannot be rebound.`, ...at(ctx.text, node, path) })
+          } else if (constructorNames.has(name) && binding !== ctx.importBindings[name]) {
+            diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, node, path) })
+          }
+        }
         return false
       })
-      if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
     }
   }
   if (diagnostics.length) return { appSpec: null, diagnostics }
@@ -173,18 +170,30 @@ export function parseDataApp(files, manifest = {}) {
     ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}), ...(redis ? { redis: { globals, clientOps } } : {}) } }, diagnostics: [] }
 }
 
+// Inspect every assignment target, including comma-separated/chained targets
+// and nested tuple/list patterns. Never inspect just the first target or the
+// assignment's RHS: imports grant a fixed identity only while it is unbound.
+function rebindsRedisName(node, names, text) {
+  const children = kids(node)
+  let targets = []
+  if (['AssignStatement', 'NamedExpression'].includes(node.name)) {
+    const lastAssign = children.map(child => child.name).lastIndexOf('AssignOp')
+    targets = lastAssign >= 0 ? children.slice(0, lastAssign) : []
+  } else if (node.name === 'UpdateStatement') targets = children.slice(0, 1)
+  else if (node.name === 'ForStatement') targets = children.slice(1, children.findIndex(child => child.name === 'in'))
+  else if (node.name === 'DeleteStatement') targets = children.slice(1)
+  else if (node.name === 'ParamList') targets = children.filter(child => child.name === 'VariableName')
+  else if (['FunctionDefinition', 'ClassDefinition'].includes(node.name)) targets = children.filter(child => child.name === 'VariableName').slice(0, 1)
+  else if (['WithStatement', 'TryStatement'].includes(node.name)) targets = children.filter((child, index) => children[index - 1]?.name === 'as')
+  return targets.some(target => findNode(target, child => child.name === 'VariableName' && names.has(raw(child, text))))
+}
+
 // Read only parsed ImportStatement nodes: comments and string literals cannot
 // grant constructor/helper authority. Aliases bind to the imported identity.
 function redisImports(tree, text) {
   const importBindings = {}
   for (const node of kids(tree.topNode).filter(node => node.name === 'ImportStatement')) {
-    const source = raw(node, text).trim()
-    const from = /^from\s+([\w.]+)\s+import\s+(.+)$/.exec(source)
-    const imported = from ? from[2] : /^import\s+(.+)$/.exec(source)?.[1]
-    for (const item of (imported ?? '').replace(/[()]/g, '').split(',')) {
-      const match = /^\s*([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(item)
-      if (match) importBindings[match[2] ?? match[1]] = from ? `${from[1]}.${match[1]}` : match[1]
-    }
+    for (const [name, binding] of redisImportEntries(node, text)) importBindings[name] = binding
   }
   const redisConstructors = {}; const redisHelpers = {}
   for (const [name, binding] of Object.entries(importBindings)) {
@@ -193,6 +202,24 @@ function redisImports(tree, text) {
     if (binding.startsWith('training_runtime.') && Object.hasOwn(REDIS_HELPER_ARITIES, binding.slice(17))) redisHelpers[name] = binding.slice(17)
   }
   return { importBindings, redisConstructors, redisHelpers }
+}
+
+function redisImportEntries(node, text) {
+  const children = kids(node).filter(child => !['Comment', '(', ')'].includes(child.name))
+  const importAt = children.findIndex(child => child.name === 'import')
+  const module = children[0]?.name === 'from' ? children.slice(1, importAt).map(child => raw(child, text)).join('') : null
+  const entries = []
+  let group = []
+  const append = () => {
+    if (!group.length) return
+    const asAt = group.findIndex(child => child.name === 'as')
+    const imported = (asAt >= 0 ? group.slice(0, asAt) : group).map(child => raw(child, text)).join('')
+    const name = asAt >= 0 ? raw(group[asAt + 1], text) : module ? imported : imported.split('.')[0]
+    entries.push([name, module ? `${module}.${imported}` : imported]); group = []
+  }
+  for (const child of children.slice(importAt + 1)) { if (child.name === ',') append(); else group.push(child) }
+  append()
+  return entries
 }
 
 function readClientConsistency(tree, text, diagnostics) {

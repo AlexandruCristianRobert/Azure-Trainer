@@ -132,7 +132,13 @@ export function evalRedisCall(call, args, target, ctx, fail) {
   if (method === 'scan_iter') return responses(result.value[1], target.decode, fail)
   if (command === 'SET') return result.value === 'OK'
   if (command === 'EXPIRE') return Boolean(result.value)
-  if (command === 'HGETALL') return Object.fromEntries(Object.entries(result.value).map(([key, value]) => [key, responses(typeof value === 'number' ? String(value) : value, target.decode, fail)]))
+  if (command === 'HGETALL') {
+    // Python's bytes-key dict cannot be represented as an ordinary JS object.
+    // Support the native decoded string-key subset explicitly; never silently
+    // let rows['payload'] match a native b'payload' key.
+    if (!target.decode) return unsupported(fail, 'HGETALL byte-key dictionaries; use decode_responses=True for string-key access')
+    return Object.fromEntries(Object.entries(result.value).map(([key, value]) => [key, responses(typeof value === 'number' ? String(value) : value, true, fail)]))
+  }
   if (command === 'GET' && typeof result.value === 'number') return responses(String(result.value), target.decode, fail)
   return responses(result.value, target.decode, fail)
 }
