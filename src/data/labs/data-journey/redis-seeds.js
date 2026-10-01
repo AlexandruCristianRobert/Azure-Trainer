@@ -38,6 +38,6 @@ function seedApp(run, { modules, index, tag }) {
   ])
   return initialized(seeded)
 }
-// Independent fault recipe: omitted creation-time module; caller authors other faults.
-export function seedRedisTroubleshooting(run) { return seedApp(run, { modules: false, index: false, tag: 'redis-troubleshooting-seed' }) }
+// Only the caller's invalidation fault is active; schema faults enter visibly later.
+export function seedRedisTroubleshooting(run) { return seedApp(run, { modules: true, index: true, tag: 'redis-troubleshooting-seed' }) }
 export function seedRedisIndependent(run) { return seedApp(run, { modules: true, index: true, tag: 'redis-independent-seed' }) }
