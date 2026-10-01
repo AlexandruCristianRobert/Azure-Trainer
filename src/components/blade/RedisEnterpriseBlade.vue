@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 import { usePortalStore } from '../../stores/portal.js'
 import { getRedisCluster } from '../../lib/sandbox/redis.js'
+import { redisMemory } from '../../lib/data/redis-store.js'
 import { displayLocation } from '../../lib/sandbox/locations.js'
 import ResourceMenu from './ResourceMenu.vue'
 import BladeHeader from './BladeHeader.vue'
@@ -17,12 +18,7 @@ const database = computed(() => cluster.value?.database)
 const nowMs = computed(() => run.behavioralRun?.runtime?.simTimeMs ?? 0)
 const keys = computed(() => Object.entries(database.value?.keys ?? {}).filter(([, entry]) => entry.expiresAtMs === null || entry.expiresAtMs > nowMs.value))
 const indexes = computed(() => Object.values(database.value?.indexes ?? {}))
-const bytes = value => new TextEncoder().encode(String(value)).length
-const valueBytes = value => value?.redisKind === 'bytes' ? value.base64.length / 4 * 3 - (value.base64.endsWith('==') ? 2 : value.base64.endsWith('=') ? 1 : 0) : bytes(value)
-// The bounded fixture accounting matches the storage contract, not a Redis allocator.
-const usedBytes = computed(() => keys.value.reduce((total, [name, entry]) => total + 64 + bytes(name)
-  + (entry.type === 'hash' ? Object.entries(entry.value).reduce((sum, [field, value]) => sum + 16 + bytes(field) + valueBytes(value), 0) : valueBytes(entry.value)), 0)
-  + indexes.value.reduce((total, index) => total + 256 + 32 * keys.value.filter(([name, entry]) => entry.type === 'hash' && name.startsWith(index.prefix)).length, 0))
+const usedBytes = computed(() => redisMemory(database.value, nowMs.value).usedBytes)
 const sections = [{ items: [{ id: 'overview', label: 'Overview' }] }, { label: 'Data', items: [{ id: 'keys', label: 'Keys' }, { id: 'indexes', label: 'Vector indexes' }] }]
 const commands = [{ label: 'Delete', icon: 'delete', readOnlyHint: 'Blades are read-only in this Lab. Use the Cloud Shell: az redisenterprise delete --help' }, { label: 'Refresh', icon: 'arrow-sync' }]
 const essentials = computed(() => [
