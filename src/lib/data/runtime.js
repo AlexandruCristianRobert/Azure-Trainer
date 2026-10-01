@@ -337,7 +337,9 @@ function evalPgCall(expr, values, locals, ctx) {
       const rows = cursor.rowFactory === 'dict_row'
         ? rowValues.map(row => Object.fromEntries((result.columns ?? []).map((column, index) => [column.name, row[index]])))
         : rowValues
-      const record = { call, sql: values.query, plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode, charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }
+      const record = { call, sql: values.query, plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
+        poolLifetime: conn.pool?.lifetime ?? null, poolMaxSize: conn.pool?.max_size ?? null,
+        charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }
       conn.pendingLatency = 0; ctx.calls.push(record)
       if (result.error) throw new StopExecution(result.error)
       cursor.rows = rows

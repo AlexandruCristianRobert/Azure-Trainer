@@ -1,6 +1,6 @@
 import { applyRunAction } from '../../../lib/labEngine/actions.js'
 import { PG_GROUP, PG_CLUSTER, PG_REGISTRY, PG_NAMESPACE, PG_CLUSTER_ID, PG_DATA_TARGET,
-  PG_SERVER_COMMAND, PG_ALLOW_VECTOR_COMMAND, PG_DATABASE_COMMAND, PG_SCHEMA_SQL, pgSqlCommand } from './postgres-helpers.js'
+  PG_SERVER_COMMAND, PG_ALLOW_VECTOR_COMMAND, PG_DATABASE_COMMAND, PG_SCHEMA_SQL, PG_HNSW_SQL, pgSqlCommand } from './postgres-helpers.js'
 
 // Common state recipes import no sibling Lab. Later Labs can reproduce prior
 // schema/corpus state while building only their own starter/faulty sources.
@@ -66,5 +66,15 @@ export function seedPostgresVectorGuided(run) {
     `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name maintenance_work_mem --value 1024`,
     pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_product_version ON documents (product, version)"'),
     pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_metadata ON documents USING gin (metadata jsonb_path_ops)"'),
+  ] })
+}
+
+export function seedPostgresPoolingGuided(run) {
+  return seedPostgresApp(run, { imageTag: 'pg-pooling-seed', commands: [
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name maintenance_work_mem --value 65536`,
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name max_connections --value 50`,
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_product_version ON documents (product, version)"'),
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_metadata ON documents USING gin (metadata jsonb_path_ops)"'),
+    pgSqlCommand(`-c "${PG_HNSW_SQL}"`),
   ] })
 }

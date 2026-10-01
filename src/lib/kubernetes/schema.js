@@ -121,10 +121,10 @@ function validateContainer(container, root, configuration, probes, resources, da
   return null
 }
 
-function validateDeployment(value, root, configuration, probes, resources, rollouts, dataCosmos) {
+function validateDeployment(value, root, configuration, probes, resources, rollouts, dataCosmos, dataPostgres) {
   let issue = allowed(value.spec, new Set(['replicas', 'selector', 'template', ...(rollouts ? ['strategy', 'minReadySeconds', 'progressDeadlineSeconds', 'revisionHistoryLimit'] : [])]), root)
   if (issue) return issue
-  if ((!resources && value.spec?.replicas === undefined) || (value.spec?.replicas !== undefined && (!Number.isInteger(value.spec.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources ? 6 : 3)))) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
+  if ((!resources && value.spec?.replicas === undefined) || (value.spec?.replicas !== undefined && (!Number.isInteger(value.spec.replicas) || value.spec.replicas < 1 || value.spec.replicas > (resources || dataPostgres ? 6 : 3)))) return diag('INVALID_REPLICAS', value.spec?.replicas, root)
   issue = allowed(value.spec.selector, new Set(['matchLabels']), root)
   if (issue || !validLabels(value.spec.selector?.matchLabels) || !Object.keys(value.spec.selector.matchLabels).length) return issue ?? diag('INVALID_LABELS', 'matchLabels', root)
   issue = allowed(value.spec.template, new Set(['metadata', 'spec']), root)
@@ -229,7 +229,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   } else if (input.kind === 'ConfigMap') { if (input.spec !== undefined || input.type !== undefined || input.stringData !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateConfigMap(input, root) }
   else if (input.kind === 'Secret') { if (input.spec !== undefined) issue = diag('UNSUPPORTED_FIELD', 'spec', root); else issue = validateSecret(input, root) }
   else if (!object(input.spec)) return { object: null, diagnostics: [diag('INVALID_FIELD', 'spec', root)] }
-  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts, dataCosmos)
+  else if (input.kind === 'Deployment') issue = validateDeployment(input, root, configuration, probes, resources, rollouts, dataCosmos, capabilities.dataPostgres === true)
   else if (input.kind === 'HorizontalPodAutoscaler') {
     if (rollouts && capabilities.aksCapstoneHpa !== true) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root, 'HPA creation requires the active capstone resilience checkpoint and a settled deployment; release Labs use fixed replicas.')] }
     if (!resources) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }

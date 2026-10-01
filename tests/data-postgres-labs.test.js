@@ -42,4 +42,27 @@ describe('PostgreSQL data Labs', () => {
     expect(proof('answer').values[0]).toEqual({ answer: 'Contoso Backup v1 snapshots are retained for 35 days by default.', sources: [1, 2] })
     expect(proof('answer').values[1]).toEqual({ answer: "I couldn't find that in the documentation.", sources: [] })
   })
+  it('Lab 7 observes naive exhaustion then completes deployed pooling and port 6432 load through ordered Solutions', () => {
+    // Missing current pool/DSN grading, fabricated load success or baseline
+    // invalidation after a pool repair must prevent completion.
+    const lab = labById('data-postgres-pooling-guided')
+    expect(lab).toBeDefined()
+    const fresh = createBehavioralRun(lab, { attemptId: 'postgres-pooling-fresh' })
+    expect(evaluateLab(lab, fresh).tasks.filter(task => ['naive-load', 'exhaust', 'app-pool', 'pooled-load', 'bouncer-load'].includes(task.id) && task.done)).toEqual([])
+    expect(fresh.sandbox.postgresServers[0].skuName).toBe('Standard_D2ds_v5')
+    expect(fresh.sandbox.postgresServers[0].parameters.max_connections).toBe('50')
+    expect(fresh.runtime.kubernetes.clusters[lab.scenarios['load-600rps-naive'].target.clusterId].resources['Deployment/assistant/assistant-api'].spec.replicas).toBe(2)
+    const { run, state } = replaySolution(lab)
+    expect(state.tasks.filter(task => !task.done).map(task => task.id)).toEqual([])
+    expect(state.isComplete).toBe(true)
+    const proof = id => run.evidence.experimentsById[run.evidence.currentEvidenceByTask[id]].measurements
+    expect(proof('naive-load')).toMatchObject({ mode: 'per-request', replicas: 2, failed: 0, p95Ms: 29 })
+    expect(proof('exhaust')).toMatchObject({ mode: 'per-request', replicas: 6, status: 503 })
+    expect(proof('exhaust').errors).toContain('FATAL: sorry, too many clients already')
+    expect(proof('exhaust').failed).toBeGreaterThan(0)
+    expect(proof('pooled-load')).toMatchObject({ mode: 'pgbouncer', replicas: 6, poolMaxSize: 5, failed: 0, p95Ms: 5 })
+    expect(proof('bouncer-load')).toMatchObject({ mode: 'pgbouncer', replicas: 6, poolMaxSize: 5, failed: 0, peakServerConnections: 20 })
+    expect(proof('bouncer-load').calls.filter(call => typeof call.sql === 'string').every(call => call.poolLifetime === 'module' && call.poolMaxSize === 5)).toBe(true)
+    expect(proof('bouncer-load').calls.filter(call => call.plan)[0].rows.map(row => row.id)).toEqual([1, 2])
+  })
 })

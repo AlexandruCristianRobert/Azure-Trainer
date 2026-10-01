@@ -64,7 +64,7 @@ export function schedulePendingPods(input, clusterId, lab) {
 export function setDeploymentReplicas(input, target, replicas, { cause, controllerUid = null, atMs = null, lab = null } = {}) {
   const run = clone(input); const state = run.runtime?.kubernetes?.clusters?.[target.clusterId]
   const deployment = state?.resources?.[kubeObjectKey('Deployment', target.namespace, target.deploymentName)]
-  const maximum = state?.resourcesRuntime?.version === 1 ? 6 : 3
+  const maximum = state?.resourcesRuntime?.version === 1 || lab?.capabilities?.dataPostgres === true ? 6 : 3
   if (!deployment || !Number.isInteger(replicas) || replicas < 1 || replicas > maximum || !['manual', 'apply', 'hpa'].includes(cause)) {
     return { run: input, diagnostics: [{ code: 'INVALID_REPLICA_SCALE', message: 'Replica scaling requires an existing Deployment and a value from 1 through 6.' }] }
   }

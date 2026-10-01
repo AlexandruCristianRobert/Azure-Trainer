@@ -106,8 +106,10 @@ export function pgDependencies(target, fields) {
 export function pgRequestScenario(steps) {
   return Object.freeze({ kind: 'data-request', version: 1, target: PG_REQUEST_TARGET, steps: Object.freeze(steps.map(step => Object.freeze({ route: step.route, args: Object.freeze([...step.args]) }))) })
 }
-export function pgLoadScenario({ route = 'GET /retrieve', args, requestsPerSecond = 500, seconds = 30 }) {
-  return Object.freeze({ kind: 'data-load', version: 1, target: PG_REQUEST_TARGET, route, args: Object.freeze([...args]), replicas: 'deployment', requestsPerSecond, seconds })
+export function pgLoadScenario({ route = 'GET /retrieve', args, requestsPerSecond = 500, seconds = 30, expectedError }) {
+  if (expectedError !== undefined && expectedError !== 'too many clients already') throw new Error('Unsupported PostgreSQL load expectation.')
+  return Object.freeze({ kind: 'data-load', version: 1, target: PG_REQUEST_TARGET, route, args: Object.freeze([...args]), replicas: 'deployment', requestsPerSecond, seconds,
+    ...(expectedError === undefined ? {} : { expectedError }) })
 }
 export function pgDeployedFunctionsCurrent(context, names, target = PG_TARGET, deployment = 'assistant-api') {
   const captured = pgDeployedArtifact(context, target, deployment)?.appSpec

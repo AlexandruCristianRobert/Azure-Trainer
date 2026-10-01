@@ -51,6 +51,7 @@ import { cosmosTroubleshootingLab } from './data-journey/cosmos-troubleshooting.
 import { cosmosIndependentLab } from './data-journey/cosmos-independent.lab.js'
 import { postgresConnectGuidedLab } from './data-journey/postgres-connect-guided.lab.js'
 import { postgresVectorGuidedLab } from './data-journey/postgres-vector-guided.lab.js'
+import { postgresPoolingGuidedLab } from './data-journey/postgres-pooling-guided.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -107,6 +108,7 @@ export const LABS = [
   cosmosIndependentLab,
   postgresConnectGuidedLab,
   postgresVectorGuidedLab,
+  postgresPoolingGuidedLab,
 ]
 
 export function labById(id) {
