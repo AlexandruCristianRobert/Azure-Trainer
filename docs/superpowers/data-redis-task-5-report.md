@@ -83,3 +83,51 @@ Created redis.js application template, redis-helpers.js, redis-seeds.js, redis-a
 Self-reviewed exact route arity, merged helper protection, real build hashes/snapshots, Service selection, source revision isolation, reset ownership, JSON evidence, enum boundaries, aggregate-before-display-cap logic, semantic raw-payload matching, unknown age behavior and atomic timestamp handling. Confirmed parser/build accepts unfinished starters and complete canonical solutions. Existing Docker/build infrastructure supplies the needed install/build capture, so no unnecessary changes there. No broad shared-runtime/recognizer refactor.
 
 Limits: the small disposable sequence exercises cache-aside/invalidation and source freshness, not a second semantic/memory integration matrix or every seed combination. Semantic functions are parsed/built and rely on Task 4's real binary-payload SDK verification; full semantic/TTL/memory/scoped Lab walkthroughs remain Tasks 6–8. UI was compiled, not browser-tested per the prescribed scope. No independent review was spawned; controller review remains pending. Existing bundle-size advisory remains. No unresolved implementation blocker found.
+
+## Review fix round 1 — read-time write age
+
+Review of `9a79a87` identified that an accepted GET/search used only the pre-request key timestamp. A supported SET/HSET before the read therefore inherited an old timestamp or incorrectly reported unknown age for a new key. Corrected only `src/lib/kubernetes/redis-actions.js`; no store, SDK, search, schema or template modification.
+
+`acceptedReads` now walks the complete request operation trace in order. Successful SET (`OK`) and HSET (nonnegative integer result) replace the working key timestamp with the actual request simulation time; errors never update it. DEL and successful nonpositive EXPIRE remove the timestamp. Matching GET and FT.SEARCH candidates capture the timestamp at that specific read/search. A later write cannot change a previously observed age. Genuine old-save timestamps remain unknown until an actual successful write precedes the accepted read. Aggregate-before-display-cap and truncated-frame rejection remain unchanged. This section supersedes the report's original description of always using the pre-request timestamp.
+
+Extended the existing ignored disposable program, with no new permanent tests/files. It builds/applies a literal supported cached_answer that SETs an encoded answer and then returns decoded GET, first for a new key and then after a five-second advance for an existing key. A second literal function GETs before SET to verify that post-read writes do not refresh age; removing an optional persisted timestamp checks old-save unknown age. All use the real build/Deployment/action path. Existing sequence and no-SET negative remain intact.
+
+### RED
+
+`node .superpowers/sdd/2026-10-01-data-labs-10-12/task-5-check.mjs`, exit 1, tool wall **1.4595632s**. The added regression failed against the reviewed implementation after successful deployments:
+
+```text
+Read-order age observations: [{"ageKnown":false,"maxAgeSeconds":null},{"ageKnown":true,"maxAgeSeconds":5},{"ageKnown":true,"maxAgeSeconds":5},{"ageKnown":false,"maxAgeSeconds":null}]
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal
+new SET then GET: actual false/null; expected true/0
+existing SET then GET: actual true/5; expected true/0
+GET then SET: true/5 (already correct)
+old-save GET then SET: false/null (already correct)
+```
+
+### GREEN and single build
+
+Same disposable command, exit 0, tool wall **1.3696043s**, program body **1158ms**:
+
+```text
+Read-order age observations: [{"ageKnown":true,"maxAgeSeconds":0},{"ageKnown":true,"maxAgeSeconds":0},{"ageKnown":true,"maxAgeSeconds":5},{"ageKnown":false,"maxAgeSeconds":null}]
+PASS: deployed sequence and no-SET negative; write-before-read new/existing age0; read-before-write age5; unknown old-save preserved. 1158ms
+```
+
+Single `npm.cmd run build`, exit 0, stopwatch **5.0682894s**, tool wall **5.1073101s**:
+
+```text
+vite v6.4.3 building for production...
+✓ 550 modules transformed.
+dist/index.html                       0.88 kB │ gzip: 0.46 kB
+dist/assets/LabPage-BM7-q5me.css     10.22 kB │ gzip: 1.90 kB
+dist/assets/index-A8FG7ZL2.css       43.07 kB │ gzip: 8.25 kB
+dist/assets/vendor-Cot1qApE.js       98.85 kB │ gzip: 38.44 kB
+dist/assets/LabPage-sLzDE3KI.js     308.03 kB │ gzip: 79.49 kB
+dist/assets/index-DCoFggKo.js     2,370.80 kB │ gzip: 640.99 kB
+(!) Some chunks are larger than 500 kB after minification.
+✓ built in 4.32s
+Verification elapsed: 5.0682894s; exit: 0
+```
+
+Fix-round test/build tool wall total **7.9364776s**. Unchanged store/SDK/search tests were not rerun. No full/AKS/ACA/browser tests, installs, network or real cloud/Python execution. No reviewer or subagent dispatch. Existing bundle warning remains deferred. Self-review confirmed timestamps are request-local internal Map values, never added to public trace or persisted separately; successful HSET shares the same temporal handling as SET, and FT.SEARCH captures candidate timestamps in search order. Literal regression covers GET operation order; semantic integration remains the downstream Lab verification gate already scheduled by the controller. Author Codex; only workload module and this report committed, excluding controller ledger and scratch program.

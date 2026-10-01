@@ -49,6 +49,25 @@ function acceptedSearch(call, body) {
   }
   return candidates
 }
+function acceptedReads(calls, body, beforeKeys, nowMs) {
+  const writtenAt = new Map(Object.entries(beforeKeys).map(([key, entry]) => [key, entry.writtenAtMs]))
+  const gets = []
+  const searches = []
+  for (const call of calls) {
+    if (call.error) continue
+    // Capture age at the read, not from the request's initial or final state.
+    // A later write cannot retroactively refresh an already returned payload.
+    if (call.command === 'SET' && call.value === 'OK' || call.command === 'HSET' && Number.isInteger(call.value) && call.value >= 0) writtenAt.set(call.args[0], nowMs)
+    else if (call.command === 'DEL') for (const key of call.args) writtenAt.delete(key)
+    else if (call.command === 'EXPIRE' && call.value === 1 && call.args[1] <= 0) writtenAt.delete(call.args[0])
+    else if (call.command === 'GET' && call.value !== null && decodePayload(call.value) !== undefined && same(decodePayload(call.value), body)) {
+      gets.push({ key: call.args[0], writtenAtMs: writtenAt.get(call.args[0]) })
+    } else if (call.command === 'FT.SEARCH') {
+      searches.push(...acceptedSearch(call, body).map(key => ({ key, writtenAtMs: writtenAt.get(key) })))
+    }
+  }
+  return { gets, searches }
+}
 const invalid = (run, message) => ({ run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message }] })
 export function applyRedisAction(run, action, lab) {
   const manifest = getProjectManifest(run.project.manifestId)
@@ -103,11 +122,10 @@ export function applyRedisAction(run, action, lab) {
       const [question, product, version, language] = step.args
       const expected = redisSourceAnswer({ product, version, language }, question, beforeDatabase?.sourceRevisions?.[product] ?? 1)
       request.expectedAnswer = expected !== null && result.status === 200 && same(result.value, expected)
-      const getKeys = complete && !frame.originCalls ? calls.filter(call => call.command === 'GET' && !call.error && call.value !== null
-        && decodePayload(call.value) !== undefined && same(decodePayload(call.value), result.value)).map(call => call.args[0]) : []
-      const searchKeys = complete && !frame.originCalls && !getKeys.length ? calls.flatMap(call => acceptedSearch(call, result.value)) : []
-      request.responseHit = result.status === 200 && getKeys.length > 0
-      request.semanticHit = result.status === 200 && searchKeys.length > 0
+      const reads = complete && !frame.originCalls ? acceptedReads(calls, result.value, beforeKeys, nowMs) : { gets: [], searches: [] }
+      const hits = reads.gets.length ? reads.gets : reads.searches
+      request.responseHit = result.status === 200 && reads.gets.length > 0
+      request.semanticHit = result.status === 200 && !reads.gets.length && reads.searches.length > 0
       const sourceMatch = complete && frame.sourceCalls.some(call => call.result !== null && same(call.result, result.value) && same(call.args, step.args.slice(0, 4)))
       request.provenance = complete && result.status === 200 && (request.responseHit || request.semanticHit || sourceMatch)
       request.expectedAnswer &&= request.provenance
@@ -116,8 +134,7 @@ export function applyRedisAction(run, action, lab) {
       measurements.answersCorrect &&= request.expectedAnswer
       if (result.value?.scope && !same(result.value.scope, { product, version, language })) measurements.crossFilterAnswers++
       if (expected && result.value?.sourceRevision !== undefined && result.value.sourceRevision < expected.sourceRevision) measurements.staleAnswers++
-      for (const key of [...getKeys, ...searchKeys]) {
-        const writtenAtMs = beforeKeys[key]?.writtenAtMs
+      for (const { writtenAtMs } of hits) {
         if (!Number.isFinite(writtenAtMs) || writtenAtMs > nowMs) measurements.ageKnown = false
         else measurements.maxAgeSeconds = Math.max(measurements.maxAgeSeconds, (nowMs - writtenAtMs) / 1000)
       }
