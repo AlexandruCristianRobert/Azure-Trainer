@@ -1,7 +1,7 @@
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { parsePythonProject } from '../../../lib/project/python.js'
-import { POSTGRES_MANIFEST, POSTGRES_DSN, POSTGRES_SOLUTION_FILES, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
+import { POSTGRES_MANIFEST, POSTGRES_DSN, POSTGRES_SOLUTION_FILES, POSTGRES_SOLUTION_FUNCTIONS, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
 
 export const PG_GROUP = 'rg-assistant'
 export const PG_SERVER = 'pg-assistant'
@@ -26,6 +26,28 @@ export function pgConnectAppSource(current = POSTGRES_STARTER_FILES['app.py']) {
   const marker = 'def retrieve_passages('
   return POSTGRES_SOLUTION_FILES['app.py'].slice(0, POSTGRES_SOLUTION_FILES['app.py'].indexOf(marker))
     + current.slice(current.indexOf(marker))
+}
+export const PG_HNSW_SQL = 'CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)'
+// Shared complete source recipe for later independent seeds. No Lab imports.
+// Passing rag=false preserves context/answer starters during the ANN lessons.
+export function pgVectorAppSource({ efSearch = 50, iterativeScan = 'relaxed_order', rag = true } = {}) {
+  if (!Number.isInteger(efSearch) || efSearch < 1 || !['off', 'strict_order', 'relaxed_order'].includes(iterativeScan)) throw new Error('Invalid PostgreSQL vector recipe settings.')
+  const current = pgConnectAppSource()
+  const prefix = current.slice(0, current.indexOf('def retrieve_passages('))
+  const tail = rag ? POSTGRES_SOLUTION_FUNCTIONS.build_context + '\n\n' + POSTGRES_SOLUTION_FUNCTIONS.answer
+    : current.slice(current.indexOf('def build_context('))
+  return prefix + `def retrieve_passages(question, product, version, language):
+    embedding = embed(question)
+    with connect() as conn:
+        register_vector(conn)
+        conn.execute("SET hnsw.ef_search = ${efSearch}")
+        conn.execute("SET hnsw.iterative_scan = ${iterativeScan}")
+        if product is None:
+            return conn.execute("SELECT c.id, c.document_id, c.content, d.product, d.version, d.language, d.metadata, c.embedding <=> %s::vector AS distance FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.embedding <=> %s::vector < 0.2 ORDER BY c.embedding <=> %s::vector LIMIT 2", (embedding, embedding, embedding)).fetchall()
+        return conn.execute("SELECT c.id, c.document_id, c.content, d.product, d.version, d.language, d.metadata, c.embedding <=> %s::vector AS distance FROM chunks c JOIN documents d ON c.document_id = d.id WHERE d.product = %s AND d.version = %s AND d.language = %s AND c.embedding <=> %s::vector < 0.2 ORDER BY c.embedding <=> %s::vector LIMIT 2", (embedding, product, version, language, embedding, embedding)).fetchall()
+
+
+` + tail
 }
 
 // Shared Service endpoint selection for requests, load and dependencies. Read

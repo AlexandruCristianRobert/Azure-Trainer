@@ -59,3 +59,12 @@ export function seedPostgresApp(run, { imageTag = 'seed', commands = [] } = {}) 
     command('kubectl apply -f k8s/deployment.yaml'),
   ]))
 }
+
+export function seedPostgresVectorGuided(run) {
+  return seedPostgresApp(run, { imageTag: 'pg-vector-seed', commands: [
+    `az postgres flexible-server update -g ${PG_GROUP} -n pg-assistant --tier Burstable --sku-name Standard_B1ms`,
+    `az postgres flexible-server parameter set -g ${PG_GROUP} --server-name pg-assistant --name maintenance_work_mem --value 1024`,
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_product_version ON documents (product, version)"'),
+    pgSqlCommand('-c "CREATE INDEX IF NOT EXISTS docs_metadata ON documents USING gin (metadata jsonb_path_ops)"'),
+  ] })
+}
