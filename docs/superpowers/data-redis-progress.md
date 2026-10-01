@@ -59,7 +59,7 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 - [x] Task3 search/redis-cli
 - [x] Task4 SDK/runtime/helpers
 - [x] Task5 template/workload/evidence
-- [ ] Task6 Lab10 Guided
+- [x] Task6 Lab10 Guided
 - [ ] Task7 Lab11 Troubleshooting
 - [ ] Task8 Lab12 Independent/handoff
 
@@ -77,6 +77,9 @@ Task 5: fix round1/5 (1 addressed,0 open Important;9a79a87..f4a2c40), approved /
 Task 5: minor (deferred): age Map keys retain numeric argument types while Redis store normalizes to string; SET123/GET"123" or later GET123 can report unknown age. redis-actions.js:53,60,64; final review must triage. Authored lab keys are strings.
 Task 5: complete (5c4aca5..f4a2c40, spec/quality approved after1fix round). Disposable deployed sequence +negative, storage4/4 +build ~14.122s; fixdisposable/build7.936s. Lab semantic/memory/scoped/freshnessdep gates remain6–8.
 Task 6: in progress. Base recorded after controller ledger commit.
+Task 6: complete (d5f3e35..5f301fe, spec/quality approved /root/review_redis_guided; zero blocking findings). One full ordered10/10 walkthrough, semantic-deletion sabotage, localized freshness corrections, onebuild ~29s. Owning guided seed/order/TTL/freshness/semantic/scope/currentdeployed/dependency gates resolved. Browser/existingjourneytests excluded; final static review remains.
+Task 7: in progress. Base recorded after controller ledger commit.
+Ruling: Task7's canonical troubleshooting seed must supply RediSearch and the initial DIM8 index, reserving schema faults for its explicit search stage; it may adjust seedRedisTroubleshooting accordingly — the temporary Task5 module-omission recipe would add an unplanned prerequisite and block the specified first stale-semantic incident — cost: omission-of-module is taught in Guided exam notes/creation checks, not a fifth troubleshooting incident.
 Ruling: Task5 may add optional writtenAtMs to Redis key validation and stamp successful SET/HSET using simulation time, preserving it on reads/EXPIRE and restoring it on rejected writes; absent old-save timestamps remain accepted but unknown for age proofs — lastAccessMs changes on reads and cannot establish actual cache age across scenarios — cost: narrow shared storage/model changes and one focused store-file check, older keys need reset/repopulation before age proof.
 Ruling: Task4 fix wave may modify redis-search.js to preserve native binary payloads (not embeddings) through FT.SEARCH and exercise an SDK-written semantic hash in its existing SDK case; HGETALL byte-key access must be represented faithfully or explicitly unsupported rather than teaching string lookup with decode_responses=False — review exposed a load-bearing native protocol boundary omitted by the hand-seeded test — cost: one narrow upstream search edit and a smaller supported mapping-access subset if rejection is used.
 Ruling: Redis catalog accepts only host/port positionally, marks password/ssl/decode_responses/protocol and hset mapping keyword-only, and clients explicitly request protocol2 — actual redis-py third constructor positional is db and native RESP2 helper shape must stay stable — cost: narrower supported call forms plus one explicit constructor option; source https://redis.readthedocs.io/en/stable/connections.html.
