@@ -30,7 +30,7 @@ Shared engine: `src/lib/data/` (query evaluator, RU cost model, SDK catalog, Pyt
 
 1. Walk through Labs 1–4 once in `npm run dev`.
 2. Decide whether to merge `data-journey` into `main`.
-3. Next batch: write the plan for Labs 5–9 (PostgreSQL) from the spec (superpowers:writing-plans), then execute it with subagent-driven development on Sonnet. Reuse the lessons in "Design rules learned" below.
+3. Next batch: the Labs 5–9 (PostgreSQL) plan is written: `docs/superpowers/plans/2026-10-01-data-labs-05-09.md` (12 tasks: corpus, flexible server model + az + Blade, SQL parser, engine + psql, planner/pool model, psycopg SDK, template + pipeline, Labs 5–9). Execute it with superpowers:subagent-driven-development on Sonnet subagents.
 
 ## Design rules learned (carry into Labs 5–13)
 
@@ -58,6 +58,8 @@ The full list is in the ledger. The ones that matter most:
 10. **Change log growth:** the unbounded `changeLog` growth is deferred.
 
 ## Log
+
+- 2026-10-01 — Labs 5–9 (PostgreSQL) plan written; branch merged into main.
 
 - 2026-10-01 00:14–02:12 — design docs, plan, Tasks 1–7 (engine) implemented, reviewed and pushed; stopped at the 2:30 deadline rule.
 - 2026-10-01 08:54–11:02 — Tasks 8–11 (Labs 1–4): each implemented, reviewed and fixed (one fix round each for Labs 1, 3 and 4), then pushed.
