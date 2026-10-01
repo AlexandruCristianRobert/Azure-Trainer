@@ -1,9 +1,10 @@
 import { POSTGRES_MANIFEST, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
 import { parsePythonProject } from '../../../lib/project/python.js'
 import { projectSourceHash, selectBuildFiles } from '../../../lib/project/build.js'
-import { parsePgSql } from '../../../lib/data/pg-sql.js'
+import { parsePgSql, bindParams } from '../../../lib/data/pg-sql.js'
+import { runDataFunction } from '../../../lib/data/runtime.js'
 import { seedPostgresConnectGuided } from './postgres-seeds.js'
-import { PG_GROUP, PG_SERVER, PG_DATABASE, PG_REGISTRY, PG_TARGET,
+import { PG_GROUP, PG_SERVER, PG_DATABASE, PG_REGISTRY, PG_TARGET, PG_DATA_TARGET,
   PG_SERVER_COMMAND, PG_ALLOW_VECTOR_COMMAND, PG_DATABASE_COMMAND, PG_SCHEMA_SQL,
   PG_ESTIMATE_LABEL, pgSqlCommand, pgConnectAppSource, pgTask, pgRequestScenario,
   pgDeployedArtifact, pgDeployedFunctionsCurrent } from './postgres-helpers.js'
@@ -27,20 +28,40 @@ const database = context => server(context)?.databases.find(item => item.name ==
 const table = (context, name) => database(context)?.tables.find(item => item.name === name)
 const parsed = context => parsePythonProject(context.project.savedFiles, POSTGRES_MANIFEST)
 
-function callsIn(value, found = []) {
-  if (!value || typeof value !== 'object') return found
-  if (value.kind === 'call-sdk' && ['postgres.connection.execute', 'postgres.cursor.execute'].includes(value.call)) found.push(value)
-  for (const child of Object.values(value)) if (child && typeof child === 'object') callsIn(child, found)
-  return found
+function hasFormatting(value, functions, visited = new Set()) {
+  if (!value || typeof value !== 'object') return false
+  if (value.kind === 'fstring') return true
+  if (value.kind === 'call-local' && !visited.has(value.name)) {
+    visited.add(value.name)
+    if (hasFormatting(functions[value.name]?.body, functions, visited)) return true
+  }
+  return Object.values(value).some(child => hasFormatting(child, functions, visited))
 }
 function safeQueries(context) {
   const current = parsed(context)
   if (current.diagnostics.length) return false
-  return ['get_document', 'search_by_metadata'].every(name => {
-    const calls = callsIn(current.appSpec?.data?.functions?.[name]?.body)
-    return calls.length > 0 && calls.every(call => call.args?.query?.kind === 'literal'
-      && typeof call.args.query.value === 'string' && call.args.query.value.includes('%s')
-      && call.args.params && !parsePgSql(call.args.query.value).error)
+  const functions = current.appSpec.data.functions
+  return [
+    ['get_document', [1]],
+    ['search_by_metadata', ['contoso-backup', 'v2', null]],
+    ['search_by_metadata', ['contoso-backup', 'v1', { product: 'contoso-backup', version: 'v1', language: 'en' }]],
+  ].every(([functionName, args]) => {
+    if (hasFormatting(functions[functionName]?.body, functions)) return false
+    // Interpret supported ops only, against a discarded sandbox copy. The
+    // shared runtime/SQL binder validates actual separate params, including
+    // local SQL/tuple variables and Jsonb, without executing learner Python.
+    const result = runDataFunction({ appSpec: current.appSpec,
+      sandbox: JSON.parse(JSON.stringify(context.sandbox)), dataTarget: PG_DATA_TARGET,
+      functionName, args, nowMs: context.runtime.simTimeMs })
+    if (result.status !== 200) return false
+    const calls = result.calls.filter(call => typeof call.sql === 'string')
+    return calls.length > 0 && calls.every(call => {
+      const sql = parsePgSql(call.sql)
+      // An already-successful bound call must still contain real AST params;
+      // quoted '%s' or comment text alone is not a parameter placeholder.
+      return !call.error && !sql.error && sql.statements.length > 0
+        && sql.statements.every(statement => !!bindParams(statement, undefined).error)
+    })
   })
 }
 function learnerBuildCurrent(context) {
