@@ -17,6 +17,7 @@ import { identityGroup } from './identity.js'
 import { cognitiveservicesGroup } from './cognitiveservices.js'
 import { deploymentGroup } from './deployment.js'
 import { aksGroup } from './aks.js'
+import { postgresGroup } from './postgres.js'
 
 let AZ_TREE = null
 
@@ -36,6 +37,7 @@ export function buildTree() {
     identity: identityGroup,
     keyvault: keyvaultGroup,
     login: loginCommand,
+    postgres: postgresGroup,
     servicebus: servicebusGroup,
     storage: storageGroup,
     functionapp: functionappGroup,

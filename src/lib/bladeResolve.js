@@ -75,6 +75,10 @@ export function resolveBlade(blade, sandbox) {
     if (findCosmosAccount(sandbox, blade.resourceGroup, blade.name)) return { ...blade }
     return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
   }
+  if (blade.kind === 'postgres-server') {
+    if (hasResource(sandbox.postgresServers, blade.resourceGroup, blade.name)) return { ...blade }
+    return resolveBlade({ kind: 'resource-group', name: blade.resourceGroup }, sandbox)
+  }
   if (blade.kind === 'cosmos-database') {
     if (findCosmosDatabase(sandbox, blade.resourceGroup, blade.account, blade.name)) return { ...blade }
     return resolveBlade({ kind: 'cosmos-account', resourceGroup: blade.resourceGroup, name: blade.account }, sandbox)

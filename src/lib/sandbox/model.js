@@ -7,8 +7,18 @@ export const TENANT_ID = '3c1f5a8e-9d2b-4f6a-8e7c-1b2d3e4f5a6b'
 export const USER_NAME = 'sam.learner@sandbox.onmicrosoft.com'
 export const USER_OBJECT_ID = 'a37a00c7-d689-4b5d-a8c8-1d75f307d5ef'
 
+// Teaching approximations — not Azure sizing guarantees.
+export const POSTGRES_SKUS = {
+  Standard_B1ms: { tier: 'Burstable', vCores: 1, memoryGiB: 2, maxConnections: 50 },
+  Standard_B2s: { tier: 'Burstable', vCores: 2, memoryGiB: 4, maxConnections: 429 },
+  Standard_D2ds_v5: { tier: 'GeneralPurpose', vCores: 2, memoryGiB: 8, maxConnections: 859 },
+  Standard_D4ds_v5: { tier: 'GeneralPurpose', vCores: 4, memoryGiB: 16, maxConnections: 1718 },
+  Standard_E2ds_v5: { tier: 'MemoryOptimized', vCores: 2, memoryGiB: 16, maxConnections: 1718 },
+  Standard_E4ds_v5: { tier: 'MemoryOptimized', vCores: 4, memoryGiB: 32, maxConnections: 3437 },
+}
+
 export function createSandbox() {
-  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
+  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], postgresServers: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
 }
 
 function object(value) {
@@ -48,6 +58,27 @@ function validCosmosAccount(account) {
     && account.capabilities.every((capability) => typeof capability === 'string')
     && Array.isArray(account.databases)
     && account.databases.every((database) => object(database) && typeof database.name === 'string' && Array.isArray(database.containers) && database.containers.every(validCosmosContainer))
+}
+
+export function validPostgresServer(server) {
+  const sku = POSTGRES_SKUS[server?.skuName]
+  const positive = value => typeof value === 'string' && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0
+  return object(server) && typeof server.name === 'string' && /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/.test(server.name)
+    && typeof server.resourceGroup === 'string' && typeof server.location === 'string' && server.location === normalizeLocation(server.location)
+    && server.version === '16' && !!sku && server.tier === sku.tier && server.vCores === sku.vCores && server.memoryGiB === sku.memoryGiB
+    && Number.isInteger(server.storageSizeGb) && server.storageSizeGb >= 32 && server.storageSizeGb <= 32768
+    && typeof server.adminUser === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(server.adminUser) && iso(server.createdAt)
+    && server.fullyQualifiedDomainName === `${server.name}.postgres.database.azure.com`
+    && object(server.parameters) && typeof server.parameters['azure.extensions'] === 'string'
+    && positive(server.parameters.maintenance_work_mem) && Number(server.parameters.maintenance_work_mem) <= server.memoryGiB * 1024 * 1024 / 4
+    && positive(server.parameters.max_connections) && positive(server.parameters.shared_buffers)
+    && positive(server.parameters['pgbouncer.default_pool_size']) && ['true', 'false'].includes(server.parameters['pgbouncer.enabled'])
+    && !(server.tier === 'Burstable' && server.parameters['pgbouncer.enabled'] === 'true')
+    && Array.isArray(server.parameterOverrides) && server.parameterOverrides.every(name => typeof name === 'string' && Object.hasOwn(server.parameters, name))
+    && Array.isArray(server.databases) && server.databases.every(database => object(database) && typeof database.name === 'string'
+      && Array.isArray(database.extensions) && database.extensions.every(extension => typeof extension === 'string')
+      && Array.isArray(database.tables) && database.tables.every(table => object(table) && typeof table.name === 'string')
+      && Array.isArray(database.indexes) && database.indexes.every(index => object(index) && typeof index.name === 'string') && object(database.settings))
 }
 
 function stringOrNull(value) {
@@ -313,6 +344,9 @@ export function isSandboxShape(sb) {
     && (!Object.hasOwn(sb, 'containerAppEnvironments') || Array.isArray(sb.containerAppEnvironments))
     && (!Object.hasOwn(sb, 'containerApps') || Array.isArray(sb.containerApps))
     && (!Object.hasOwn(sb, 'cosmosAccounts') || (Array.isArray(sb.cosmosAccounts) && sb.cosmosAccounts.every(validCosmosAccount)))
+    && (!Object.hasOwn(sb, 'postgresServers') || (Array.isArray(sb.postgresServers) && sb.postgresServers.every(server => validPostgresServer(server)
+      && sb.resourceGroups.some(group => same(group.name, server.resourceGroup)))
+      && new Set(sb.postgresServers.map(server => server.name)).size === sb.postgresServers.length))
     && (!Object.hasOwn(sb, 'keyVaults') || validKeyVaultCollection(sb.keyVaults))
     && validFoundryAccounts(sb)
     && (!Object.hasOwn(sb, 'eventGridTopics') || validEventGridTopics(sb.eventGridTopics, sb.resourceGroups))
@@ -334,6 +368,7 @@ export function normalizeSandbox(sb) {
   if (!Object.hasOwn(next, 'storageAccounts')) next.storageAccounts = []
   if (!Object.hasOwn(next, 'functionApps')) next.functionApps = []
   if (!Object.hasOwn(next, 'cosmosAccounts')) next.cosmosAccounts = []
+  if (!Object.hasOwn(next, 'postgresServers')) next.postgresServers = []
   if (!Object.hasOwn(next, 'keyVaults')) next.keyVaults = []
   if (!Object.hasOwn(next, 'eventGridTopics')) next.eventGridTopics = []
   if (!Object.hasOwn(next, 'aksClusters')) next.aksClusters = []

@@ -49,6 +49,7 @@ const essentials = computed(() => [
 ])
 const columns = [{ key: 'name', label: 'Name', grow: 1.6 }, { key: 'type', label: 'Type', grow: 1.2 }, { key: 'location', label: 'Location', grow: 1 }]
 const rows = computed(() => [
+  ...(run.sandbox.postgresServers ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Azure Database for PostgreSQL flexible server', location: displayLocation(resource.location), blade: { kind: 'postgres-server', resourceGroup: resource.resourceGroup, name: resource.name } })),
   ...(run.sandbox.namespaces ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Service Bus Namespace', location: displayLocation(resource.location), blade: { kind: 'servicebus-namespace', resourceGroup: resource.resourceGroup, name: resource.name, tab: 'queues' } })),
   ...(run.sandbox.containerAppEnvironments ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Container Apps Environment', location: displayLocation(resource.location), blade: { kind: 'containerapp-environment', resourceGroup: resource.resourceGroup, name: resource.name } })),
   ...(run.sandbox.containerApps ?? []).filter(inGroup).map((resource) => ({ name: resource.name, type: 'Container App', location: displayLocation(resource.location), blade: { kind: 'containerapp', resourceGroup: resource.resourceGroup, name: resource.name } })),

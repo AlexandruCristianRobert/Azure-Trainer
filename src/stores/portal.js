@@ -4,6 +4,8 @@ export const DEFAULT_BLADE = { kind: 'resource-groups' }
 
 const TYPE_LABEL = { resourceGroup: 'resource group', namespace: 'Service Bus namespace', queue: 'queue', topic: 'topic', subscription: 'subscription', rule: 'rule', containerAppEnvironment: 'Container Apps environment', containerApp: 'Container App', containerRegistry: 'container registry', managedIdentity: 'managed identity', aksCluster: 'Kubernetes service', registryRoleAssignment: 'registry role assignment', imageBuild: 'image build', cosmosAccount: 'Cosmos DB account', cosmosDatabase: 'Cosmos DB database', cosmosContainer: 'Cosmos DB container', keyVault: 'Key Vault', keyVaultRoleAssignment: 'Key Vault role assignment', keyVaultSecret: 'Key Vault secret', storageAccount: 'storage account', functionApp: 'Function App', eventGridTopic: 'Event Grid topic', eventGridSubscription: 'Event Grid subscription' }
 const VERB = { created: 'Created', updated: 'Updated', deleted: 'Deleted' }
+TYPE_LABEL.postgresServer = 'PostgreSQL flexible server'
+TYPE_LABEL.postgresDatabase = 'PostgreSQL database'
 const TITLE = { created: 'Deployment succeeded', updated: 'Update succeeded', deleted: 'Deleted' }
 
 export function notificationForEvent(e) {
@@ -12,6 +14,7 @@ export function notificationForEvent(e) {
   else if (e.resourceType === 'subscription') where = ` on ${e.topic}`
   else if (e.resourceType === 'rule') where = ` on ${e.subscription}`
   else if (e.resourceType === 'cosmosDatabase') where = ` in ${e.account}`
+  else if (e.resourceType === 'postgresDatabase') where = ` in ${e.server}`
   else if (e.resourceType === 'cosmosContainer') where = ` in ${e.database}`
   else if (e.resourceType === 'keyVaultRoleAssignment') where = ` on ${e.vault}`
   else if (e.resourceType === 'keyVaultSecret') where = ` in ${e.vault}`
@@ -41,6 +44,8 @@ export function bladeForEvent(e, current) {
       case 'registryRoleAssignment': return { kind: 'container-registry', resourceGroup: e.resourceGroup, name: e.registry }
       case 'imageBuild': return current
       case 'cosmosAccount': return { kind: 'cosmos-account', resourceGroup: e.resourceGroup, name: e.name }
+      case 'postgresServer': return { kind: 'postgres-server', resourceGroup: e.resourceGroup, name: e.name }
+      case 'postgresDatabase': return { kind: 'postgres-server', resourceGroup: e.resourceGroup, name: e.server }
       case 'cosmosDatabase': return { kind: 'cosmos-database', resourceGroup: e.resourceGroup, account: e.account, name: e.name }
       case 'cosmosContainer': return { kind: 'cosmos-container', resourceGroup: e.resourceGroup, account: e.account, database: e.database, name: e.name }
       case 'keyVault': return { kind: 'key-vault', resourceGroup: e.resourceGroup, name: e.name }
@@ -99,6 +104,10 @@ export function bladeForEvent(e, current) {
   if (e.resourceType === 'cosmosAccount') {
     const affected = (current.kind === 'cosmos-account' || current.kind === 'cosmos-database' || current.kind === 'cosmos-container') && same(current.resourceGroup, e.resourceGroup) && same(current.kind === 'cosmos-account' ? current.name : current.account, e.name)
     return affected ? { kind: 'resource-group', name: current.resourceGroup } : current
+  }
+  if (e.resourceType === 'postgresServer') {
+    return current.kind === 'postgres-server' && same(current.resourceGroup, e.resourceGroup) && same(current.name, e.name)
+      ? { kind: 'resource-group', name: current.resourceGroup } : current
   }
   return current
 }
