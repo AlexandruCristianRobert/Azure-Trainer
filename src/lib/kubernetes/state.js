@@ -783,7 +783,7 @@ function validCapturedArtifact(artifact, source, run) {
   if (manifest.language !== 'python' || source.hash !== artifact.sourceHash || projectSourceHash(source.files) !== artifact.sourceHash
     || JSON.stringify(Object.keys(source.files).sort()) !== JSON.stringify([...manifest.buildFiles].sort())) return false
   const app = parsePythonProject(source.files, manifest)
-  const docker = parsePythonDockerfile(source.files.Dockerfile, { buildFiles: manifest.buildFiles })
+  const docker = parsePythonDockerfile(source.files.Dockerfile, { buildFiles: manifest.buildFiles, installInstruction: manifest.pythonInstallInstruction })
   const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
     : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
       : JSON.stringify(value)

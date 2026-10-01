@@ -1,7 +1,7 @@
 import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 import { getDeploymentPods } from '../../../lib/kubernetes/reconcile.js'
 import { parsePythonProject } from '../../../lib/project/python.js'
-import { POSTGRES_MANIFEST } from '../../templates/data-python/postgres.js'
+import { POSTGRES_MANIFEST, POSTGRES_DSN, POSTGRES_SOLUTION_FILES, POSTGRES_STARTER_FILES } from '../../templates/data-python/postgres.js'
 
 export const PG_GROUP = 'rg-assistant'
 export const PG_SERVER = 'pg-assistant'
@@ -14,6 +14,19 @@ export const PG_DATA_TARGET = Object.freeze({ kind: 'postgres', resourceGroup: P
 export const PG_TARGET = Object.freeze({ ...PG_DATA_TARGET, clusterId: PG_CLUSTER_ID, namespace: PG_NAMESPACE })
 export const PG_REQUEST_TARGET = Object.freeze({ clusterId: PG_CLUSTER_ID, namespace: PG_NAMESPACE, serviceName: 'assistant-api', deploymentName: 'assistant-api' })
 export const PG_ESTIMATE_LABEL = 'Simulated estimate — not an Azure guarantee.'
+
+// Authoring recipes shared by Lab Solutions and independent prerequisite
+// seeds. Keep the retrieval/context/answer edit zones as the caller's starters.
+export const PG_SERVER_COMMAND = `az postgres flexible-server create --resource-group ${PG_GROUP} --name ${PG_SERVER} --tier GeneralPurpose --sku-name Standard_D2ds_v5 --storage-size 32 --version 16 --admin-user assistant_admin --admin-password Training-Only-Pa55! --public-access None`
+export const PG_ALLOW_VECTOR_COMMAND = `az postgres flexible-server parameter set --resource-group ${PG_GROUP} --server-name ${PG_SERVER} --name azure.extensions --value VECTOR`
+export const PG_DATABASE_COMMAND = `az postgres flexible-server db create --resource-group ${PG_GROUP} --server-name ${PG_SERVER} --database-name ${PG_DATABASE}`
+export const PG_SCHEMA_SQL = POSTGRES_SOLUTION_FILES['schema.sql']
+export const pgSqlCommand = action => `psql "${POSTGRES_DSN}" ${action}`
+export function pgConnectAppSource(current = POSTGRES_STARTER_FILES['app.py']) {
+  const marker = 'def retrieve_passages('
+  return POSTGRES_SOLUTION_FILES['app.py'].slice(0, POSTGRES_SOLUTION_FILES['app.py'].indexOf(marker))
+    + current.slice(current.indexOf(marker))
+}
 
 // Shared Service endpoint selection for requests, load and dependencies. Read
 // its running Pod snapshot, never saved files or a mutable published tag.

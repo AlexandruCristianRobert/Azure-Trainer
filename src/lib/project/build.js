@@ -33,7 +33,7 @@ export function buildImage(run, { registryId, loginServer, image, file = 'Docker
   const manifest = getProjectManifest(run?.project?.manifestId)
   const selectedFiles = selectBuildFiles(files, manifest)
   const project = parseProject(files, manifest)
-  const docker = manifest.language === 'python' ? parsePythonDockerfile(files.Dockerfile, { buildFiles: manifest.buildFiles }) : parseDockerfile(files.Dockerfile)
+  const docker = manifest.language === 'python' ? parsePythonDockerfile(files.Dockerfile, { buildFiles: manifest.buildFiles, installInstruction: manifest.pythonInstallInstruction }) : parseDockerfile(files.Dockerfile)
   diagnostics.push(...project.diagnostics, ...docker.diagnostics)
   // A data app's appSpec (ADR-0002/0003) has no `listeningPort` - server.py's
   // port is a fixed scaffold file, not a learner-editable constant - so there

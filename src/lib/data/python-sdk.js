@@ -343,7 +343,7 @@ function lowerCall(node, ctx) {
   if (constructorKey && !(callee.name === 'VariableName' && ctx.locate?.(raw(callee, text)))) {
     const entry = SDK_CALLS[constructorKey]
     const boundArgs = bindArgs(entry, args, node, raw(callee, text), ctx)
-    return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, receiverType: entry.returns, ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
+    return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}), ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
   }
   if (callee.name === 'MemberExpression') {
     const mps = kids(callee); const propNode = mps.find((c) => c.name === 'PropertyName'); const base = mps[0]

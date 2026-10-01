@@ -1,7 +1,14 @@
 function diagnostic(code, message, line = 1, column = 1) { return { code, message, path: 'Dockerfile', line, column } }
-export function parsePythonDockerfile(text, { buildFiles = ['app.py', 'server.py', 'Dockerfile'] } = {}) {
+export function parsePythonDockerfile(text, { buildFiles = ['app.py', 'server.py', 'Dockerfile'], installInstruction } = {}) {
   if (typeof text !== 'string') return { dockerSpec: null, diagnostics: [diagnostic('INVALID_DOCKERFILE', 'Dockerfile must be text.')] }
   const lines = text.split(/\r?\n/).map((raw, index) => ({ value: raw.trim(), line: index + 1 })).filter(item => item.value && !item.value.startsWith('#'))
+  // A trusted manifest can supply one exact dependency-install scaffold.
+  // Remove it only in its prescribed position, then retain the same parser.
+  // Any extra/changed RUN still fails the normal instruction/order checks.
+  if (installInstruction !== undefined) {
+    if (lines[2]?.value !== installInstruction) return { dockerSpec: null, diagnostics: [diagnostic('UNSUPPORTED_DOCKER_INSTRUCTION', 'Dockerfile must use the supplied dependency installation instruction after WORKDIR.', lines[2]?.line ?? 1)] }
+    lines.splice(2, 1)
+  }
   const expected = ['FROM', 'WORKDIR', 'COPY', 'EXPOSE', 'CMD']; const diagnostics = []
   if (lines.length !== expected.length) diagnostics.push(diagnostic('UNSUPPORTED_DOCKER_INSTRUCTION', 'Dockerfile must contain only the supported Python instructions.', lines[Math.min(lines.length, expected.length)]?.line ?? 1))
   for (let index = 0; index < Math.min(lines.length, expected.length); index++) if (!new RegExp(`^${expected[index]}\\b`, 'i').test(lines[index].value)) diagnostics.push(diagnostic('UNSUPPORTED_DOCKER_INSTRUCTION', 'Unsupported Dockerfile instruction or order.', lines[index].line))
