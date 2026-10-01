@@ -1,6 +1,24 @@
 # Data journey — handoff
 
-Branch: `data-journey` (pushed to origin). On another machine: `git fetch && git checkout data-journey && git pull`.
+Current PostgreSQL branch: `codex/data-postgres`, based on `e059e55`, in `.superpowers/worktrees/data-postgres`. Local implementation only; no PostgreSQL merge or push has been performed. The older Cosmos branch notes below are historical.
+
+## PostgreSQL status — 2026-10-01
+
+Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete; final whole-branch review is in progress. Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
+
+Validation is intentionally bounded: named Data files only, no existing AKS/Container Apps suites, full suite or browser tests. Lab replay/build checks have taken seconds, not the 30-minute per-lab limit. Real Azure deployment and real Python/SQL execution are outside this simulator's scope. The existing Vite bundle-size advisory remains.
+
+| Lab | File |
+| --- | --- |
+| 5 Guided: Connect, schema, B-tree and GIN | `src/data/labs/data-journey/postgres-connect-guided.lab.js` |
+| 6 Guided: pgvector sizing, filtered RAG | `postgres-vector-guided.lab.js` |
+| 7 Guided: Connection pools and PgBouncer | `postgres-pooling-guided.lab.js` |
+| 8 Troubleshooting: PostgreSQL incidents | `postgres-troubleshooting.lab.js` |
+| 9 Independent: v3 audience-aware retrieval and throughput | `postgres-independent.lab.js` |
+
+Shared support includes `src/lib/data/pg-sql.js`, `pg-engine.js`, `pg-plan.js`, `pg-pool.js`, `psql.js`, PostgreSQL SDK/runtime lowering, Flexible Server CLI/portal state, and the PostgreSQL template/data pipeline. Six-replica validation is gated to PostgreSQL labs; legacy replica limits are preserved.
+
+The latest explicit `tests/data-postgres-labs.test.js` run passes five solution replays. Builds pass with the existing bundle advisory. Browser walkthroughs and excluded journey suites have not been run. Thresholds and connection/vector estimates are teaching models, not Azure guarantees. The independent v3 extension uses its own protected manifest and loader and preserves the base corpus.
 
 ## Status — 2026-10-01: Labs 1–4 (Cosmos DB) complete
 
