@@ -32,27 +32,14 @@ const initialFiles = { ...COSMOS_SOLUTION_FILES, 'app.py': LAB1_APP_PY }
 const IMAGE_V2 = `${ASSISTANT_REGISTRY}.azurecr.io/assistant:v2`
 const DEPLOYMENT_V2 = COSMOS_SOLUTION_FILES['k8s/deployment.yaml'].replace('assistant:v1', 'assistant:v2')
 
-// --- Task-order note (self-review): the Stage table displays Tasks as
-// provision -> code -> deploy -> verify (point-read, cross-partition) ->
-// tune (indexing, ordered) -> consistency, but the `tasks` array below runs
-// `indexing` right after `container`, before every other Task. Two reasons,
-// both load-bearing:
-// 1. `recent_sessions_for_user`'s solution query (ORDER BY c.userId ASC,
-//    c.createdAt DESC - a 2-property ORDER BY) needs the composite index
-//    `indexing` adds (cosmos-query.js's `runCosmosQuery`), so
-//    `cross-partition`'s own scenario cannot return 200 before `indexing`
-//    runs.
-// 2. Every verification Task here shares one dependency key (`dataDependencies`
-//    keys only on cluster/namespace/account/database, not the Task id), which
-//    includes the `sessions` container's current indexing policy. Recording
-//    `point-read`'s evidence and only then running `indexing` would
-//    immediately stale that evidence (the policy its snapshot captured would
-//    no longer match current state) - so `indexing` has to precede every
-//    Task that records evidence under that shared key, not just `cross-partition`.
-// Stages here are a display grouping only (as in ai-guided.lab.js), not
-// `capstoneStages`, so this reordering changes nothing about how the Lab is
-// presented - only the order a straight-through replay (or a learner
-// working the Task list instead of the Stage table) completes Tasks in.
+// Stages and the `tasks` array both follow the Lab's one safe completion
+// order: provision -> tune (indexing) -> code -> deploy -> verify
+// (point-read, cross-partition, ordered) -> consistency. `indexing` runs
+// right after `container` because `recent_sessions_for_user`'s query (ORDER
+// BY c.userId ASC, c.createdAt DESC - a 2-property sort) needs the
+// composite index it adds to return 200 at all, and `ordered` moved into
+// `verify` because it is itself a verification of that same deployed query,
+// alongside `point-read`/`cross-partition`.
 const SEED_READ = { id: 'message-1', sessionId: 'session-1', userId: 'user-1', role: 'user', text: 'How long are backups kept?', createdAt: '2026-01-01T09:00:00Z' }
 const SEED_CROSS = { id: 'message-2', sessionId: 'session-2', userId: 'user-1', role: 'user', text: 'Where is the support contact?', createdAt: '2026-01-01T09:05:00Z' }
 const SEED_ORDERED = { id: 'message-3', sessionId: 'session-3', userId: 'user-1', role: 'user', text: 'What is the retention window?', createdAt: '2026-01-01T09:10:00Z' }
@@ -158,10 +145,10 @@ export const cosmosSdkGuidedLab = {
   initialProjectFiles: initialFiles, solutionFiles: COSMOS_SOLUTION_FILES, initializeSimulation: seedCosmosSdkGuided,
   stages: [
     { id: 'provision', title: 'Provision the Cosmos account, database and container', taskIds: ['account', 'database', 'container'] },
+    { id: 'tune', title: 'Tune indexing before implementing the query', taskIds: ['indexing'] },
     { id: 'code', title: 'Implement the conversation history SDK calls', taskIds: ['code-crud'] },
     { id: 'deploy', title: 'Build and deploy the assistant API', taskIds: ['deployed'] },
-    { id: 'verify', title: 'Verify RU cost and cross-partition fan-out', taskIds: ['point-read', 'cross-partition'] },
-    { id: 'tune', title: 'Tune indexing for write cost and ordering', taskIds: ['indexing', 'ordered'] },
+    { id: 'verify', title: 'Verify RU cost, cross-partition fan-out and ordering', taskIds: ['point-read', 'cross-partition', 'ordered'] },
     { id: 'consistency', title: 'Verify session consistency', taskIds: ['read-your-writes'] },
   ],
   scenarios: {
@@ -212,9 +199,9 @@ export const cosmosSdkGuidedLab = {
     }),
     cosmosTask({
       id: 'indexing', stageId: 'tune',
-      text: 'Update the sessions container\'s indexing policy to exclude /text and add a composite index on userId ascending, createdAt descending.',
-      explanation: 'Message text is never filtered or sorted on, so indexing it only adds write cost; sorting by two properties needs a composite index Cosmos can serve the ORDER BY from.',
-      hints: ['An indexing policy update is online and does not require recreating the container (unlike the partition key).', 'Use `az cosmosdb sql container update --idx` with an inline JSON policy that both excludes `/text/?` and adds the two-path `compositeIndexes` entry.'],
+      text: 'Before writing the query code, update the sessions container\'s indexing policy: exclude /text and add a composite index on userId ascending, createdAt descending.',
+      explanation: 'The conversation history query you write next lists a user\'s sessions ordered by userId then createdAt - a two-property sort Cosmos can only serve from a composite index - and message text is never filtered or sorted on, so excluding it from indexing lowers every write\'s cost starting now.',
+      hints: ['An indexing policy update is online and does not require recreating the container (unlike the partition key), so there is no harm in doing this before the query that needs it exists.', 'Use `az cosmosdb sql container update --idx` with an inline JSON policy that both excludes `/text/?` and adds the two-path `compositeIndexes` entry.'],
       examNote: 'Excluding unqueried paths lowers write RU; multi-property ORDER BY needs a composite index.',
       check: indexingReady,
       solution: { steps: commands(`az cosmosdb sql container update --account-name ${ASSISTANT_ACCOUNT} --resource-group ${ASSISTANT_GROUP} --database-name ${ASSISTANT_DATABASE} --name sessions --idx '${INDEXING_POLICY_JSON}'`) },
@@ -246,6 +233,7 @@ export const cosmosSdkGuidedLab = {
       check: pointReadReady,
       solution: { steps: [scenario('get-session')] },
       verification: { scenarioId: 'get-session', scenarioVersion: 1 },
+      fields: ['images', 'clientConsistency', 'accountConsistency'],
     }),
     cosmosTask({
       id: 'cross-partition', stageId: 'verify',
@@ -256,16 +244,18 @@ export const cosmosSdkGuidedLab = {
       check: crossPartitionReady,
       solution: { steps: [scenario('user-sessions')] },
       verification: { scenarioId: 'user-sessions', scenarioVersion: 1 },
+      fields: ['images'],
     }),
     cosmosTask({
-      id: 'ordered', stageId: 'tune',
-      text: 'Verify the ordered query still succeeds after indexing, and that saving a message now costs fewer RU than before the text exclusion.',
-      explanation: 'The same recent_sessions_for_user solution already orders by userId then createdAt; before this Task that two-property ORDER BY had no composite index to run against.',
+      id: 'ordered', stageId: 'verify',
+      text: 'Verify the ordered conversation history query: confirm it succeeds against the composite index you added earlier, and that saving a message now costs fewer RU than the default indexing policy would.',
+      explanation: 'recent_sessions_for_user orders by userId then createdAt; this Task confirms both halves of the earlier indexing change at once - the two-property ORDER BY runs, and excluding /text actually lowered the write\'s RU charge.',
       hints: ['Run the user-sessions-ordered scenario - it saves then re-queries, so you can compare the save\'s RU charge directly.', 'Excluding /text from indexing lowers every future write\'s RU charge, not just this one request\'s.'],
       examNote: 'Indexing policy is mutable and applied online; partition key and vector policy aren\'t.',
       check: orderedReady,
       solution: { steps: [scenario('user-sessions-ordered')] },
       verification: { scenarioId: 'user-sessions-ordered', scenarioVersion: 1 },
+      fields: ['images', 'indexing:sessions'],
     }),
     cosmosTask({
       id: 'read-your-writes', stageId: 'consistency',
@@ -276,6 +266,7 @@ export const cosmosSdkGuidedLab = {
       check: readYourWritesReady,
       solution: { steps: [scenario('write-then-read')] },
       verification: { scenarioId: 'write-then-read', scenarioVersion: 1 },
+      fields: ['images', 'clientConsistency', 'accountConsistency'],
     }),
   ],
 }

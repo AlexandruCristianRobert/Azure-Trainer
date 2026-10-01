@@ -5,35 +5,53 @@ import { SUBSCRIPTION_ID } from '../../../lib/sandbox/model.js'
 // `dataDependencies` is the data journey's evidence-dependency selector set
 // (see `task.dependencies` / `recordVerification` in labEngine/evidence.js,
 // and `integrationDependencies`/`kubernetesDependencies` in
-// kubernetes/evidence.js for the pattern it mirrors). A Task that names it in
-// its `dependencies` gets fresh evidence requirements whenever the deployed
-// assistant-api/feedback-worker image, a tracked container's indexing
-// policy, the account's default consistency, or clients.py (the client's own
-// consistency_level) changes - Review Focus #5.
-export function dataDependencies(target, { containers = [] } = {}) {
+// kubernetes/evidence.js for the pattern it mirrors). Review fix round 1
+// (Task 8): a Task names exactly the fields it actually depends on, from:
+//   - 'images': deployed source hashes for assistant-api and feedback-worker
+//   - 'clientConsistency': clients.py's own `consistency_level`
+//   - 'accountConsistency': the account's default consistency level
+//   - 'indexing:<container>': that container's current indexing policy
+// The returned key is distinct per field set (sorted and joined into the
+// key), so two Tasks only share a dependency key - and so only go stale
+// together - when they truly depend on the exact same fields; a Task
+// depending on fewer/different fields is unaffected by a change those
+// fields don't cover. (Previously this returned one key covering every
+// field regardless of which ones a Task asked for, over-coupling every
+// verification Task in a Lab to every tracked field - Review Focus #5 /
+// fix round 1 Important finding 2.)
+const DATA_DEPENDENCY_FIELDS = (context, { clusterId, namespace, account, database }, field) => {
+  if (field === 'images') {
+    const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
+    const sourceHash = (deploymentName) => {
+      const image = resources[`Deployment/${namespace}/${deploymentName}`]?.spec?.template?.spec?.containers?.[0]?.image ?? null
+      const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
+      return artifactId ? context.artifacts.buildsById?.[artifactId]?.sourceHash ?? null : null
+    }
+    return { assistantApiSourceHash: sourceHash('assistant-api'), feedbackWorkerSourceHash: sourceHash('feedback-worker') }
+  }
+  if (field === 'clientConsistency') return { clientConsistencySource: context.project.savedFiles['clients.py'] ?? null }
+  if (field === 'accountConsistency') {
+    const cosmosAccount = (context.sandbox.cosmosAccounts ?? []).find((item) => item.name === account)
+    return { accountDefaultConsistency: cosmosAccount?.defaultConsistencyLevel ?? null }
+  }
+  if (field.startsWith('indexing:')) {
+    const containerName = field.slice('indexing:'.length)
+    const cosmosAccount = (context.sandbox.cosmosAccounts ?? []).find((item) => item.name === account)
+    const cosmosDatabase = cosmosAccount?.databases?.find((item) => item.name === database)
+    return { [field]: cosmosDatabase?.containers?.find((item) => item.name === containerName)?.indexingPolicy ?? null }
+  }
+  throw new Error(`Unknown data dependency field '${field}'.`)
+}
+
+export function dataDependencies(target, fields) {
   const { clusterId, namespace, account, database } = target ?? {}
-  const key = `data:${clusterId}:${namespace}:${account}:${database}`
+  const sortedFields = [...fields].sort()
+  const key = `data:${clusterId}:${namespace}:${account}:${database}:${sortedFields.join(',')}`
   return {
-    [key]: (context) => {
-      const resources = context.runtime.kubernetes?.clusters?.[clusterId]?.resources ?? {}
-      const deployedSourceHash = (deploymentName) => {
-        const image = resources[`Deployment/${namespace}/${deploymentName}`]?.spec?.template?.spec?.containers?.[0]?.image ?? null
-        const artifactId = image ? context.artifacts.publishedTags?.[image] ?? null : null
-        return artifactId ? context.artifacts.buildsById?.[artifactId]?.sourceHash ?? null : null
-      }
-      const cosmosAccount = (context.sandbox.cosmosAccounts ?? []).find((item) => item.name === account)
-      const cosmosDatabase = cosmosAccount?.databases?.find((item) => item.name === database)
-      return {
-        version: 1,
-        assistantApiSourceHash: deployedSourceHash('assistant-api'),
-        feedbackWorkerSourceHash: deployedSourceHash('feedback-worker'),
-        accountDefaultConsistency: cosmosAccount?.defaultConsistencyLevel ?? null,
-        clientConsistencySource: context.project.savedFiles['clients.py'] ?? null,
-        containers: [...containers].sort().map((name) => ({
-          name, indexingPolicy: cosmosDatabase?.containers?.find((item) => item.name === name)?.indexingPolicy ?? null,
-        })),
-      }
-    },
+    [key]: (context) => ({
+      version: 1,
+      ...Object.assign({}, ...sortedFields.map((field) => DATA_DEPENDENCY_FIELDS(context, { clusterId, namespace, account, database }, field))),
+    }),
   }
 }
 
@@ -65,12 +83,13 @@ export function cosmosRequestScenario(steps) {
 
 // Mirrors `integrationTask` (aks-journey/integration-helpers.js): bundles a
 // Task's narrative fields with its verification + the shared Cosmos
-// dependency selector, so each Lab only has to name its own id/text/check.
-export function cosmosTask({ id, stageId, text, explanation, hints, examNote, check, solution, verification, dependencies, containers = ['sessions'] }) {
+// dependency selector, so each Lab only has to name its own id/text/check
+// plus the `dataDependencies` fields that Task's own check actually reads.
+export function cosmosTask({ id, stageId, text, explanation, hints, examNote, check, solution, verification, dependencies, fields }) {
   return {
     id, stageId, text, explanation, hints, examNote, check, solution,
     ...(verification
-      ? { verification, dependencies: dependencies ?? dataDependencies({ clusterId: ASSISTANT_CLUSTER_ID, namespace: ASSISTANT_NAMESPACE, account: ASSISTANT_ACCOUNT, database: ASSISTANT_DATABASE }, { containers }) }
+      ? { verification, dependencies: dependencies ?? dataDependencies({ clusterId: ASSISTANT_CLUSTER_ID, namespace: ASSISTANT_NAMESPACE, account: ASSISTANT_ACCOUNT, database: ASSISTANT_DATABASE }, fields) }
       : {}),
   }
 }
