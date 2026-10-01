@@ -14,6 +14,7 @@ function tokenize(text) {
   if (text.length > 1_000_000) throw failure('SQL exceeds the simulator size limit.')
   const tokens = []
   let i = 0
+  let unsupportedToken
   const push = (type, value, offset) => {
     if (tokens.length >= 100_000) throw failure('SQL exceeds the simulator token limit.', offset)
     tokens.push({ type, value, offset })
@@ -71,9 +72,12 @@ function tokenize(text) {
     if (word) { push('word', word[0].toLowerCase(), start); i += word[0].length; continue }
     const symbol = ['<=>', '<->', '<#>', '->>', '::', '@>', '<>', '<=', '>='].find(op => text.startsWith(op, i))
       ?? ('(),;.*=<>'.includes(text[i]) ? text[i] : null)
-    if (!symbol) throw failure(`Unsupported SQL token '${text[i]}'.`, i)
+    // Finish lexical validation so a malformed quote/comment wins over a
+    // punctuation token encountered in the accidentally unquoted payload.
+    if (!symbol) { unsupportedToken ??= failure(`Unsupported SQL token '${text[i]}'.`, i); i++; continue }
     push('symbol', symbol, start); i += symbol.length
   }
+  if (unsupportedToken) throw unsupportedToken
   tokens.push({ type: 'end', value: '', offset: text.length })
   return tokens
 }

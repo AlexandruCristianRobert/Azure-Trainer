@@ -5,6 +5,18 @@
 // it never executes Python (ADR-0002/0003), it only looks calls up here.
 
 export const SDK_CALLS = {
+  'postgres.module.connect': { kind: 'constructor', params: ['conninfo', 'autocommit', 'row_factory'], required: ['conninfo'], keywordOnly: ['autocommit', 'row_factory'], returns: 'pg-connection' },
+  'postgres.pool.ConnectionPool': { kind: 'constructor', params: ['conninfo', 'min_size', 'max_size', 'open', 'kwargs'], required: ['conninfo'], keywordOnly: ['min_size', 'max_size', 'open', 'kwargs'], returns: 'pg-pool' },
+  'postgres.pool.connection': { kind: 'method', receiver: 'pg-pool', params: [], required: [], returns: 'pg-connection' },
+  'postgres.connection.execute': { kind: 'method', receiver: 'pg-connection', params: ['query', 'params'], required: ['query'], returns: 'pg-cursor' },
+  'postgres.connection.cursor': { kind: 'method', receiver: 'pg-connection', params: ['row_factory'], required: [], keywordOnly: ['row_factory'], returns: 'pg-cursor' },
+  'postgres.cursor.execute': { kind: 'method', receiver: 'pg-cursor', params: ['query', 'params'], required: ['query'], returns: 'pg-cursor' },
+  'postgres.cursor.fetchall': { kind: 'method', receiver: 'pg-cursor', params: [], required: [] },
+  'postgres.cursor.fetchone': { kind: 'method', receiver: 'pg-cursor', params: [], required: [] },
+  'postgres.connection.close': { kind: 'method', receiver: 'pg-connection', params: [], required: [] },
+  'postgres.cursor.close': { kind: 'method', receiver: 'pg-cursor', params: [], required: [] },
+  'postgres.register_vector': { kind: 'wiring', params: ['conn'], required: ['conn'] },
+  'postgres.Jsonb': { kind: 'constructor', params: ['obj'], required: ['obj'] },
   'cosmos.CosmosClient': { kind: 'constructor', params: ['url', 'credential', 'consistency_level'], required: ['url', 'credential'] },
   'cosmos.client.get_database_client': { kind: 'wiring', receiver: 'cosmos-client', params: ['id'], required: ['id'] },
   'cosmos.database.get_container_client': { kind: 'wiring', receiver: 'cosmos-database', params: ['id'], required: ['id'] },
@@ -22,7 +34,8 @@ export const SDK_CALLS = {
 // entry augmented with its dotted `key` (e.g. 'cosmos.container.read_item'),
 // or undefined when no such call is in the catalog.
 export function lookupCall(receiverType, name) {
-  const key = `${receiverType.replace(/-/g, '.')}.${name}`
+  const prefix = receiverType.startsWith('pg-') ? `postgres.${receiverType.slice(3)}` : receiverType.replace(/-/g, '.')
+  const key = `${prefix}.${name}`
   const entry = SDK_CALLS[key]
   return entry ? { key, ...entry } : undefined
 }

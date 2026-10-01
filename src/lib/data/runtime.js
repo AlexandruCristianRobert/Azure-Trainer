@@ -16,11 +16,15 @@ import { runCosmosQuery, parseCosmosQuery } from './cosmos-query.js'
 import { CONSISTENCY_ORDER, pointReadCharge, writeCharge, queryCharge } from './cosmos-cost.js'
 import { findContainer, upsertItem, readItem } from './cosmos-store.js'
 import { embed } from '../../data/fixtures/data/knowledge.js'
+import { CORPUS, corpusQuestions } from '../../data/fixtures/data/corpus.js'
+import { executePg } from './pg-engine.js'
 
 const MAX_DEPTH = 8
 const round2 = (n) => Math.round(n * 100) / 100
 const stripInternal = (item) => Object.fromEntries(Object.entries(item ?? {}).filter(([key]) => !key.startsWith('_')))
 const pythonStr = (value) => (value === null || value === undefined ? 'None' : value === true ? 'True' : value === false ? 'False' : String(value))
+const pythonPgRepr = value => typeof value === 'string' ? `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'` : pythonPgStr(value)
+const pythonPgStr = value => Array.isArray(value) ? `[${value.map(pythonPgRepr).join(', ')}]` : value !== null && typeof value === 'object' ? `{${Object.entries(value).map(([key, item]) => `${pythonPgRepr(key)}: ${pythonPgRepr(item)}`).join(', ')}}` : pythonStr(value)
 
 const STATUS_BY_CODE = { BadRequest: 400, SDK_ARGUMENT: 400, NotFound: 404, CosmosResourceNotFoundError: 404, Conflict: 409, CosmosResourceExistsError: 409, TooManyRequests: 429 }
 const statusFor = (code) => STATUS_BY_CODE[code] ?? 500
@@ -30,7 +34,7 @@ class StopExecution extends Error {
 }
 function fail(code, message) { throw new StopExecution({ code, message }) }
 
-export function runDataFunction({ appSpec, sandbox, account, database, functionName, args = [], nowMs, scenarioState, changeFeed }) {
+export function runDataFunction({ appSpec, sandbox, account, database, dataTarget, functionName, args = [], nowMs, scenarioState, changeFeed }) {
   const calls = []
   const acct = (sandbox.cosmosAccounts ?? []).find((a) => a.name === account)
   const accountDefault = acct?.defaultConsistencyLevel
@@ -44,17 +48,23 @@ export function runDataFunction({ appSpec, sandbox, account, database, functionN
   }
 
   const ctx = {
-    appSpec, account, database, nowMs, scenarioState, changeFeed,
+    appSpec, account, database, dataTarget, nowMs, scenarioState, changeFeed,
     consistency: clientLevel ?? accountDefault,
-    calls, lastContinuations: {}, sandboxBox: { value: sandbox },
+    calls, lastContinuations: {}, sandboxBox: { value: sandbox }, globals: {},
+    connections: { opened: 0, closed: 0, active: 0, events: [] }, jsonbValues: new WeakSet(),
   }
-  const totalCharge = () => round2(calls.reduce((sum, call) => sum + call.charge, 0))
+  const totalCharge = () => round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0))
+  const pgEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections } : {}
   try {
+    if (dataTarget?.kind === 'postgres') {
+      for (const [name, expr] of Object.entries(appSpec.data.postgres?.globals ?? {})) if (expr.kind === 'literal') ctx.globals[name] = expr.value
+      execOps(appSpec.data.postgres?.clientOps ?? [], ctx.globals, { ...ctx, depth: 0 })
+    }
     const value = callFunction(functionName, args, ctx, 0)
-    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge() }
+    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...pgEvidence() }
   } catch (error) {
     if (!(error instanceof StopExecution)) throw error
-    return { sandbox: ctx.sandboxBox.value, status: statusFor(error.errorPayload.code), value: null, error: error.errorPayload, calls, totalCharge: totalCharge() }
+    return { sandbox: ctx.sandboxBox.value, status: statusFor(error.errorPayload.code), value: null, error: error.errorPayload, calls, totalCharge: totalCharge(), ...pgEvidence() }
   }
 }
 
@@ -83,9 +93,16 @@ function execStatement(op, locals, ctx) {
     case 'assign': locals[op.name] = evalExpr(op.value, locals, ctx); return null
     case 'return': return { kind: 'return', value: evalExpr(op.value, locals, ctx) }
     case 'expr': evalExpr(op.value, locals, ctx); return null
+    case 'with': {
+      const resource = evalExpr(op.value, locals, ctx)
+      locals[op.name] = resource
+      try { return execOps(op.body, locals, ctx) }
+      finally { closePgResource(resource, ctx) }
+    }
     case 'raise-not-implemented': return fail('DATA_UNSUPPORTED', `Not supported by the simulator: ${op.functionName} is not completed yet.`)
     case 'for': {
       const iterable = evalExpr(op.iterable, locals, ctx)
+      if (ctx.dataTarget?.kind === 'postgres' && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
       for (const item of Array.isArray(iterable) ? iterable : []) {
         locals[op.name] = item
         const signal = execOps(op.body, locals, ctx)
@@ -124,10 +141,22 @@ function evalCompare(test, locals, ctx) {
 function evalExpr(expr, locals, ctx) {
   switch (expr.kind) {
     case 'literal': return expr.value
-    case 'name': return locals[expr.name]
+    case 'name': return Object.hasOwn(locals, expr.name) ? locals[expr.name] : ctx.globals[expr.name]
     case 'dict': return Object.fromEntries(Object.entries(expr.entries).map(([key, value]) => [key, evalExpr(value, locals, ctx)]))
     case 'list': return expr.items.map((item) => evalExpr(item, locals, ctx))
-    case 'subscript': { const target = evalExpr(expr.target, locals, ctx); return target == null ? undefined : target[expr.key] }
+    case 'tuple': return expr.items.map((item) => evalExpr(item, locals, ctx))
+    case 'fstring': return expr.parts.map(part => pythonPgStr(evalExpr(part, locals, ctx))).join('')
+    case 'sequence-method': {
+      const target = evalExpr(expr.target, locals, ctx); const value = evalExpr(expr.value, locals, ctx)
+      if (expr.method === 'append' && Array.isArray(target) && target.length < 1024) { target.push(value); return null }
+      if (expr.method === 'join' && typeof target === 'string' && Array.isArray(value) && value.length <= 1024 && value.every(item => typeof item === 'string')) return value.join(target)
+      return fail('DATA_UNSUPPORTED', `Not supported by the simulator: invalid bounded ${expr.method} operation`)
+    }
+    case 'subscript': {
+      const target = evalExpr(expr.target, locals, ctx)
+      if (typeof expr.key === 'number' && (!Array.isArray(target) || expr.key >= target.length)) return fail('IndexError', 'tuple or list index out of range')
+      return target == null ? undefined : target[expr.key]
+    }
     case 'get': {
       const target = evalExpr(expr.target, locals, ctx)
       if (target != null && Object.hasOwn(target, expr.key)) return target[expr.key]
@@ -150,8 +179,22 @@ function evalBuiltin(expr, locals, ctx) {
   switch (expr.name) {
     case 'list': return Array.isArray(value) ? value.slice() : value == null ? [] : Array.from(value)
     case 'len': return Array.isArray(value) || typeof value === 'string' ? value.length : value && typeof value === 'object' ? Object.keys(value).length : 0
-    case 'str': return pythonStr(value)
-    case 'embed': return embed(value, ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1')
+    case 'str': return ctx.dataTarget?.kind === 'postgres' ? pythonPgStr(value) : pythonStr(value)
+    case 'embed': {
+      const deployment = ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'
+      if (ctx.dataTarget?.kind !== 'postgres') return embed(value, deployment)
+      const vector = corpusQuestions().find(question => question.text === value)?.vector ?? Array(8).fill(0)
+      return deployment === 'embeddings-v2' ? [...vector, 0, 0, 0, 0] : [...vector]
+    }
+    case 'training_answer': {
+      if (ctx.dataTarget?.kind !== 'postgres') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
+      const context = evalExpr(expr.args[1], locals, ctx)
+      const top = context?.sources?.[0]
+      if (top == null || typeof context?.passages !== 'string' || !context.passages) return 'I could not find a relevant passage in the supplied sources.'
+      const passage = CORPUS.chunks.find(chunk => chunk.id === top)
+      if (!passage || !context.passages.includes(passage.content)) return 'I could not find a relevant passage in the supplied sources.'
+      return corpusQuestions().find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
+    }
     case 'next': return Array.isArray(value) && value.length ? value[0] : null
     default: return fail('DATA_UNSUPPORTED', `Not supported by the simulator: builtin '${expr.name}'`)
   }
@@ -165,6 +208,7 @@ function evalSdkAttribute(expr, ctx) {
 function evalCallSdk(expr, locals, ctx) {
   const { receiver, call } = expr
   const argValues = Object.fromEntries(Object.entries(expr.args ?? {}).map(([key, value]) => [key, evalExpr(value, locals, ctx)]))
+  if (call.startsWith('postgres.')) return evalPgCall(expr, argValues, locals, ctx)
   const ref = { account: ctx.account, database: ctx.database, container: receiver }
   const container = findContainer(ctx.sandboxBox.value, ref)
   if (!container) return fail('NotFound', `Resource Not Found (container '${receiver}')`)
@@ -176,6 +220,92 @@ function evalCallSdk(expr, locals, ctx) {
     case 'cosmos.container.query_items_change_feed': return execChangeFeed(container, argValues, ctx, receiver)
     default: return fail('DATA_UNSUPPORTED', `Not supported by the simulator: SDK call '${call}'`)
   }
+}
+
+function pgRef(conninfo, ctx) {
+  if (typeof conninfo !== 'string') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: conninfo must be a libpq field string')
+  const fields = {}; const token = /\s*([a-z_]+)\s*=\s*(?:'((?:\\.|[^'])*)'|([^\s]+))/gy
+  let position = 0
+  while (position < conninfo.length && conninfo.slice(position).trim()) {
+    token.lastIndex = position
+    const match = token.exec(conninfo)
+    if (!match) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this libpq connection string')
+    fields[match[1]] = (match[2] ?? match[3]).replace(/\\(.)/g, '$1'); position = token.lastIndex
+  }
+  const target = ctx.dataTarget
+  return { server: fields.host ?? target.server, resourceGroup: target.resourceGroup, database: fields.dbname ?? target.database, port: Number(fields.port ?? target.port ?? 5432) }
+}
+
+function openPgConnection(pool, values, ctx) {
+  const ref = pgRef(values.conninfo, ctx)
+  const checked = executePg(ctx.sandboxBox.value, { ...ref, sql: '' })
+  const error = checked.results.find(result => result.kind === 'connection' && result.error)?.error
+  if (error) throw new StopExecution(error)
+  const mode = ref.port === 6432 ? 'bouncer' : pool?.lifetime === 'module' ? 'pooled' : 'new'
+  const conn = { pgKind: 'connection', ref, mode, rowFactory: values.row_factory ?? values.kwargs?.row_factory, session: pool?.session ?? { settings: {} }, pool, closed: false, pendingLatency: mode === 'new' ? 25 : 0 }
+  ctx.connections.opened++; ctx.connections.active++
+  ctx.connections.events.push({ event: 'open', connection: mode, port: ref.port })
+  return conn
+}
+
+function closePgResource(resource, ctx) {
+  if (!resource || resource.closed) return
+  resource.closed = true
+  if (resource.pgKind !== 'connection') return
+  if (resource.pool) resource.pool.session = resource.session
+  ctx.connections.closed++; ctx.connections.active--
+  ctx.connections.events.push({ event: 'close', connection: resource.mode, port: resource.ref.port })
+}
+
+function evalPgCall(expr, values, locals, ctx) {
+  if (ctx.dataTarget?.kind !== 'postgres') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL SDK requires a PostgreSQL data target')
+  const call = expr.call
+  if (call === 'postgres.Jsonb') { const adapted = { pgKind: 'jsonb', value: values.obj }; ctx.jsonbValues.add(adapted); return adapted }
+  if (call === 'postgres.register_vector') {
+    if (values.conn?.pgKind !== 'connection' || values.conn.closed) return fail('ProgrammingError', 'connection is closed')
+    values.conn.vectorRegistered = true; return null
+  }
+  if (call === 'postgres.module.connect') return openPgConnection(null, values, ctx)
+  if (call === 'postgres.pool.ConnectionPool') {
+    return { pgKind: 'pool', ...values, lifetime: expr.lifetime, session: { settings: {} } }
+  }
+  const target = expr.target ? evalExpr(expr.target, locals, ctx) : locals[expr.receiver] ?? ctx.globals[expr.receiver]
+  if (call === 'postgres.pool.connection') {
+    if (target?.pgKind !== 'pool') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: invalid PostgreSQL pool receiver')
+    return openPgConnection(target, target, ctx)
+  }
+  const conn = target?.pgKind === 'cursor' ? target.connection : target
+  if (conn?.pgKind !== 'connection' || conn.closed || target.closed) return fail('ProgrammingError', 'connection or cursor is closed')
+  if (call.endsWith('.close')) { closePgResource(target, ctx); return null }
+  if (call === 'postgres.connection.cursor') return { pgKind: 'cursor', connection: conn, rowFactory: values.row_factory ?? conn.rowFactory, rows: [], position: 0, closed: false }
+  if (call.endsWith('.fetchall')) { const rows = target.rows.slice(target.position); target.position = target.rows.length; return rows }
+  if (call.endsWith('.fetchone')) return target.rows[target.position++] ?? null
+  if (call.endsWith('.execute')) {
+    const params = values.params ?? []
+    if (!Array.isArray(params)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL params must be a tuple or list')
+    const adapted = params.map(value => {
+      if (value !== null && typeof value === 'object' && ctx.jsonbValues.has(value)) return value.value
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) return fail('ProgrammingError', "cannot adapt type 'dict' using placeholder '%s'; wrap JSON data in Jsonb")
+      return value
+    })
+    const executed = executePg(ctx.sandboxBox.value, { ...conn.ref, sql: values.query, params: adapted, session: conn.session, nowMs: ctx.nowMs })
+    ctx.sandboxBox.value = executed.sandbox; conn.session = executed.session
+    const cursor = target.pgKind === 'cursor' ? target : { pgKind: 'cursor', connection: conn, rowFactory: conn.rowFactory, closed: false }
+    cursor.rows = []; cursor.position = 0
+    for (const result of executed.results) {
+      if (result.error?.code === 'SyntaxError') result.error = { ...result.error, message: `syntax error: ${result.error.message}` }
+      const rowValues = result.kind === 'explain' ? (result.plan?.text ?? []).map(line => [line]) : result.rowValues ?? []
+      const rows = cursor.rowFactory === 'dict_row'
+        ? rowValues.map(row => Object.fromEntries((result.columns ?? []).map((column, index) => [column.name, row[index]])))
+        : rowValues
+      const record = { call, sql: values.query, plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode, charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }
+      conn.pendingLatency = 0; ctx.calls.push(record)
+      if (result.error) throw new StopExecution(result.error)
+      cursor.rows = rows
+    }
+    return cursor
+  }
+  return fail('DATA_UNSUPPORTED', `Not supported by the simulator: SDK call '${call}'`)
 }
 
 function execReadItem(container, ref, argValues, ctx, receiver) {

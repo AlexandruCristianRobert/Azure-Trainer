@@ -14,7 +14,9 @@ const kids = (n) => { const r = []; for (let c = n?.firstChild; c; c = c.nextSib
 const parts = (n) => kids(n).filter((c) => !ignored.has(c.name))
 const raw = (n, text) => text.slice(n.from, n.to)
 const at = (text, n, path) => { const before = text.slice(0, n.from); return { path, line: before.split('\n').length, column: n.from - before.lastIndexOf('\n') } }
-const scalar = (n, text) => { if (!n) return undefined; if (n.name === 'String') return raw(n, text).slice(1, -1); if (n.name === 'Number') return Number(raw(n, text)); if (n.name === 'Boolean') return raw(n, text) === 'True'; if (n.name === 'None') return null; return undefined }
+const stringParts = value => { const match = /^([rRuU]*)("""|'''|"|')/.exec(value); return match ? { prefix: match[1], start: match[0].length, end: value.length - match[2].length } : null }
+const decodeString = value => value.replace(/\\(\r?\n|[\\'"nrtbf]|x[\da-fA-F]{2}|u[\da-fA-F]{4})/g, (_, escape) => ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', '\n': '', '\r\n': '' }[escape] ?? (/^[xu]/.test(escape) ? String.fromCharCode(parseInt(escape.slice(1), 16)) : escape)))
+const scalar = (n, text) => { if (!n) return undefined; if (n.name === 'String') { const value = raw(n, text); const bounds = stringParts(value); if (!bounds) return undefined; const content = value.slice(bounds.start, bounds.end); return /r/i.test(bounds.prefix) ? content : decodeString(content) } if (n.name === 'Number') return Number(raw(n, text)); if (n.name === 'Boolean') return raw(n, text) === 'True'; if (n.name === 'None') return null; return undefined }
 const findNode = (n, test) => (test(n) ? n : kids(n).reduce((found, c) => found ?? findNode(c, test), null))
 const funcNode = (tree, text, name) => kids(tree.topNode).find((n) => n.name === 'FunctionDefinition' && raw(kids(n).find((c) => c.name === 'VariableName'), text) === name)
 const bodyOf = (n) => kids(n).find((c) => c.name === 'Body')
@@ -27,10 +29,10 @@ export function parseDataApp(files, manifest = {}) {
   if (typeof files?.['clients.py'] !== 'string') { missing('clients.py'); return { appSpec: null, diagnostics } }
   if (typeof files?.['app.py'] !== 'string') { missing('app.py'); return { appSpec: null, diagnostics } }
 
-  const filePaths = ['app.py', ...(typeof files['worker.py'] === 'string' ? ['worker.py'] : [])]
+  const filePaths = ['app.py', ...(typeof files['worker.py'] === 'string' ? ['worker.py'] : []), 'clients.py']
   const clientsTree = parser.parse(files['clients.py'])
   const trees = Object.fromEntries(filePaths.map((path) => [path, parser.parse(files[path])]))
-  for (const [path, tree] of [['clients.py', clientsTree], ...filePaths.map((p) => [p, trees[p]])]) {
+  for (const [path, tree] of filePaths.map((p) => [p, trees[p]])) {
     const bad = findNode(tree.topNode, (n) => n.name === '⚠')
     if (bad) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: Python syntax error', ...at(files[path], bad, path) })
   }
@@ -43,10 +45,18 @@ export function parseDataApp(files, manifest = {}) {
     const text = files[path]; const tree = trees[path]
     const topConstants = {}
     for (const n of kids(tree.topNode).filter((x) => x.name === 'AssignStatement')) {
-      const p = parts(n); if (p.length === 2 && p[0].name === 'VariableName') { const v = scalar(p[1], text); if (v !== undefined) topConstants[raw(p[0], text)] = v }
+      const p = parts(n).filter(c => c.name !== 'TypeDef'); if (p.length === 2 && p[0].name === 'VariableName') { const v = scalar(p[1], text); if (v !== undefined) topConstants[raw(p[0], text)] = v }
     }
     return [path, { text, tree, topConstants }]
   }))
+
+  // Captured client constants and pool constructors are immutable build data.
+  // Cosmos wiring is deliberately left on its existing manifest path.
+  const pg = Object.values(manifest.receivers ?? {}).some(type => type.startsWith('pg-')) || filePaths.some(path => /\b(psycopg|ConnectionPool)\b/.test(files[path]))
+  const globalConstants = pg ? { ...fileCtx['clients.py'].topConstants } : {}
+  const globalTypes = { ...(manifest.receivers ?? {}) }
+  const globals = {}
+  const clientOps = []
 
   const locate = (name) => { for (const path of filePaths) { const node = funcNode(fileCtx[path].tree, fileCtx[path].text, name); if (node) return { path, node } } return null }
 
@@ -54,17 +64,35 @@ export function parseDataApp(files, manifest = {}) {
   const queued = new Set()
   const pending = []
   const enqueue = (name) => { if (!queued.has(name)) { queued.add(name); pending.push(name) } }
+  if (pg) {
+    const clientCtx = { ...fileCtx['clients.py'], path: 'clients.py', manifest, diagnostics, enqueue, locate, types: globalTypes, scope: new Set(), globalConstants, pg: true, moduleScope: true }
+    for (const node of kids(clientsTree.topNode).filter(n => n.name === 'AssignStatement')) {
+      const p = parts(node).filter(n => n.name !== 'TypeDef')
+      if (p.length !== 2 || p[0].name !== 'VariableName') { unsupported(clientCtx, node, 'this client assignment'); break }
+      const name = raw(p[0], clientCtx.text)
+      if (Object.hasOwn(globalConstants, name)) { globals[name] = { kind: 'literal', value: globalConstants[name] }; continue }
+      const op = lowerStatement(node, clientCtx)
+      if (op) { globals[name] = op.value; clientOps.push(op) }
+    }
+  }
   for (const name of manifest.editZones ?? []) if (locate(name)) enqueue(name)
+  if (pg) {
+    for (const name of manifest.runtimeFunctions ?? []) if (locate(name)) enqueue(name)
+    for (const route of Object.values(manifest.routes ?? {})) {
+      const name = typeof route === 'string' ? route : route?.functionName ?? route?.function
+      if (name && locate(name)) enqueue(name)
+    }
+  }
 
   while (pending.length && !diagnostics.length) {
     const name = pending.shift()
     const found = locate(name)
     if (!found) continue
-    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], path: found.path, manifest, diagnostics, enqueue, functionName: name })
+    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg })
   }
 
   if (diagnostics.length) return { appSpec: null, diagnostics }
-  return { appSpec: { data: { version: 1, client: { consistency }, functions } }, diagnostics: [] }
+  return { appSpec: { data: { version: 1, client: { consistency }, functions, ...(pg ? { postgres: { globals, clientOps } } : {}) } }, diagnostics: [] }
 }
 
 function readClientConsistency(tree, text, diagnostics) {
@@ -84,8 +112,9 @@ function readClientConsistency(tree, text, diagnostics) {
 
 function lowerFunction(node, ctx) {
   const params = parts(kids(node).find((c) => c.name === 'ParamList')).filter((c) => c.name === 'VariableName').map((c) => raw(c, ctx.text))
-  const scope = new Set(params)
-  const body = parts(bodyOf(node)).map((s) => lowerStatement(s, { ...ctx, scope })).filter(Boolean)
+  const scope = new Set([...params, ...Object.keys(ctx.globalTypes ?? {})])
+  const types = { ...ctx.globalTypes }
+  const body = parts(bodyOf(node)).map((s) => lowerStatement(s, { ...ctx, scope, types })).filter(Boolean)
   return { params, body }
 }
 
@@ -93,11 +122,22 @@ function lowerStatement(node, ctx) {
   const { text, path, scope, diagnostics } = ctx
   if (diagnostics.length) return null
   if (node.name === 'AssignStatement') {
-    const p = parts(node)
+    const p = parts(node).filter(n => n.name !== 'TypeDef')
     if (p.length !== 2 || p[0].name !== 'VariableName') return unsupported(ctx, node, 'this assignment')
     const name = raw(p[0], text); const value = lowerExpr(p[1], ctx)
     scope.add(name)
+    if (value?.receiverType) ctx.types[name] = value.receiverType
+    else delete ctx.types[name]
     return diagnostics.length ? null : { op: 'assign', name, value, source: at(text, node, path) }
+  }
+  if (node.name === 'WithStatement') {
+    const p = kids(node).filter(n => !['with', 'as', 'Comment'].includes(n.name))
+    if (p.length !== 3 || p[0].name !== 'CallExpression' || p[1].name !== 'VariableName' || p[2].name !== 'Body') return unsupported(ctx, node, 'this with statement')
+    const value = lowerExpr(p[0], ctx)
+    if (!['pg-connection', 'pg-cursor'].includes(value?.receiverType)) return diagnostics.length ? null : unsupported(ctx, node, 'this context manager')
+    const name = raw(p[1], text); scope.add(name); ctx.types[name] = value.receiverType
+    const body = parts(p[2]).map(s => lowerStatement(s, ctx)).filter(Boolean)
+    return diagnostics.length ? null : { op: 'with', name, value, body, source: at(text, node, path) }
   }
   if (node.name === 'ReturnStatement') {
     const expr = kids(node).find((c) => c.name !== 'return')
@@ -167,8 +207,11 @@ function lowerExpr(node, ctx) {
   if (value !== undefined) return { kind: 'literal', value }
   if (node.name === 'VariableName') {
     const name = raw(node, text)
+    if (ctx.pg && name === 'dict_row') return { kind: 'literal', value: 'dict_row' }
+    if (ctx.pg && scope.has(name)) return { kind: 'name', name, ...(ctx.types?.[name] ? { receiverType: ctx.types[name] } : {}) }
+    if (Object.hasOwn(ctx.globalConstants ?? {}, name)) return { kind: 'literal', value: ctx.globalConstants[name] }
     if (Object.hasOwn(ctx.topConstants, name)) return { kind: 'literal', value: ctx.topConstants[name] }
-    if (scope.has(name)) return { kind: 'name', name }
+    if (scope.has(name)) return { kind: 'name', name, ...(ctx.types?.[name] ? { receiverType: ctx.types[name] } : {}) }
     return unsupported(ctx, node, `the unknown name '${name}'`)
   }
   if (node.name === 'DictionaryExpression') {
@@ -180,7 +223,22 @@ function lowerExpr(node, ctx) {
     }
     return diagnostics.length ? null : { kind: 'dict', entries }
   }
-  if (node.name === 'ArrayExpression') { const items = parts(node).map((c) => lowerExpr(c, ctx)); return diagnostics.length ? null : { kind: 'list', items } }
+  if (node.name === 'ArrayExpression' || node.name === 'TupleExpression') { const items = parts(node).map((c) => lowerExpr(c, ctx)); return diagnostics.length ? null : { kind: node.name === 'TupleExpression' ? 'tuple' : 'list', items } }
+  if (node.name === 'ParenthesizedExpression') return lowerExpr(parts(node)[0], ctx)
+  if (node.name === 'FormatString' && ctx.pg) {
+    const source = raw(node, text); const bounds = stringParts(source.replace(/^[fF]/, ''))
+    if (!bounds) return unsupported(ctx, node, 'this f-string')
+    let position = node.from + bounds.start + 1; const end = node.from + bounds.end + 1; const result = []
+    for (const replacement of kids(node)) {
+      if (replacement.name !== 'FormatReplacement') return unsupported(ctx, replacement, 'this f-string component')
+      result.push({ kind: 'literal', value: decodeString(text.slice(position, replacement.from)).replace(/\{\{/g, '{').replace(/\}\}/g, '}') })
+      const expressions = kids(replacement).filter(n => !['{', '}'].includes(n.name))
+      if (expressions.length !== 1) return unsupported(ctx, replacement, 'f-string formatting options')
+      result.push(lowerExpr(expressions[0], ctx)); position = replacement.to
+    }
+    result.push({ kind: 'literal', value: decodeString(text.slice(position, end)).replace(/\{\{/g, '{').replace(/\}\}/g, '}') })
+    return diagnostics.length ? null : { kind: 'fstring', parts: result }
+  }
   if (node.name === 'MemberExpression') return lowerMember(node, ctx)
   if (node.name === 'CallExpression') return lowerCall(node, ctx)
   return unsupported(ctx, node, describe(node))
@@ -191,10 +249,10 @@ function lowerMember(node, ctx) {
   const ps = kids(node)
   const hasBracket = ps.some((c) => c.name === '[')
   if (hasBracket) {
-    const base = ps[0]; const key = ps.find((c) => c.name === 'String')
+    const base = ps[0]; const key = ps.find((c) => c.name === 'String' || (ctx.pg && c.name === 'Number'))
     const lastCont = lastContinuationReceiver(node, text, manifest)
     if (lastCont) return { kind: 'sdk-attribute', receiver: lastCont, call: 'cosmos.container.last_continuation' }
-    if (!key) return unsupported(ctx, node, 'subscripts with a non-string key')
+    if (!key || (key.name === 'Number' && (!Number.isInteger(scalar(key, text)) || scalar(key, text) < 0 || scalar(key, text) > 1024))) return unsupported(ctx, node, 'subscripts with an unsupported key')
     return { kind: 'subscript', target: lowerExpr(base, ctx), key: scalar(key, text) }
   }
   const propNode = ps.find((c) => c.name === 'PropertyName')
@@ -222,14 +280,37 @@ function lastContinuationReceiver(node, text, manifest) {
 }
 
 const BUILTINS = new Set(['list', 'len', 'str'])
+const PG_CONSTRUCTORS = { 'psycopg.connect': 'postgres.module.connect', 'connect': 'postgres.module.connect', 'ConnectionPool': 'postgres.pool.ConnectionPool', 'psycopg_pool.ConnectionPool': 'postgres.pool.ConnectionPool', 'register_vector': 'postgres.register_vector', 'pgvector.psycopg.register_vector': 'postgres.register_vector', 'Jsonb': 'postgres.Jsonb', 'psycopg.types.json.Jsonb': 'postgres.Jsonb' }
+
+function functionReceiverType(name, ctx) {
+  const found = ctx.locate?.(name)
+  if (!found) return undefined
+  const source = found.path === ctx.path ? ctx.text : ctx.files?.[found.path]
+  if (!source) return undefined
+  const ret = findNode(bodyOf(found.node), n => n.name === 'ReturnStatement')
+  const call = ret && kids(ret).find(n => n.name === 'CallExpression')
+  const key = call && PG_CONSTRUCTORS[raw(kids(call)[0], source)]
+  return SDK_CALLS[key]?.returns
+}
 
 function lowerCall(node, ctx) {
   const { text, manifest, diagnostics } = ctx
   const callee = kids(node)[0]
   const args = argumentsOfWithText(kids(node).find((c) => c.name === 'ArgList'), text)
+  const constructorKey = ctx.pg && PG_CONSTRUCTORS[raw(callee, text)]
+  // Local connect helpers take priority over the imported psycopg constructor.
+  if (constructorKey && !(callee.name === 'VariableName' && ctx.locate?.(raw(callee, text)))) {
+    const entry = SDK_CALLS[constructorKey]
+    const boundArgs = bindArgs(entry, args, node, raw(callee, text), ctx)
+    return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, receiverType: entry.returns, ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
+  }
   if (callee.name === 'MemberExpression') {
     const mps = kids(callee); const propNode = mps.find((c) => c.name === 'PropertyName'); const base = mps[0]
     const property = raw(propNode, text)
+    if (ctx.pg && ['append', 'join'].includes(property)) {
+      if (args.keywords.length || args.positional.length !== 1) return unsupported(ctx, node, `this '.${property}()' call`)
+      return { kind: 'sequence-method', method: property, target: lowerExpr(base, ctx), value: lowerExpr(args.positional[0], ctx) }
+    }
     if (property === 'get') {
       if (args.keywords.length || args.positional.length < 1 || args.positional.length > 2) return unsupported(ctx, node, "this '.get()' call")
       const key = scalar(args.positional[0], text)
@@ -238,22 +319,25 @@ function lowerCall(node, ctx) {
       if (args.positional[1]) result.default = lowerExpr(args.positional[1], ctx)
       return diagnostics.length ? null : result
     }
-    if (base.name === 'VariableName') {
-      const receiverType = manifest.receivers?.[raw(base, text)]
+    if (base.name === 'VariableName' || ctx.pg) {
+      const target = ctx.pg ? lowerExpr(base, ctx) : null
+      const receiverType = target?.receiverType ?? manifest.receivers?.[raw(base, text)]
       if (receiverType) {
         const entry = lookupCall(receiverType, property)
         if (!entry) return unsupported(ctx, node, `'${property}' on '${raw(base, text)}'`)
         const boundArgs = bindArgs(entry, args, node, property, ctx)
-        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), call: entry.key, args: boundArgs }
+        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), ...(receiverType.startsWith('pg-') ? { target } : {}), call: entry.key, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}) }
       }
     }
     return unsupported(ctx, node, 'this method call')
   }
   if (callee.name === 'VariableName') {
     const name = raw(callee, text)
-    if (BUILTINS.has(name) || name === 'embed') {
-      if (args.keywords.length || args.positional.length !== 1) return unsupported(ctx, node, `'${name}(...)'`)
-      return diagnostics.length ? null : { kind: 'builtin', name, args: [lowerExpr(args.positional[0], ctx)] }
+    if (BUILTINS.has(name) || name === 'embed' || (ctx.pg && name === 'training_answer')) {
+      const arity = name === 'training_answer' ? 2 : 1
+      if (args.keywords.length || args.positional.length !== arity) return unsupported(ctx, node, `'${name}(...)'`)
+      const values = args.positional.map(arg => lowerExpr(arg, ctx))
+      return diagnostics.length ? null : { kind: 'builtin', name, args: values }
     }
     if (name === 'next') {
       const [first, second] = args.positional
@@ -263,12 +347,13 @@ function lowerCall(node, ctx) {
       if (iterArgs.keywords.length || iterArgs.positional.length !== 1) return unsupported(ctx, first, "'iter(...)'")
       return diagnostics.length ? null : { kind: 'builtin', name: 'next', args: [lowerExpr(iterArgs.positional[0], ctx)] }
     }
-    const local = funcNode(ctx.tree, text, name)
+    const local = ctx.locate?.(name) ?? funcNode(ctx.tree, text, name)
     if (local) {
       if (args.keywords.length) return unsupported(ctx, node, `keyword arguments to '${name}(...)'`)
       ctx.enqueue(name)
       const callArgs = args.positional.map((a) => lowerExpr(a, ctx))
-      return diagnostics.length ? null : { kind: 'call-local', name, args: callArgs }
+      const receiverType = functionReceiverType(name, ctx)
+      return diagnostics.length ? null : { kind: 'call-local', name, args: callArgs, ...(receiverType ? { receiverType } : {}) }
     }
     return unsupported(ctx, node, `the call '${name}(...)'`)
   }
