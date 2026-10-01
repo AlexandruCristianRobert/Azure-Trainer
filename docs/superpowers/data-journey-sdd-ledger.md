@@ -79,3 +79,10 @@ Task 11: minor (deferred): feedbackDesignReady/feedbackReadReady guard duplicati
 Task 11: fix round 1/5 (2 addressed, 0 open; commits 72bb26f..882ac2b)
 Task 11: complete (commits 1a97d0a..882ac2b, review clean)
 Final review: dispatched
+Final review: Ready with fixes — 5 Important (consistency grading hole; seed pre-solved images graded; Lab 4 checks not learner-controlled; real-SDK Python errors; saved-progress Conflict) + 6 minors. Findings: final-findings.md
+Ruling 16: Eventual/ConsistentPrefix read of an item created in the same request → 404 (not yet replicated) — teaching approximation — cost if wrong: realism nuance
+Ruling 17: raise NotImplementedError becomes a runtime DATA_UNSUPPORTED op, not a build diagnostic, so partial builds work; seeds deploy starter edit zones; code-graded Tasks require learner-built images — cost if wrong: Task 5 behavior change
+Ruling 18: Lab 4 adds question_feedback edit zone/route; evaluator grammar gains VectorDistance comparison in WHERE; similar-floor graded from app rows only — cost if wrong: grammar growth
+Final fix wave: dispatched (FIX_BASE 25f9f3d)
+Ruling 19: Lab 4 logicalScale 50→2 (3 RU budget unreachable at 50 under cost model); Lab 3 session-budget reads a pre-seeded message — accepted — cost if wrong: weaker scale illustration
+Final fix wave: complete (commits 25f9f3d..1ab9192, re-review clean, 11/11 addressed). Labs 1-4 DONE.
