@@ -60,3 +60,9 @@ Task 8: minor (deferred): extra registration test in data-cosmos-labs.test.js; d
 Task 8: fix round 1/5 dispatched (FIX_BASE 8ae258a)
 Task 8: fix round 1/5 (2 addressed, 0 open; commits 8ae258a..3b61403)
 Task 8: complete (commits a5418fa..3b61403, review clean)
+Task 9: dispatched (base ac5ce42)
+Task 9: implemented ac5ce42..7c1f95e; in review
+Task 9: complete (commits ac5ce42..7c1f95e, review clean)
+Task 9: Ruling 12: `similar` merged into one 8-step scenario (engine maps 1 scenario → 1 Task evidence) — accepted — cost if wrong: none
+Task 9: minor (deferred): Sonnet 5 vs 5.5 commit trailers (harness attribution)
+Ruling 13: Lab-file helpers (findReturnCall/file/commands/scenario/parsed) duplicated between Lab 1 and 2 — Task 10 extracts them into cosmos-helpers.js before adding Lab 3 — avoids 4× copies — cost if wrong: small refactor risk to Labs 1-2 (covered by replay tests)
