@@ -56,6 +56,7 @@ import { postgresTroubleshootingLab } from './data-journey/postgres-troubleshoot
 import { postgresIndependentLab } from './data-journey/postgres-independent.lab.js'
 import { redisCacheGuidedLab } from './data-journey/redis-cache-guided.lab.js'
 import { redisTroubleshootingLab } from './data-journey/redis-troubleshooting.lab.js'
+import { redisIndependentLab } from './data-journey/redis-independent.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -117,6 +118,7 @@ export const LABS = [
   postgresIndependentLab,
   redisCacheGuidedLab,
   redisTroubleshootingLab,
+  redisIndependentLab,
 ]
 
 export function labById(id) {

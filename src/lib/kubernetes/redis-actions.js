@@ -5,6 +5,7 @@ import { REDIS_PRODUCTS } from '../../data/templates/data-python/redis.js'
 import { redisDeployedArtifact, REDIS_ESTIMATE_LABEL } from '../../data/labs/data-journey/redis-helpers.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { canonicalize, recordVerification } from '../labEngine/evidence.js'
+import { refreshKubernetesDependencies } from './evidence.js'
 import { isPlainObject, isJsonValue } from '../labEngine/run.js'
 
 const keysAre = (value, keys) => isPlainObject(value) && Object.keys(value).sort().join(',') === keys.split(',').sort().join(',')
@@ -159,7 +160,10 @@ export function applyRedisAction(run, action, lab) {
   if (!measurements.ageKnown) measurements.maxAgeSeconds = null
   measurements.hitRatio = measurements.total ? (measurements.responseHits + measurements.semanticHits) / measurements.total : 0
   const completed = measurements.status === 200 && !measurements.traceTruncated
-  const next = recordVerification({ ...run, sandbox, runtime: { ...run.runtime, simTimeMs: nowMs } }, lab, task.id, {
+  // This scenario may change its own source dependencies. Capture their final
+  // generations before recording new evidence; historical records stay intact.
+  const advanced = refreshKubernetesDependencies(run, { ...run, sandbox, runtime: { ...run.runtime, simTimeMs: nowMs } }, lab)
+  const next = recordVerification(advanced, lab, task.id, {
     scenarioId: action.scenarioId, scenarioVersion: scenario.version, outcome: completed ? 'passed' : 'failed', completed,
     startedAtMs: run.runtime.simTimeMs, endedAtMs: nowMs, measurements,
   })
