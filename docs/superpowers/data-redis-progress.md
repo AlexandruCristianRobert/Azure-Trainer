@@ -57,7 +57,7 @@ Ruling: Lab12 selects four canonical warmup scope variants including repeated wo
 - [x] Task1 resource/CLI/portal/fixtures
 - [x] Task2 storage/TTL/memory
 - [x] Task3 search/redis-cli
-- [ ] Task4 SDK/runtime/helpers
+- [x] Task4 SDK/runtime/helpers
 - [ ] Task5 template/workload/evidence
 - [ ] Task6 Lab10 Guided
 - [ ] Task7 Lab11 Troubleshooting
@@ -68,6 +68,11 @@ Task 2: complete (c84d7b4..c310732, spec and quality approved by /root/review_re
 Task 3: complete (9a93b9f..a621f1c, spec and quality approved by /root/review_redis_search; zero blocking findings). Three search tests and one build, verification16.909s. Actual author Codex confirmed. Cross-task manifest/Lab/deployment/freshness checks assigned to4–8 and final review, not claimed complete here.
 Task 3: minor (deferred): existing Vite chunk-size advisory; no bundle refactor in this feature batch, final review to triage.
 Task 4: in progress. Base recorded at dispatch after controller ledger commit.
+Task 4: fix round1/5 in progress, review74f657b. Important: native binary semantic payload omission; protected assignment-target traversal; HGETALL byte-key semantics. Minor bundle advisory retained. Cross-task gates assigned5–8/final.
+Task 4: fix round1/5 (3 addressed,0 open;74f657b..3d37b54), approved /root/rereview_redis_sdk; no new breakage.
+Task 4: complete (db3cd38..3d37b54, spec/quality approved after1fix round). SDK13/13 including2newcases, search3/3 one upstream check; original verification10.980s +fix19.698s. HGETALL byte-key dictionaries explicitly unsupported; decoded string keys supported. AuthorCodex. Cross-task routing/trace-proof/deployment/seeds/saved-progress checks assigned5–8/final.
+Task 5: in progress. Base recorded after controller ledger commit.
+Ruling: Task4 fix wave may modify redis-search.js to preserve native binary payloads (not embeddings) through FT.SEARCH and exercise an SDK-written semantic hash in its existing SDK case; HGETALL byte-key access must be represented faithfully or explicitly unsupported rather than teaching string lookup with decode_responses=False — review exposed a load-bearing native protocol boundary omitted by the hand-seeded test — cost: one narrow upstream search edit and a smaller supported mapping-access subset if rejection is used.
 Ruling: Redis catalog accepts only host/port positionally, marks password/ssl/decode_responses/protocol and hset mapping keyword-only, and clients explicitly request protocol2 — actual redis-py third constructor positional is db and native RESP2 helper shape must stay stable — cost: narrower supported call forms plus one explicit constructor option; source https://redis.readthedocs.io/en/stable/connections.html.
 Ruling: Redis CLI reads context.run.runtime.simTimeMs from actual runLine({run,lab}) caller, not behavioralRun or elapsedMs; FT.INFO raw value uses RESP2 pairs with a separate detached measurement summary — accurate simulation clock and redis-py protocol must agree — cost: summary presentation separated from native command value.
 Ruling: native SCAN may return one bounded snapshot batch with cursor0 and treat COUNT as a hint; SDK scan_iter adapts native SCAN rather than a fake SCAN_ITER command — avoids unnecessary iterator machinery while preserving deletion-safe taught behavior — cost: general incremental cursor traversal is outside the simulator subset.
