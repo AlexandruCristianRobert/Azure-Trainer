@@ -54,17 +54,19 @@ const cosmosAccount = (context) => (context.sandbox.cosmosAccounts ?? []).find((
 const cosmosDatabase = (context) => cosmosAccount(context)?.databases?.find((item) => item.name === ASSISTANT_DATABASE)
 const containerNamed = (context, name) => cosmosDatabase(context)?.containers?.find((item) => item.name === name)
 
-// --- feedback-design / feedback-read: both are judged from the SAME
-// `question-feedback` scenario's evidence (task-11-brief.md names that one
-// scenario for both). Only one Task may own a scenario's `verification`
-// dispatch (kubernetes/data-actions.js's `applyDataAction` credits exactly
-// one Task per scenario id), so `feedback-design` owns it (self-review
-// ruling: "make it a verification Task tied to question-feedback") and
-// `feedback-read` reads the same evidence as a plain (non-verification)
-// check - both are 'post'-only (raw container writes, no Python route), so
-// requirement (a)'s RU cost is computed by direct evaluation against the
-// live `feedback` container, the same way requirement (c)'s tally count is
-// (see `tallyCorrectReady`) - there is no app route that reads `feedback` by
+// --- feedback-design / feedback-read: task-11-brief.md names one scenario
+// (`question-feedback`) for both, but each Task owns its OWN scenario id
+// here (`question-feedback` / `feedback-read-check`, same requests) rather
+// than sharing one - fix round 1 review: a Task with no `verification` of
+// its own (reading a sibling Task's evidence instead) is never checked
+// against THAT sibling's `dependencyMatches`, so it can stay 'done' after
+// the sibling's own evidence has gone stale. Giving `feedback-read` its own
+// verification+dependencies (narrow `fields`, matching what it actually
+// depends on) fixes that with no engine change. Both scenarios are
+// 'post'-only (raw container writes, no Python route), so requirement (a)'s
+// RU cost is computed by direct evaluation against the live `feedback`
+// container, the same way requirement (c)'s tally count is (see
+// `tallyCorrectReady`) - there is no app route that reads `feedback` by
 // questionId to dispatch through.
 const QID_PROBE = 'qid-feedback-probe'
 const QID_OTHER = 'qid-feedback-other'
@@ -97,7 +99,7 @@ const feedbackDesignReady = (context) => {
 // path, not a query - exactly the lesson a dense, production-scale container
 // teaches over this Lab's earlier, cheap-by-default containers.
 const feedbackReadReady = (context) => {
-  const record = cosmosEvidence(context, 'feedback-design', 'question-feedback')
+  const record = cosmosEvidence(context, 'feedback-read', 'feedback-read-check')
   if (!record || record.measurements.status !== 200) return false
   const result = feedbackProbeQuery(context)
   if (!result || result.stats.partitionsTouched !== 1 || result.rows.length !== PROBE_ITEMS.length) return false
@@ -139,6 +141,25 @@ const similarFloorReady = (context) => {
 // route exposes this count, so - like feedback-read above - it is read by
 // direct evaluation against the live `tally` container (the query evaluator
 // already supports `VALUE COUNT(1)`, cosmos-query.js).
+//
+// The scenario alone (post 3, batch, restart, post 2 more, batch, redeliver)
+// is not enough to PROVE checkpoint resumption: because apply_feedback
+// upserts by id, a worker that ignores its saved lease and simply re-reads
+// the WHOLE feed on every batch call still lands on the same final count of
+// 4 (fix round 1 review) - the final COUNT alone can't tell a correctly-
+// resumed worker from one that never checkpoints at all. `process_changes`
+// already returns `len(changes)` (the number of items THAT call itself
+// processed), surfaced per step in `measurements.values` (data-actions.js),
+// so `tallyCorrectReady` also asserts the SECOND batch's own reported count
+// - the one right after `restart` - is exactly 2: only the two items posted
+// since the saved checkpoint, never the whole feed again. (The FIRST ever
+// batch call can't distinguish a resuming worker from a non-resuming one -
+// there is no earlier checkpoint for either to honor or ignore, and by the
+// time this Task's own scenario runs, `feedback`'s change feed may already
+// carry earlier Tasks' own unprocessed probe items too - so only the second
+// batch's count is asserted.) A worker that re-reads from the beginning on
+// every call would report far more than 2 there instead, and genuinely fail
+// this Task.
 const QID_TALLY = 'qid-tally-1'
 const TALLY_ITEMS = [
   { id: 'fb-t-1', questionId: QID_TALLY, positive: true },
@@ -151,6 +172,8 @@ const TALLY_ITEMS = [
 const tallyCorrectReady = (context) => {
   const record = cosmosEvidence(context, 'tally-correct', 'tally-duplicate')
   if (!record || record.measurements.status !== 200) return false
+  const batchCounts = (record.measurements.values ?? []).filter((value) => typeof value === 'number')
+  if (batchCounts.length !== 2 || batchCounts[1] !== 2) return false
   const tally = containerNamed(context, 'tally')
   if (!tally) return false
   const result = runCosmosQuery(tally, 'SELECT VALUE COUNT(1) FROM c WHERE c.questionId = @q AND c.positive = true', [{ name: '@q', value: QID_TALLY }])
@@ -177,6 +200,14 @@ export const cosmosIndependentLab = {
   ],
   scenarios: {
     'question-feedback': cosmosWorkerScenario([
+      { action: 'post', route: 'feedback', args: PROBE_ITEMS[0] },
+      { action: 'post', route: 'feedback', args: PROBE_ITEMS[1] },
+      { action: 'post', route: 'feedback', args: OTHER_ITEM },
+    ]),
+    // Same requests as `question-feedback`, under its own scenario id so
+    // `feedback-read` can own its own verification dispatch (see the module
+    // comment above `feedback-design`).
+    'feedback-read-check': cosmosWorkerScenario([
       { action: 'post', route: 'feedback', args: PROBE_ITEMS[0] },
       { action: 'post', route: 'feedback', args: PROBE_ITEMS[1] },
       { action: 'post', route: 'feedback', args: OTHER_ITEM },
@@ -230,7 +261,9 @@ export const cosmosIndependentLab = {
       hints: ['Re-run the question-feedback scenario and look at how few, how small the items for one question are.', 'A point read\'s cost depends on item size, never on logical scale; a query\'s cost does.'],
       examNote: 'Point reads are the cheapest, most scale-independent operation in Cosmos DB; prefer them for hot, narrow reads.',
       check: feedbackReadReady,
-      solution: { steps: [scenario('question-feedback')] },
+      solution: { steps: [scenario('feedback-read-check')] },
+      verification: { scenarioId: 'feedback-read-check', scenarioVersion: 1 },
+      fields: ['images:feedback-worker'],
     }),
     cosmosTask({
       id: 'similar-floor', stageId: 'search',
@@ -245,9 +278,9 @@ export const cosmosIndependentLab = {
     }),
     cosmosTask({
       id: 'tally-correct', stageId: 'worker',
-      text: 'Confirm the feedback worker keeps a correct per-question count of positive feedback across a restart and a duplicated delivery: 4 positive submissions for one question must still count as 4, even after a redelivered batch.',
-      explanation: 'A restarted worker resumes from its saved checkpoint rather than losing or re-reading history, and an idempotent, upsert-by-id tally keeps a redelivered batch from inflating the count.',
-      hints: ['Run the tally-duplicate scenario and read the resulting count straight off the tally container.', 'Keying each tally row by its own feedback item\'s id - never by questionId - is what makes redelivery safe.'],
+      text: 'Confirm the feedback worker keeps a correct per-question count of positive feedback across a restart and a duplicated delivery: the batch right after a restart must process only the items posted since the saved checkpoint, and 4 positive submissions for one question must still count as 4 after a redelivered batch.',
+      explanation: 'A restarted worker resumes from its saved checkpoint rather than re-reading the whole feed from the beginning - the batch right after restart reports how many items it actually processed, which only matches "just the new ones" if the checkpoint was honored - and an idempotent, upsert-by-id tally keeps a redelivered batch from inflating the count.',
+      hints: ['Run the tally-duplicate scenario and compare each batch\'s reported processed count against how many items were posted since the last checkpoint, not since the start.', 'Keying each tally row by its own feedback item\'s id - never by questionId - is what makes a redelivered batch safe.'],
       examNote: 'Delivery is at-least-once: checkpoint after handling, and make the handler idempotent.',
       check: tallyCorrectReady,
       solution: { steps: [scenario('tally-duplicate')] },
