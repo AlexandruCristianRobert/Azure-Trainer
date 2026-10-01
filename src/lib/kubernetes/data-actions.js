@@ -84,13 +84,19 @@ export function validDataScenario(scenario, expectedKind) {
 
 function runRequestSteps(run, lab, manifest, target, steps) {
   const appSpec = findServiceAppSpec(run, target)
-  if (!appSpec) return { sandbox: run.sandbox, status: 503, value: NO_READY_ENDPOINTS, calls: [], totalCharge: 0, stale: false }
+  if (!appSpec) return { sandbox: run.sandbox, status: 503, value: NO_READY_ENDPOINTS, values: [], calls: [], totalCharge: 0, stale: false }
   const { account, database } = lab.dataTarget
   const nowMs = run.runtime.simTimeMs
   const scenarioState = { writesThisRequest: new Set() }
   let sandbox = run.sandbox
   let status = 200
   let value = null
+  // Every step's own return value, in order (Task 9 review: a multi-step
+  // scenario's `value` only ever keeps the LAST step's result, so a Task
+  // whose check needs more than one step's result - e.g. 'similar', which
+  // runs a paraphrase query and a near-miss query in the same scenario -
+  // reads this array instead). Additive: existing Tasks keep reading `value`.
+  const values = []
   let calls = []
   let stale = false
   for (const step of steps) {
@@ -100,21 +106,25 @@ function runRequestSteps(run, lab, manifest, target, steps) {
     sandbox = result.sandbox
     calls = calls.concat(result.calls)
     value = result.value
+    values.push(result.value)
     status = result.status
     if (result.calls.some((call) => call.stale)) stale = true
   }
-  return { sandbox, status, value, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
+  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
 }
 
 function runWorkerSteps(run, lab, manifest, target, steps) {
   const appSpec = findDeploymentAppSpec(run, target)
-  if (!appSpec) return { sandbox: run.sandbox, status: 503, value: NO_READY_ENDPOINTS, calls: [], totalCharge: 0, stale: false }
+  if (!appSpec) return { sandbox: run.sandbox, status: 503, value: NO_READY_ENDPOINTS, values: [], calls: [], totalCharge: 0, stale: false }
   const { account, database } = lab.dataTarget
   const nowMs = run.runtime.simTimeMs
   const scenarioState = { writesThisRequest: new Set() }
   let sandbox = run.sandbox
   let status = 200
   let value = null
+  // See runRequestSteps' `values`: every value-producing step's own result,
+  // in order ('restart' produces none).
+  const values = []
   let calls = []
   let stale = false
   // The continuation the worker holds in memory between batches in this same
@@ -131,6 +141,7 @@ function runWorkerSteps(run, lab, manifest, target, steps) {
       const written = upsertItem(sandbox, ref, step.args, { nowMs })
       sandbox = recordChange(written.sandbox, ref, written.item)
       value = Object.fromEntries(Object.entries(written.item).filter(([key]) => !key.startsWith('_')))
+      values.push(value)
       continue
     }
     if (step.action === 'batch') {
@@ -142,6 +153,7 @@ function runWorkerSteps(run, lab, manifest, target, steps) {
       sandbox = result.sandbox
       calls = calls.concat(result.calls)
       value = result.value
+      values.push(value)
       status = result.status
       if (result.calls.some((call) => call.stale)) stale = true
       const feedbackContainer = findContainer(sandbox, feedbackRef)
@@ -156,12 +168,13 @@ function runWorkerSteps(run, lab, manifest, target, steps) {
         sandbox = result.sandbox
         calls = calls.concat(result.calls)
         value = result.value
+        values.push(value)
         status = result.status
         if (status !== 200) break
       }
     }
   }
-  return { sandbox, status, value, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
+  return { sandbox, status, value, values, calls, totalCharge: round2(calls.reduce((sum, call) => sum + call.charge, 0)), stale }
 }
 
 export function applyDataAction(run, action, lab) {
@@ -182,7 +195,7 @@ export function applyDataAction(run, action, lab) {
     ? runRequestSteps(run, lab, manifest, scenario.target, scenario.steps)
     : runWorkerSteps(run, lab, manifest, scenario.target, scenario.steps)
   const completed = outcome.status === 200
-  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value }
+  const measurements = { status: outcome.status, totalCharge: outcome.totalCharge, calls: outcome.calls, stale: outcome.stale, value: outcome.value, values: outcome.values }
   const next = recordVerification({ ...run, sandbox: outcome.sandbox }, lab, task.id, {
     scenarioId: action.scenarioId, scenarioVersion: scenario.version,
     outcome: completed ? 'passed' : 'failed', completed,
