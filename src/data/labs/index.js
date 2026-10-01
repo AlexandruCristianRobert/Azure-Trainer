@@ -54,6 +54,7 @@ import { postgresVectorGuidedLab } from './data-journey/postgres-vector-guided.l
 import { postgresPoolingGuidedLab } from './data-journey/postgres-pooling-guided.lab.js'
 import { postgresTroubleshootingLab } from './data-journey/postgres-troubleshooting.lab.js'
 import { postgresIndependentLab } from './data-journey/postgres-independent.lab.js'
+import { redisCacheGuidedLab } from './data-journey/redis-cache-guided.lab.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -113,6 +114,7 @@ export const LABS = [
   postgresPoolingGuidedLab,
   postgresTroubleshootingLab,
   postgresIndependentLab,
+  redisCacheGuidedLab,
 ]
 
 export function labById(id) {
