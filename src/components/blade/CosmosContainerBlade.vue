@@ -38,7 +38,7 @@ const commands = [
 ]
 function throughputModeLabel(c) {
   if (!c) return 'Not set'
-  if (c.throughputMode === 'autoscale') return `Autoscale up to ${c.maxThroughput} RU/s`
+  if (c.throughputMode === 'autoscale') return `Autoscale up to ${c.maxThroughput} RU/s (scales down to ${c.maxThroughput / 10} RU/s)`
   return `Manual ${c.throughput} RU/s`
 }
 function itemCountLabel(c) {
@@ -52,8 +52,7 @@ const essentials = computed(() => [
   { label: 'Database', value: props.database, blade: { kind: 'cosmos-database', resourceGroup: props.resourceGroup, account: props.account, name: props.database } },
   { label: 'Container id', value: container.value?.name ?? props.name },
   { label: 'Partition key', value: container.value?.partitionKeyPath ?? 'Not set' },
-  { label: 'Throughput', value: container.value?.throughput == null ? 'Not set' : `${container.value.throughput} RU/s` },
-  { label: 'Throughput mode', value: throughputModeLabel(container.value) },
+  { label: 'Throughput', value: throughputModeLabel(container.value) },
   { label: 'Indexing mode', value: container.value?.indexingPolicy?.indexingMode ?? 'Not set' },
   { label: 'Automatic indexing', value: container.value?.indexingPolicy?.automatic ? 'Enabled' : 'Disabled' },
   { label: 'Item count', value: itemCountLabel(container.value) },

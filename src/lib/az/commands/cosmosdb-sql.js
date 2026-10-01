@@ -12,6 +12,7 @@ const THROUGHPUT = { name: '--throughput', aliases: [], required: false, kind: '
 const MAX_THROUGHPUT = { name: '--max-throughput', aliases: [], required: false, kind: 'int', dest: 'maxThroughput', help: 'Autoscale max RU/s throughput. Mutually exclusive with --throughput.' }
 const VECTOR_EMBEDDINGS = { name: '--vector-embeddings', aliases: [], required: false, kind: 'string', dest: 'vectorEmbeddings', help: 'Inline JSON vector embedding policy.' }
 const INDEXING = { name: '--idx', aliases: [], required: false, kind: 'string', dest: 'indexingPolicy', help: 'Inline JSON indexing policy.' }
+const INDEXING_REQUIRED = { ...INDEXING, required: true }
 
 const databaseEvent = (type, account, database) => event(type, 'cosmosDatabase', { name: database.name, resourceGroup: account.resourceGroup, account: account.name })
 const containerEvent = (type, account, database, container) => event(type, 'cosmosContainer', { name: container.name, resourceGroup: account.resourceGroup, account: account.name, database: database.name })
@@ -79,7 +80,7 @@ export const cosmosdbSqlGroup = defineGroup(['cosmosdb', 'sql'], 'Manage Azure C
     }),
     update: defineCommand(['cosmosdb', 'sql', 'container', 'update'], 'Update a SQL container indexing policy.', {
       latencyMs: LATENCY.mutate,
-      args: [NAME, ACCOUNT, DATABASE, ARG.resourceGroup, INDEXING],
+      args: [NAME, ACCOUNT, DATABASE, ARG.resourceGroup, INDEXING_REQUIRED],
       run: ({ sandbox }, values) => {
         const account = cosmos.getCosmosAccount(sandbox, values.resourceGroup, values.account)
         const database = cosmos.getCosmosDatabase(sandbox, values.resourceGroup, values.account, values.database)

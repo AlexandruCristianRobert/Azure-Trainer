@@ -36,7 +36,7 @@ export function presentCosmosContainer(container, database, account) {
     id: `${accountId(account)}/sqlDatabases/${database.name}/containers/${container.name}`,
     location: account.location,
     name: container.name,
-    options: { throughput: container.throughput },
+    options: container.throughputMode === 'autoscale' ? { autoscaleSettings: { maxThroughput: container.maxThroughput } } : { throughput: container.throughput },
     resource: {
       id: container.name,
       partitionKey: { paths: [container.partitionKeyPath], kind: 'Hash', version: 2 },
