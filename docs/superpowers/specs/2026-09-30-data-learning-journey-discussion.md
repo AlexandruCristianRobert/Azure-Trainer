@@ -1,6 +1,6 @@
 # Data learning journey: curriculum discussion
 
-Status: curriculum and design decisions settled on 2026-10-01 (the remaining branches were decided on the learner's delegation). No implementation plan exists yet; application implementation has not started.
+Status: curriculum and design decisions settled on 2026-10-01 (the remaining branches were decided on the learner's delegation). Labs 1–9 are implemented on main. Implementation plans cover Labs 1–4, 5–9, and now 10–12; Lab 13 remains a separate planning batch.
 
 ## Confirmed intent and scope
 
@@ -167,3 +167,9 @@ The learner lost many hours to testing in the previous journeys and explicitly a
 - **No per-Lab test files by default.** A Lab is verified by `npm run build` succeeding and one manual walk-through in the running app. Add a Lab test only for a Task check that proved wrong during that walk-through.
 - Run tests only by explicit path (e.g. `npx vitest run tests/data/cosmos-query.test.js`). No browser automation tests unless the learner asks.
 - Review fixes should not add regression tests by reflex; add one only when the bug was in shared core logic.
+
+### Redis planning clarification — 2026-10-01
+
+Current [Azure Managed Redis module guidance](https://learn.microsoft.com/en-us/azure/redis/redis-modules) requires RediSearch with Enterprise clustering and NoEviction. For Labs 10–12, provision RediSearch with `EnterpriseCluster` and `NoEviction`; the missing-TTL incident demonstrates memory growth and rejected writes, not automatic eviction. This supersedes the Redis cost-model/incident eviction shorthand above. General eviction concepts remain exam notes rather than a second simulated resource.
+
+Redis-only Labs use a protected deterministic answer source; cross-service PostgreSQL/Cosmos integration remains Lab 13. Cache keys and semantic queries include product, version and language because every answer-affecting filter must be isolated. TTL validation uses simulated time, not real waits. The implementation plan is `docs/superpowers/plans/2026-10-01-data-labs-10-12.md`; it must be reviewed before execution. Preserve the learner's 30-minute per-Lab verification ceiling and reduce checks if it is reached.

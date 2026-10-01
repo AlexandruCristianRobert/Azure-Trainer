@@ -2,6 +2,8 @@
 
 PostgreSQL Labs 5–9, terminal focus, and editor keyboard changes have been fast-forward integrated into `main` from `codex/data-postgres`, based on `e059e55`. Integration is reviewed and verified; the requested publish target is `origin/main`. The older Cosmos branch notes below are historical.
 
+Next batch plan: `docs/superpowers/plans/2026-10-01-data-labs-10-12.md` covers Azure Managed Redis Guided, Troubleshooting and Independent Labs in eight tasks. It is written and self-reviewed, awaiting the learner's review before execution. No Redis implementation has started. Lab 13 remains a separate capstone plan after the Redis interfaces are delivered. Preserve the named-core-tests-only policy and reduce verification if a lab exceeds 30 minutes.
+
 ## PostgreSQL status — 2026-10-01
 
 Labs 5–9 and their shared simulator support are implemented and task-reviewed. All 12 plan tasks are complete. Final whole-branch review's four original findings were addressed; its residual pool-accounting issue was resolved in the user-authorized integration follow-up. Terminal submission also restores focus to the new prompt. Focused integration-follow-up review approved the change without findings. Progress, review fixes, verification timings and controller decisions are recorded in `docs/superpowers/data-postgres-progress.md`. Task reports are `docs/superpowers/data-postgres-task-N-report.md`.
