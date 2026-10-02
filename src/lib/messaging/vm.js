@@ -2,7 +2,7 @@ import { applyServiceBusOperation } from './servicebus.js'
 import { applyEventGridOperation, getEventGridDelivery, validateEventGridWebhookRegistration } from './eventgrid.js'
 import { validateMessagingState, finiteJson } from './state.js'
 import { messagingSdkContract, bindArguments, messagingError, safeKey } from './python.js'
-import { createSecuritySession, SECURITY_PROFILE } from '../security/sdk.js'
+import { createSecuritySession, SECURITY_PROFILE, sanitizeSecurityDiagnostics } from '../security/sdk.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
@@ -652,5 +652,6 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     value = null
     diagnostics.push(error.diagnostic ?? { code: 'MESSAGING_RUNTIME', message: 'The bounded script could not execute this value.', path: program.entry, line: 1, column: 1 })
   }
-  return { state: current, value, trace, diagnostics, output }
+  return { state: current, value, trace, diagnostics: program.profile === SECURITY_PROFILE
+    ? sanitizeSecurityDiagnostics(diagnostics, sandbox, input.securityObservability) : diagnostics, output }
 }

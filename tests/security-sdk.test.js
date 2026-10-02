@@ -11,6 +11,8 @@ import { messagingDependencies } from '../src/lib/messaging/evidence.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { createEventGridTopic, createEventGridSubscription } from '../src/lib/sandbox/eventgrid.js'
 import { applyEventGridOperation } from '../src/lib/messaging/eventgrid.js'
+import { validSecurityJournal, validSecurityLabContext, securityResourceMetadata } from '../src/lib/security/evidence.js'
+import { messagingMeasurements } from '../src/lib/messaging/evidence.js'
 
 const runtimePath = '../src/data/templates/security-python/runtime.js'
 const runtime = await import(/* @vite-ignore */ runtimePath).catch(error => {
@@ -83,6 +85,37 @@ def main():
 `
 
 describe('security SDK source execution', () => {
+  it('keeps known demo credentials out of source-execution diagnostics', () => {
+    const result = run(source.replace('return send_notification("e-o1", "o1", secret.value, "email")', 'return {}["demo-key-v1"]'))
+    expect(result.diagnostics).toHaveLength(1)
+    expect(JSON.stringify(result)).not.toContain('demo-key-v1')
+  })
+  it('requires successful records to match accepted read provenance and committed effects', () => {
+    const sandbox = fixture(), input = config(), before = emptyMessagingState()
+    const result = run(source, { sandbox, state: before })
+    const measurements = messagingMeasurements(before, result.state, { ...result, sourcePaths: ['worker.py'] }, 'worker.py', 'script', result.diagnostics)
+    const state = { ...result.state, executionReceipts: [{ mode: 'script', measurements }] }
+    expect(validSecurityJournal(state)).toBe(true)
+    expect(validSecurityLabContext(state, input, sandbox)).toBe(true)
+    const missingEffect = structuredClone(state)
+    missingEffect.effects = {}
+    missingEffect.executionReceipts[0].measurements.effects = { before: {}, after: {} }
+    expect(validSecurityJournal(missingEffect)).toBe(false)
+    const rejectedKey = { ...input, notificationProvider: { ...input.notificationProvider, acceptedKeys: [{ id: 'other-key', value: 'demo-other-key' }] } }
+    expect(validSecurityLabContext(state, rejectedKey, sandbox)).toBe(false)
+    const laterSandbox = structuredClone(sandbox)
+    laterSandbox.keyVaults[0].secrets[0].versions[0].enabled = false
+    expect(validSecurityLabContext(state, input, laterSandbox)).toBe(true)
+    laterSandbox.keyVaults = []
+    expect(validSecurityLabContext(state, input, laterSandbox)).toBe(true)
+    const wrongVersion = structuredClone(sandbox)
+    wrongVersion.keyVaults[0].secrets[0].versions[0].value = 'demo-other-key'
+    expect(validSecurityLabContext(state, input, wrongVersion)).toBe(false)
+    const foreignRead = structuredClone(state)
+    foreignRead.executionReceipts[0].measurements.securityObservability.startSequence = 2
+    foreignRead.executionReceipts[0].measurements.securityObservability.records.shift()
+    expect(validSecurityJournal(foreignRead)).toBe(false)
+  })
   // Break: a ceremonial secret lookup or literal key authorizing the consumer.
   it('consumes actual secret provenance and rejects literal and retired provider keys', () => {
     const result = run()
@@ -138,6 +171,15 @@ describe('security SDK source execution', () => {
     expect(consumed[0].secretVersion).not.toBe(consumed[1].secretVersion)
     expect(consumed[1].configRevision).toBeGreaterThan(consumed[0].configRevision)
     expect(JSON.stringify(result)).not.toContain('demo-key-v')
+    const m = messagingMeasurements(emptyMessagingState(), result.state, { ...result, sourcePaths: ['worker.py'] }, 'worker.py', 'script', result.diagnostics)
+    const journal = { ...result.state, executionReceipts: [{ mode: 'script', measurements: m }] }
+    expect(validSecurityJournal(journal)).toBe(true)
+    expect(validSecurityLabContext(journal, authored, fixture())).toBe(true)
+    const retired = structuredClone(journal)
+    for (const row of retired.executionReceipts[0].measurements.securityObservability.records) {
+      if (row.kind === 'notification-provider' && row.keyId === 'key-v2') row.keyId = 'key-v1'
+    }
+    expect(validSecurityLabContext(retired, authored, fixture())).toBe(false)
     const hardcoded = run(cached.replaceAll('config["Orders:Channel"]', '"email"'), { config: authored })
     expect(hardcoded.state.securityObservability.records.filter(row => row.kind === 'notification-provider').every(row => row.configProviderId === null)).toBe(true)
   })
@@ -160,13 +202,18 @@ describe('security SDK source execution', () => {
     const files = projectFiles(source)
     const lab = { id: 'security-sdk-proof', engineVersion: 2, contentVersion: 1, capabilities: { messaging: true, securityObservability: true },
       manifestId: 'security-python-v1', initialProjectFiles: files, resourceSeed: fixture, messagingInput: { securityObservability: config() },
-      tasks: [{ id: 'consume', check: () => true, verification: { scenarioId: 'consume', scenarioVersion: 1 }, dependencies: messagingDependencies({ files: Object.keys(files) }) }],
+      tasks: [{ id: 'consume', check: () => true, verification: { scenarioId: 'consume', scenarioVersion: 1 }, dependencies: messagingDependencies({ files: Object.keys(files), resources: { security: securityResourceMetadata } }) }],
       messagingExercise: { commands: [{ entry: 'worker.py', mode: 'script' }], tasks: [{ taskId: 'consume', scenarioId: 'consume', scenarioVersion: 1, entry: 'worker.py', mode: 'script', check: m => m.securityObservability?.records.some(row => row.kind === 'notification-provider' && row.statusCode === 202) }] } }
     let current = createBehavioralRun(lab, { attemptId: 'security-sdk-proof' })
     current = applyRunAction(current, { type: 'command', line: 'python worker.py' }, lab).run
     expect(evaluateLab(lab, current).tasks[0].done).toBe(true)
     expect(JSON.stringify(current.evidence)).not.toContain('demo-key-v1')
     expect(deserializeRun(serializeRun(current, lab), lab).attemptId).toBe('security-sdk-proof')
+    const deleted = applyRunAction(current, { type: 'command', line: 'az group delete --name rg-security --yes' }, lab).run
+    expect(deleted.sandbox.keyVaults).toEqual([])
+    const restoredDeletion = deserializeRun(serializeRun(deleted, lab), lab)
+    expect(evaluateLab(lab, restoredDeletion).tasks[0].done).toBe(false)
+    expect(restoredDeletion.runtime.messaging.securityObservability.records.at(-1).statusCode).toBe(202)
     const forged = structuredClone(current)
     forged.runtime.messaging.securityObservability.records.at(-1).statusCode = 401
     expect(() => deserializeRun(JSON.stringify(forged), lab)).toThrow()
@@ -177,6 +224,18 @@ describe('security SDK source execution', () => {
       if (row.kind === 'notification-provider') row.invocation.operationId = 'unauthored'
     }
     expect(() => deserializeRun(JSON.stringify(unrelated), lab)).toThrow()
+    const rejectedLab = { ...lab, messagingInput: { securityObservability: { ...config(), notificationProvider: {
+      id: 'notification-demo', acceptedKeys: [{ id: 'key-v2', value: 'demo-key-v2' }] } } } }
+    const rejected = applyRunAction(createBehavioralRun(rejectedLab, { attemptId: 'rejected-proof' }), { type: 'command', line: 'python worker.py' }, rejectedLab).run
+    expect(evaluateLab(rejectedLab, rejected).tasks[0].done).toBe(false)
+    expect(rejected.runtime.messaging.effects).toEqual({})
+    const rejectedClaim = structuredClone(rejected)
+    for (const row of [...rejectedClaim.runtime.messaging.securityObservability.records,
+      ...rejectedClaim.runtime.messaging.executionReceipts.flatMap(receipt => receipt.measurements.securityObservability.records),
+      ...Object.values(rejectedClaim.evidence.experimentsById).flatMap(receipt => receipt.measurements.securityObservability.records)]) {
+      if (row.kind === 'notification-provider') { row.statusCode = 202; row.keyId = 'key-v2' }
+    }
+    expect(() => deserializeRun(JSON.stringify(rejectedClaim), rejectedLab)).toThrow()
     for (const text of [source + '\n# changed\n', source]) {
       const saved = applyRunAction(current, { type: 'save-file', path: 'worker.py', text }, lab)
       expect(saved.diagnostics).toEqual([])

@@ -237,7 +237,7 @@ export function validateBehavioralRun(run, lab = null) {
     if (lab.capabilities?.messaging === true && (!validateMessagingState(run.runtime.messaging)
       || !validMessagingExecutionReceipts(run.runtime.messaging)
       || (lab.capabilities?.securityObservability === true) !== (run.runtime.messaging.securityObservability !== undefined)
-      || lab.capabilities?.securityObservability === true && !validSecurityLabContext(run.runtime.messaging, lab.messagingInput?.securityObservability))) {
+      || lab.capabilities?.securityObservability === true && !validSecurityLabContext(run.runtime.messaging, lab.messagingInput?.securityObservability, run.sandbox))) {
       fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')
     }
     if (lab.capabilities?.messaging === true && !evidenceRecords.every(record => validMessagingEvidence(record, run, lab))) {

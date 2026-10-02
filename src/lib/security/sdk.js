@@ -6,6 +6,18 @@ import { authorizeNotification, validAcceptedKeys, notificationChannels } from '
 import { appendSecurityRecord, emptySecurityObservabilityState, safeSecurityJson, securityExact, securityText } from './state.js'
 
 export const SECURITY_PROFILE = 'security-observability-v1'
+export const authoredSecurityKeys = input => [...(input?.notificationProvider?.acceptedKeys ?? []),
+  ...(input?.refreshFixture ?? []).flatMap(step => step.acceptedKeys ?? [])]
+export const securityReadKeyIds = (value, input) => [...new Set(authoredSecurityKeys(input).filter(key => key.value === value).map(key => key.id))].sort()
+/** Final diagnostic boundary also covers compiler/host errors before a session exists. */
+export function sanitizeSecurityDiagnostics(diagnostics, sandbox, input) {
+  const secrets = [...(sandbox?.keyVaults ?? []).flatMap(vault => vault.secrets.flatMap(secret => secret.versions.map(version => version.value))),
+    ...authoredSecurityKeys(input).map(key => key.value), ...(input?.refreshFixture ?? []).flatMap(step => (step.secrets ?? []).map(secret => secret.value))]
+    .filter(value => typeof value === 'string' && value.length > 0)
+  const clean = value => typeof value === 'string' ? (secrets.some(secret => value.includes(secret)) ? '[credential-bearing diagnostic redacted]' : value)
+    : Array.isArray(value) ? value.map(clean) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item)])) : value
+  return diagnostics.map(clean)
+}
 export const SECURITY_SIGNATURES = Object.freeze({
   DefaultAzureCredential: [['managed_identity_client_id'], 0, 'credential', 0],
   SecretClient: [['vault_url', 'credential'], 2, 'secretclient'],
@@ -44,6 +56,7 @@ function validInput(input) {
       && (step.secrets === undefined || Array.isArray(step.secrets) && step.secrets.length <= 10 && step.secrets.every(secret => securityExact(secret, 'vaultName,name,value')
         && securityText(secret.vaultName, 24) && securityText(secret.name, 127) && securityText(secret.value, 1024)))))
     && new TextEncoder().encode(JSON.stringify(input)).length <= 128 * 1024
+    && authoredSecurityKeys(input).every(key => authoredSecurityKeys(input).every(other => key.id !== other.id || key.value === other.value))
 }
 
 /** Trusted execution adapter. All handles are owned by the VM WeakMap. */
@@ -79,7 +92,7 @@ export function createSecuritySession(context) {
   function readSecret(request, principal, configProviderId, at) {
     const actual = readSecretAsPrincipal(resources, { ...request, version: request.version ?? undefined }, principal)
     const row = record({ kind: 'secret-read', principalId: principal.principalId, vaultUrl: actual.vaultUrl, name: actual.name,
-      version: actual.version, configProviderId }, at)
+      version: actual.version, configProviderId, keyIds: securityReadKeyIds(actual.value, input) }, at)
     return { ...actual, request, principalId: principal.principalId, readId: row.id }
   }
   const privateContext = { info, handle, fail, record, readSecret, sandbox: () => resources, now: () => state().timeMs }

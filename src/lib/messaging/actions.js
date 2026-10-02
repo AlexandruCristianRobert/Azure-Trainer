@@ -5,7 +5,7 @@ import { messagingMeasurements, messagingDiagnosticsExpected } from './evidence.
 import { recordVerification } from '../labEngine/evidence.js'
 import { cloneJson, isJsonValue } from '../labEngine/run.js'
 import { fail } from '../labEngine/errors.js'
-import { securityActivity, validSecurityJournal } from '../security/evidence.js'
+import { securityActivity, validSecurityJournal, validSecurityLabContext } from '../security/evidence.js'
 
 /** Internal adapter: only an engine-validated intent may reach saved source execution. */
 export function applyMessagingAction(run, action, lab) {
@@ -26,6 +26,7 @@ export function applyMessagingAction(run, action, lab) {
       executionReceipts: [...(state.executionReceipts ?? []), receipt] } } }
     measurements.executionId = executionId
     if (!validSecurityJournal(next.runtime.messaging)) fail('INVALID_EFFECT', 'Security operation journal boundaries are malformed.')
+    if (lab.capabilities?.securityObservability === true && !validSecurityLabContext(next.runtime.messaging, lab.messagingInput?.securityObservability, next.sandbox)) fail('INVALID_EFFECT', 'Security authorization provenance is malformed.')
     const safeDiagnostics = messagingDiagnosticsExpected(measurements, lab.messagingExercise)
     for (const declaration of lab.messagingExercise.tasks.filter(item => item.entry === action.entry && item.mode === action.mode)) {
       const task = lab.tasks.find(task => task.id === declaration.taskId)

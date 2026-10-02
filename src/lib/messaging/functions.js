@@ -6,6 +6,7 @@ import { getFunctionApp, getStorageAccount } from '../sandbox/functions.js'
 import { getQueue } from '../sandbox/ops.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 import { messagingExecutionEnvelope, messagingProjectOptions } from './execute.js'
+import { sanitizeSecurityDiagnostics } from '../security/sdk.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const lower = value => value.toLowerCase()
@@ -14,6 +15,8 @@ const appIdentity = app => `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${a
 
 /** One synchronous, bounded host start. Captured source is evidence data, never executable persisted IR. */
 export function runMessagingFunctions(run, lab) {
+  const envelope = (run, entry, result, paths) => messagingExecutionEnvelope(run, entry, { ...result,
+    diagnostics: lab.capabilities?.securityObservability === true ? sanitizeSecurityDiagnostics(result.diagnostics, run.sandbox, lab.messagingInput?.securityObservability) : result.diagnostics }, paths)
   let entry = 'function_app.py'
   try {
     const config = lab.messagingInput?.functions
@@ -40,7 +43,7 @@ export function runMessagingFunctions(run, lab) {
       || settings.Values.AzureWebJobsStorage !== 'UseDevelopmentStorage=true') fail('Use the Python worker and simulated UseDevelopmentStorage=true storage setting.', 'local.settings.json')
     const options = messagingProjectOptions(run, lab)
     const parsed = parseMessagingProject(files, { entry, mode: 'functions', ...options })
-    if (parsed.diagnostics.length) return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })
+    if (parsed.diagnostics.length) return envelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })
     const program = parsed.program, appId = appIdentity(app), bindings = []
     for (const handler of program.handlers) {
       if (handler.kind !== 'servicebus') continue
@@ -69,9 +72,9 @@ export function runMessagingFunctions(run, lab) {
     if (!validateMessagingState(state)) fail('Captured host source/revision metadata is invalid.', entry)
     program.host = { appId, bindings }
     const result = executeMessagingProgram({ program, state, sandbox: run.sandbox, input: lab.messagingInput ?? {} })
-    return messagingExecutionEnvelope(run, entry, result, paths)
+    return envelope(run, entry, result, paths)
   } catch (error) {
     const diagnostic = error.diagnostic ?? { code: 'MESSAGING_CONFIG', message: error.message, path: entry, line: 1, column: 1 }
-    return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: [diagnostic] })
+    return envelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: [diagnostic] })
   }
 }

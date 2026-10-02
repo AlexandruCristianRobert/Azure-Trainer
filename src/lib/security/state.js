@@ -35,8 +35,9 @@ export function validSecurityInvocation(value) {
 export function validSecurityRecord(row, previous) {
   if (!securityObject(row) || !/^so-[1-9]\d*$/.test(row.id) || !count(row.timeMs)) return false
   const base = 'id,kind,timeMs,'
-  if (row.kind === 'secret-read') return securityExact(row, base + 'principalId,vaultUrl,name,version,configProviderId')
+  if (row.kind === 'secret-read') return securityExact(row, base + 'principalId,vaultUrl,name,version,configProviderId,keyIds')
     && securityText(row.principalId) && secretMetadata({ vaultUrl: row.vaultUrl, name: row.name, version: row.version }) && nullable(row.configProviderId)
+    && Array.isArray(row.keyIds) && row.keyIds.length <= 16 && row.keyIds.every(id => securityText(id, 128)) && new Set(row.keyIds).size === row.keyIds.length
   if (['config-load', 'config-refresh'].includes(row.kind)) return securityExact(row, base + 'providerId,storeId,principalId,selections,outcome')
     && [row.providerId, row.storeId, row.principalId].every(item => securityText(item))
     && Array.isArray(row.selections) && row.selections.length <= 50 && row.selections.every(selection)
@@ -59,7 +60,7 @@ export function validSecurityRecord(row, previous) {
           && item.selections.some(s => s.key === row.configKey && s.label === row.configLabel && s.revision === row.configRevision))) return false
     const read = previous.find(item => item.id === row.readId && item.kind === 'secret-read')
     if (row.readId !== null && (!read || read.principalId !== row.principalId || read.version !== row.secretVersion)) return false
-    return row.statusCode === 202 ? !!read && securityText(row.keyId) : row.keyId === null
+    return row.statusCode === 202 ? !!read && read.keyIds.includes(row.keyId) : row.keyId === null
   }
   return false
 }
