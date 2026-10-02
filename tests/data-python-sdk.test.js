@@ -12,11 +12,100 @@ import { createRedisCluster } from '../src/lib/sandbox/redis.js'
 import { executeRedis } from '../src/lib/data/redis-store.js'
 import { executeRedisSearch, float32Blob } from '../src/lib/data/redis-search.js'
 import { REDIS_TARGET, redisEmbed, redisSourceAnswer } from '../src/data/fixtures/data/redis.js'
+import { createCosmosAccount, createCosmosDatabase, createCosmosContainer } from '../src/lib/sandbox/cosmosdb.js'
+import { CHANGE_FEED_HOOK } from '../src/lib/data/change-feed.js'
+
+const mixedTarget = { kind: 'composite', postgres: { kind: 'postgres', resourceGroup: 'rg-data-capstone', server: 'pg-assistant', database: 'knowledge', port: 5432 }, cosmos: { account: 'cosmos-assistant', database: 'knowledge' }, redis: { kind: 'redis', resourceGroup: 'rg-data-capstone', cluster: 'redis-assistant' } }
+const mixedManifest = { ...REDIS_RUNTIME_MANIFEST, dataApp: true, dataBackend: 'composite', id: 'data-python-capstone-v1', dataTarget: mixedTarget, helperProfile: 'redis-codecs', runtimeFunctions: REDIS_RUNTIME_MANIFEST.runtimeFunctions.filter(name => name !== 'source_answer'), receivers: { sessions: 'cosmos-container' }, editZones: ['round_trip', 'literal_return', 'relay'], routes: { 'GET /answer': 'round_trip' } }
+const mixedFiles = { ...REDIS_HELPER_FILES, 'clients.py': `import psycopg
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
+from azure.cosmos import CosmosClient
+import redis
+DSN = "host=pg-assistant.postgres.database.azure.com port=5432 dbname=knowledge"
+pool = ConnectionPool(DSN, max_size=4)
+cache = redis.Redis("redis-assistant.eastus.redis.training.invalid", 10000, password="Training-Only-Redis-Key", ssl=True, decode_responses=False, protocol=2)
+client = CosmosClient("https://cosmos-assistant.documents.azure.com:443/", credential="training-only-key", consistency_level="Session")
+db = client.get_database_client("knowledge")
+sessions = db.get_container_client("sessions")
+def connect():
+    return psycopg.connect(DSN, row_factory=dict_row)
+`, 'app.py': `from clients import connect, cache, sessions
+from training_runtime import encode_answer, decode_answer
+def round_trip():
+    with connect() as conn:
+        conn.execute("SET LOCAL hnsw.iterative_scan = strict_order")
+        row = conn.execute("SELECT id, body FROM documents WHERE id = %s", (1,)).fetchone()
+    cache.set("round-trip", encode_answer(row), ex=60)
+    answer = relay(cache.get("round-trip"))
+    sessions.upsert_item({"id": "m1", "sessionId": "s1", "answer": answer})
+    return answer
+def relay(payload):
+    return decode_answer(payload)
+def literal_return():
+    answer = relay(cache.get("round-trip"))
+    return {"id": 1, "body": "one source row"}
+` }
+function mixedSandbox() {
+  let sandbox = createResourceGroup(createSandbox(), { name: 'rg-data-capstone', location: 'eastus' }).sandbox
+  sandbox = createPostgresServer(sandbox, { ...mixedTarget.postgres, name: mixedTarget.postgres.server }).sandbox
+  sandbox = createPostgresDatabase(sandbox, { ...mixedTarget.postgres, name: 'knowledge' }).sandbox
+  sandbox = executePg(sandbox, { ...mixedTarget.postgres, sql: "CREATE TABLE documents (id bigint PRIMARY KEY, body text); INSERT INTO documents (id, body) VALUES (1, 'one source row')" }).sandbox
+  sandbox = createRedisCluster(sandbox, { ...mixedTarget.redis, name: mixedTarget.redis.cluster }).sandbox
+  const cosmos = { resourceGroup: 'rg-data-capstone', ...mixedTarget.cosmos }
+  sandbox = createCosmosAccount(sandbox, { ...cosmos, name: cosmos.account, locations: { regionName: 'eastus' } }).sandbox
+  sandbox = createCosmosDatabase(sandbox, { ...cosmos, name: cosmos.database }).sandbox
+  return createCosmosContainer(sandbox, { ...cosmos, name: 'sessions', partitionKeyPath: '/sessionId', throughput: 400 }).sandbox
+}
 
 const manifest = { editZones: ['get_session', 'recent'], receivers: { sessions: 'cosmos-container' } }
 const files = (app, clients = 'from azure.cosmos import CosmosClient\nclient = CosmosClient(URL, credential=KEY, consistency_level="Session")\n') => ({ 'app.py': app, 'clients.py': clients })
 
 describe('parseDataApp', () => {
+  it('executes a manifest-gated PostgreSQL to Redis to Cosmos round trip with returned cache provenance', () => {
+    const parsed = parseDataApp(mixedFiles, mixedManifest)
+    expect(parsed.diagnostics).toEqual([])
+    const sandbox = mixedSandbox()
+    const result = runDataFunction({ appSpec: parsed.appSpec, sandbox, dataTarget: mixedTarget, functionName: 'round_trip', args: [], nowMs: 0, changeFeed: CHANGE_FEED_HOOK })
+    expect(result.status, JSON.stringify(result.error)).toBe(200)
+    expect(result.value).toEqual({ id: 1, body: 'one source row' })
+    expect(result.calls.some(call => typeof call.sql === 'string')).toBe(true)
+    expect(result.calls.some(call => call.call === 'cosmos.container.upsert_item')).toBe(true)
+    expect(result.redis.calls.map(call => call.command)).toEqual(['SET', 'GET'])
+    expect(result.redis.returnProvenance).toMatchObject({ kind: 'get', callIndex: 1, key: 'round-trip' })
+    expect(result.connections).toMatchObject({ opened: 1, closed: 1, active: 0 })
+    expect(result.sandbox.postgresServers[0].databases[0].tables.find(table => table.name === 'documents').rows).toEqual([{ id: 1, body: 'one source row' }])
+    expect(result.sandbox.redisClusters[0].database.keys['round-trip'].value).toMatchObject({ redisKind: 'bytes' })
+    const container = result.sandbox.cosmosAccounts[0].databases[0].containers[0]
+    expect(container.items[0]).toMatchObject({ id: 'm1', sessionId: 's1', answer: { id: 1, body: 'one source row' } })
+    expect(container.changeLog).toHaveLength(1)
+    const originSource = mixedFiles['app.py'].replace('    return answer\n', '    return relay(encode_answer(row))\n')
+    const originParsed = parseDataApp({ ...mixedFiles, 'app.py': originSource }, mixedManifest)
+    expect(originParsed.diagnostics).toEqual([])
+    const origin = runDataFunction({ appSpec: originParsed.appSpec, sandbox, dataTarget: mixedTarget, functionName: 'round_trip', nowMs: 0 })
+    expect(origin.status, JSON.stringify(origin.error)).toBe(200)
+    expect(origin.redis.returnProvenance).toEqual({ kind: 'postgres', callIndex: 1 })
+    expect(origin.value).toEqual({ id: 1, body: 'one source row' })
+  })
+  it('does not certify an equal literal as a cache return or grant composite authority to a single-service manifest', () => {
+    const parsed = parseDataApp(mixedFiles, mixedManifest)
+    expect(parsed.diagnostics).toEqual([])
+    const cached = executeRedis(mixedSandbox(), { ...mixedTarget.redis, database: 'default' }, 'SET', ['round-trip', '{"id":1,"body":"one source row"}']).sandbox
+    const literal = runDataFunction({ appSpec: parsed.appSpec, sandbox: cached, dataTarget: mixedTarget, functionName: 'literal_return', nowMs: 0 })
+    expect(literal.status, JSON.stringify(literal.error)).toBe(200)
+    expect(literal.value).toEqual({ id: 1, body: 'one source row' })
+    expect(literal.redis.calls[0]).toMatchObject({ command: 'GET', hit: true })
+    expect(literal.redis.returnProvenance).toBeNull()
+    const legacy = parseDataApp(files('def recent():\n    return []\n'), { editZones: ['recent'] })
+    expect(runDataFunction({ appSpec: legacy.appSpec, sandbox: cached, dataTarget: mixedTarget, functionName: 'recent' }).error.code).toBe('DATA_UNSUPPORTED')
+    expect(runDataFunction({ appSpec: parsed.appSpec, sandbox: cached, dataTarget: { ...mixedTarget, cosmos: { ...mixedTarget.cosmos, database: 'foreign' } }, functionName: 'literal_return' }).error.code).toBe('DATA_UNSUPPORTED')
+    expect(parseDataApp({ ...mixedFiles, 'app.py': mixedFiles['app.py'] + '\ndef forbidden():\n    return source_answer("q", "p", "v1", "en")\n', }, { ...mixedManifest, editZones: ['forbidden'] }).diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
+    expect(parseDataApp({ ...mixedFiles, 'clients.py': mixedFiles['clients.py'].replace('get_database_client("knowledge")', 'get_database_client(DSN)') }, mixedManifest).diagnostics.some(d => d.code === 'DATA_UNSUPPORTED')).toBe(true)
+    const aliasedCosmos = mixedFiles['clients.py'].replace('import CosmosClient', 'import CosmosClient as HistoryClient').replace('= CosmosClient(', '= HistoryClient(').replace('consistency_level="Session"', 'consistency_level="Eventual"')
+    const aliased = parseDataApp({ ...mixedFiles, 'clients.py': aliasedCosmos }, mixedManifest)
+    expect(aliased.diagnostics).toEqual([])
+    expect(aliased.appSpec.data.client.consistency).toBe('Eventual')
+  })
   it('executes a parameterized Redis semantic hit from real binary vectors and protected decoders', () => {
     const target = REDIS_TARGET
     const question = 'How many days are Contoso Backup snapshots retained?'

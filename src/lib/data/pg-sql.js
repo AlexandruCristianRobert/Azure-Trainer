@@ -285,11 +285,12 @@ class Parser {
       if (this.take('if')) { this.expect('exists'); ifExists = true }
       return { kind: 'drop-index', ifExists, name: this.name() }
     } else if (this.take('set')) {
+      const local = this.take('local')
       const name = this.name()
       if (!SETTINGS.has(name)) this.fail(`Setting '${name}' is not supported.`)
       if (!this.take('=')) this.expect('to')
       const value = this.current().type === 'word' && !['true', 'false', 'null'].includes(this.current().value) ? this.identifier() : this.value()
-      return { kind: 'set', name, value }
+      return { kind: 'set', name, value, ...(local ? { local: true } : {}) }
     } else if (this.take('insert')) return this.insert()
     else if (this.take('explain')) {
       let analyze = false

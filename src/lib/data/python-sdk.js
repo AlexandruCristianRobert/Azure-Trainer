@@ -9,6 +9,15 @@ import { parser } from '@lezer/python'
 import { lookupCall, SDK_CALLS } from './sdk-catalog.js'
 import { CONSISTENCY_ORDER } from './cosmos-cost.js'
 import { REDIS_HELPER_FILES, REDIS_HELPER_ARITIES } from '../../data/templates/data-python/redis-runtime.js'
+import { dataTargetFor } from './targets.js'
+
+// A composite profile uses the protected codecs, keys and vectors only. Its
+// origin is actual PostgreSQL data; the Redis-only canned source is forbidden.
+const COMPOSITE_HELPER_ARITIES = Object.freeze({ response_key: [4], semantic_key: [4], encode_answer: [1], decode_answer: [1], pack_embedding: [1], decode_search: [1], embed: [1, 2] })
+const HELPER_PROFILES = Object.freeze({
+  redis: { files: REDIS_HELPER_FILES, arities: REDIS_HELPER_ARITIES },
+  'redis-codecs': { files: REDIS_HELPER_FILES, arities: COMPOSITE_HELPER_ARITIES },
+})
 
 const ignored = new Set(['(', ')', '[', ']', '{', '}', ',', ':', 'AssignOp', 'for', 'in', 'if', 'elif', 'else', 'return', 'raise', '\n', 'Comment'])
 const kids = (n) => { const r = []; for (let c = n?.firstChild; c; c = c.nextSibling) r.push(c); return r }
@@ -34,10 +43,18 @@ export function parseDataApp(files, manifest = {}) {
   const manifestBackend = manifest.dataBackend ?? (receiverTypes.some(type => type.startsWith('pg-')) ? 'postgres'
     : receiverTypes.some(type => type.startsWith('cosmos-')) ? 'cosmos' : null)
   const postgresManifest = manifestBackend === 'postgres'
-  const redis = manifestBackend === 'redis'
+  const composite = manifestBackend === 'composite'
+  const redis = manifestBackend === 'redis' || composite
+  const helperProfile = HELPER_PROFILES[composite ? manifest.helperProfile : 'redis']
+  const helperArities = helperProfile?.arities ?? {}
+  if (composite && (manifest.dataApp !== true || manifest.id !== 'data-python-capstone-v1' || manifest.helperProfile !== 'redis-codecs'
+    || manifest.dataTarget?.kind !== 'composite' || ['postgres', 'cosmos', 'redis'].some(backend => !dataTargetFor(manifest.dataTarget, backend))
+    || manifest.runtimeFunctions?.includes('source_answer'))) {
+    diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: composite execution requires its captured manifest, literal target and protected helper profile.', path: 'clients.py', line: 1, column: 1 })
+  }
   const runtimeFiles = postgresManifest || redis ? manifest.runtimeFiles ?? [] : []
-  if (redis && (!runtimeFiles.includes('training_runtime.py') || manifest.fixedFiles?.['training_runtime.py'] !== REDIS_HELPER_FILES['training_runtime.py']
-    || Object.keys(REDIS_HELPER_ARITIES).some(name => !manifest.runtimeFunctions?.includes(name)))) {
+  if (redis && (!runtimeFiles.includes('training_runtime.py') || manifest.fixedFiles?.['training_runtime.py'] !== helperProfile?.files['training_runtime.py']
+    || Object.keys(helperArities).some(name => !manifest.runtimeFunctions?.includes(name)))) {
     diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Redis helpers require their canonical protected runtime manifest.', path: 'training_runtime.py', line: 1, column: 1 })
   }
   for (const path of runtimeFiles) {
@@ -55,7 +72,7 @@ export function parseDataApp(files, manifest = {}) {
   }
   if (diagnostics.length) return { appSpec: null, diagnostics }
 
-  const consistency = readClientConsistency(clientsTree, files['clients.py'], diagnostics)
+  let consistency = readClientConsistency(clientsTree, files['clients.py'], diagnostics)
   if (diagnostics.length) return { appSpec: null, diagnostics }
 
   const fileCtx = Object.fromEntries(filePaths.map((path) => {
@@ -68,8 +85,9 @@ export function parseDataApp(files, manifest = {}) {
   }))
 
   // Captured client constants and pool constructors are immutable build data.
-  // Cosmos wiring is deliberately left on its existing manifest path.
-  const pg = manifestBackend ? postgresManifest : filePaths.some(path => kids(trees[path].topNode).some(node => {
+  // Legacy Cosmos wiring stays on its existing manifest path; composite
+  // clients capture all three services in the same ordered initialization.
+  const pg = manifestBackend ? postgresManifest || composite : filePaths.some(path => kids(trees[path].topNode).some(node => {
     if (node.name !== 'ImportStatement') return false
     const imported = kids(node)
     const from = imported[0]?.name === 'from'
@@ -79,7 +97,7 @@ export function parseDataApp(files, manifest = {}) {
         && ['import', ','].includes(imported[index - 1]?.name) && ['psycopg', 'psycopg_pool'].includes(raw(part, files[path])))
   }))
   const globalConstants = pg || redis ? { ...fileCtx['clients.py'].topConstants } : {}
-  const globalTypes = redis ? {} : { ...(manifest.receivers ?? {}) }
+  const globalTypes = redis && !composite ? {} : { ...(manifest.receivers ?? {}) }
   const globals = {}
   const clientOps = []
 
@@ -109,7 +127,7 @@ export function parseDataApp(files, manifest = {}) {
       const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
       const collision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, protectedNames, ctx.text))
       if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
-      const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => ['redis', 'redis.Redis'].includes(binding)).map(([name]) => name))
+      const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', 'psycopg', 'psycopg.connect', 'psycopg_pool', 'psycopg_pool.ConnectionPool'] : [])].includes(binding)).map(([name]) => name))
       const constructorCollision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, constructorNames, ctx.text))
       if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
       findNode(ctx.tree.topNode, node => {
@@ -138,15 +156,24 @@ export function parseDataApp(files, manifest = {}) {
   const pending = []
   const enqueue = (name) => { if (!queued.has(name)) { queued.add(name); pending.push(name) } }
   if (pg || redis) {
-    const clientCtx = { ...fileCtx['clients.py'], path: 'clients.py', manifest, diagnostics, enqueue, locate, types: globalTypes, scope: new Set(), globalConstants, pg, redis, moduleScope: true }
+    const clientCtx = { ...fileCtx['clients.py'], path: 'clients.py', manifest, diagnostics, enqueue, locate, types: globalTypes, scope: new Set(), globalConstants, pg, redis, composite, helperArities, moduleScope: true }
     for (const node of kids(clientsTree.topNode).filter(n => n.name === 'AssignStatement')) {
       const p = parts(node).filter(n => n.name !== 'TypeDef')
       if (p.length !== 2 || p[0].name !== 'VariableName') { unsupported(clientCtx, node, 'this client assignment'); break }
       const name = raw(p[0], clientCtx.text)
       if (Object.hasOwn(globalConstants, name)) { globals[name] = { kind: 'literal', value: globalConstants[name] }; continue }
       const op = lowerStatement(node, clientCtx)
+      if (composite && op?.value?.receiverType === 'cosmos-container' && (manifest.receivers?.[name] !== 'cosmos-container' || op.value.args?.id?.value !== name)) {
+        unsupported(clientCtx, node, 'Cosmos container assignment must match its declared receiver name'); break
+      }
       if (op) { globals[name] = op.value; clientOps.push(op) }
     }
+  }
+  if (composite && !diagnostics.length) {
+    const cosmosClients = clientOps.filter(op => op.value.call === 'cosmos.CosmosClient')
+    if (cosmosClients.length !== 1 || Object.entries(manifest.receivers ?? {}).some(([name, type]) => type === 'cosmos-container' && globals[name]?.receiverType !== type)) {
+      diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: composite Cosmos wiring requires one client and every declared container binding.', path: 'clients.py', line: 1, column: 1 })
+    } else consistency = cosmosClients[0].value.args.consistency_level?.value ?? null
   }
   for (const name of manifest.editZones ?? []) if (locate(name)) enqueue(name)
   if (pg || redis) {
@@ -162,12 +189,16 @@ export function parseDataApp(files, manifest = {}) {
     const found = locate(name)
     if (!found) continue
     if (redis && protectedFunctions.has(name) && Object.hasOwn(REDIS_HELPER_ARITIES, name)) continue
-    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg, redis })
+    functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg, redis, composite, helperArities })
   }
 
   if (diagnostics.length) return { appSpec: null, diagnostics }
   return { appSpec: { data: { version: 1, client: { consistency }, functions, ...(pg ? { postgres: { globals, clientOps,
-    ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}), ...(redis ? { redis: { globals, clientOps } } : {}) } }, diagnostics: [] }
+    ...(manifest.postgresFixture === 'support-v3' ? { fixture: 'support-v3' } : {}) } } : {}), ...(redis ? { redis: { globals, clientOps } } : {}),
+    ...(composite ? { composite: { version: 1, globals, clientOps, fixture: 'capstone', helperProfile: manifest.helperProfile,
+      target: JSON.parse(JSON.stringify(manifest.dataTarget)),
+      containers: Object.fromEntries(Object.entries(manifest.receivers ?? {}).filter(([, type]) => type === 'cosmos-container').map(([name]) => [name, name])),
+    } } : {}) } }, diagnostics: [] }
 }
 
 // Inspect every assignment target, including comma-separated/chained targets
@@ -437,13 +468,19 @@ function lowerCall(node, ctx) {
   const { text, manifest, diagnostics } = ctx
   const callee = kids(node)[0]
   const args = argumentsOfWithText(kids(node).find((c) => c.name === 'ArgList'), text)
-  const constructorKey = ctx.redis ? ctx.redisConstructors[raw(callee, text)] : ctx.pg && PG_CONSTRUCTORS[raw(callee, text)]
+  const constructorKey = (ctx.redis && ctx.redisConstructors[raw(callee, text)])
+    || (ctx.composite && ctx.importBindings[raw(callee, text)] === 'azure.cosmos.CosmosClient' && 'cosmos.CosmosClient')
+    || (ctx.pg && PG_CONSTRUCTORS[raw(callee, text)])
   // Local connect helpers take priority over the imported psycopg constructor.
   if (constructorKey && !(callee.name === 'VariableName' && ctx.locate?.(raw(callee, text)))) {
     const entry = SDK_CALLS[constructorKey]
     const boundArgs = bindArgs(entry, args, node, raw(callee, text), ctx)
-    if (ctx.redis && boundArgs?.protocol && (boundArgs.protocol.kind !== 'literal' || boundArgs.protocol.value !== 2)) return unsupported(ctx, node, 'Redis protocol other than literal 2')
-    return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}), ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
+    if (constructorKey === 'redis.Redis' && boundArgs?.protocol && (boundArgs.protocol.kind !== 'literal' || boundArgs.protocol.value !== 2)) return unsupported(ctx, node, 'Redis protocol other than literal 2')
+    if (constructorKey === 'cosmos.CosmosClient' && (!ctx.moduleScope || boundArgs?.url?.kind !== 'literal' || boundArgs?.credential?.kind !== 'literal'
+      || boundArgs.url.value !== `https://${ctx.manifest.dataTarget.cosmos.account}.documents.azure.com:443/` || boundArgs.credential.value !== 'training-only-key')) return unsupported(ctx, node, 'Cosmos constructor wiring must use the declared literal training target')
+    if (constructorKey === 'cosmos.CosmosClient' && boundArgs?.consistency_level && (boundArgs.consistency_level.kind !== 'literal' || !CONSISTENCY_ORDER.includes(boundArgs.consistency_level.value))) return unsupported(ctx, node, 'Cosmos consistency must be a supported literal level')
+    const receiverType = entry.returns ?? (constructorKey === 'cosmos.CosmosClient' ? 'cosmos-client' : undefined)
+    return diagnostics.length ? null : { kind: 'call-sdk', call: constructorKey, args: boundArgs, ...(receiverType ? { receiverType } : {}), ...(entry.returns === 'pg-pool' ? { lifetime: ctx.moduleScope ? 'module' : 'request' } : {}) }
   }
   if (callee.name === 'MemberExpression') {
     const mps = kids(callee); const propNode = mps.find((c) => c.name === 'PropertyName'); const base = mps[0]
@@ -467,7 +504,10 @@ function lowerCall(node, ctx) {
         const entry = lookupCall(receiverType, property)
         if (!entry) return unsupported(ctx, node, `'${property}' on '${raw(base, text)}'`)
         const boundArgs = bindArgs(entry, args, node, property, ctx)
-        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), ...(receiverType.startsWith('pg-') || receiverType === 'redis-client' ? { target } : {}), call: entry.key, args: boundArgs, ...(entry.returns ? { receiverType: entry.returns } : {}) }
+        const wiringType = ctx.composite && (entry.key === 'cosmos.client.get_database_client' ? 'cosmos-database' : entry.key === 'cosmos.database.get_container_client' ? 'cosmos-container' : null)
+        if (wiringType && (!ctx.moduleScope || boundArgs?.id?.kind !== 'literal' || typeof boundArgs.id.value !== 'string'
+          || (wiringType === 'cosmos-database' ? boundArgs.id.value !== manifest.dataTarget.cosmos.database : manifest.receivers?.[boundArgs.id.value] !== 'cosmos-container'))) return unsupported(ctx, node, 'Cosmos database/container wiring must match the declared literal target')
+        return diagnostics.length ? null : { kind: 'call-sdk', receiver: raw(base, text), ...(ctx.composite || receiverType.startsWith('pg-') || receiverType === 'redis-client' ? { target } : {}), call: entry.key, args: boundArgs, ...((entry.returns ?? wiringType) ? { receiverType: entry.returns ?? wiringType } : {}) }
       }
     }
     return unsupported(ctx, node, 'this method call')
@@ -476,9 +516,11 @@ function lowerCall(node, ctx) {
     const name = raw(callee, text)
     if (ctx.redis && ctx.redisHelpers[name]) {
       const helper = ctx.redisHelpers[name]
-      if (args.keywords.length || !REDIS_HELPER_ARITIES[helper].includes(args.positional.length)) return unsupported(ctx, node, `'${name}(...)' arguments`)
+      if (!ctx.helperArities[helper]) return unsupported(ctx, node, `'${name}(...)' is outside the protected helper profile`)
+      if (args.keywords.length || !ctx.helperArities[helper].includes(args.positional.length)) return unsupported(ctx, node, `'${name}(...)' arguments`)
       return { kind: 'redis-helper', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }
     }
+    if (ctx.composite && name === 'source_answer') return unsupported(ctx, node, 'source_answer is forbidden for composite targets')
     if (BUILTINS.has(name) || (name === 'embed' && !ctx.redis) || (ctx.redis && name === 'float') || (ctx.pg && name === 'training_answer')) {
       const arity = name === 'training_answer' ? 2 : 1
       if (args.keywords.length || args.positional.length !== arity) return unsupported(ctx, node, `'${name}(...)'`)

@@ -20,6 +20,8 @@ import { CORPUS, corpusQuestions } from '../../data/fixtures/data/corpus.js'
 import { SUPPORT_V3_CORPUS, SUPPORT_V3_ALL_QUESTIONS } from '../../data/fixtures/data/corpus-v3.js'
 import { executePg } from './pg-engine.js'
 import { evalRedisCall, evalRedisHelper, newRedisEvidence, redisText, redisSnapshot } from './redis-runtime.js'
+import { dataTargetFor, compositeTargetMatches } from './targets.js'
+import { parsePgSql } from './pg-sql.js'
 
 const MAX_DEPTH = 8
 const round2 = (n) => Math.round(n * 100) / 100
@@ -67,6 +69,15 @@ function recordTrainingCall(ctx, functionName, args, result) {
 
 export function runDataFunction({ appSpec, sandbox, account, database, dataTarget, functionName, args = [], nowMs, scenarioState, changeFeed }) {
   const calls = []
+  const composite = dataTarget?.kind === 'composite'
+  if (composite && (appSpec?.data?.composite?.version !== 1 || appSpec.data.composite.fixture !== 'capstone'
+    || appSpec.data.composite.helperProfile !== 'redis-codecs' || !compositeTargetMatches(appSpec.data.composite.target, dataTarget))) {
+    return { sandbox, status: 500, value: null, error: { code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: composite execution requires its captured manifest and matching target.' }, calls, totalCharge: 0 }
+  }
+  if (!composite && appSpec?.data?.composite) {
+    return { sandbox, status: 500, value: null, error: { code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: a composite app requires its declared composite target.' }, calls, totalCharge: 0 }
+  }
+  if (composite) { account = dataTarget.cosmos.account; database = dataTarget.cosmos.database }
   const acct = (sandbox.cosmosAccounts ?? []).find((a) => a.name === account)
   const accountDefault = acct?.defaultConsistencyLevel
   const clientLevel = appSpec.data.client.consistency
@@ -86,19 +97,17 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
     trainingCalls: [], trainingTraceTruncated: { value: false },
     redisEvidence: newRedisEvidence(),
     // Metadata never enters learner values, SDK arguments or persisted state.
-    redisFlow: dataTarget?.kind === 'redis' && appSpec.data.redis ? { current: null, locals: new WeakMap() } : null,
+    redisFlow: (dataTarget?.kind === 'redis' || composite) && appSpec.data.redis ? { current: null, locals: new WeakMap() } : null,
   }
   const totalCharge = () => round2(calls.reduce((sum, call) => sum + (call.charge ?? 0), 0))
-  const runtimeEvidence = () => dataTarget?.kind === 'postgres' ? { connections: ctx.connections,
-    trainingCalls: ctx.trainingCalls, trainingTraceTruncated: ctx.trainingTraceTruncated.value } : dataTarget?.kind === 'redis' && appSpec.data.redis ? { redis: ctx.redisEvidence } : {}
+  const runtimeEvidence = () => ({ ...(['postgres', 'composite'].includes(dataTarget?.kind) ? { connections: ctx.connections,
+    trainingCalls: ctx.trainingCalls, trainingTraceTruncated: ctx.trainingTraceTruncated.value } : {}),
+    ...(['redis', 'composite'].includes(dataTarget?.kind) && appSpec.data.redis ? { redis: ctx.redisEvidence } : {}) })
   try {
-    if (dataTarget?.kind === 'postgres') {
-      for (const [name, expr] of Object.entries(appSpec.data.postgres?.globals ?? {})) if (expr.kind === 'literal') ctx.globals[name] = expr.value
-      execOps(appSpec.data.postgres?.clientOps ?? [], ctx.globals, { ...ctx, depth: 0 })
-    }
-    if (dataTarget?.kind === 'redis' && appSpec.data.redis) {
-      for (const [name, expr] of Object.entries(appSpec.data.redis.globals)) if (expr.kind === 'literal') ctx.globals[name] = expr.value
-      execOps(appSpec.data.redis.clientOps, ctx.globals, { ...ctx, depth: 0 })
+    const clients = composite ? appSpec.data.composite : dataTarget?.kind === 'postgres' ? appSpec.data.postgres : dataTarget?.kind === 'redis' ? appSpec.data.redis : null
+    if (clients) {
+      for (const [name, expr] of Object.entries(clients.globals ?? {})) if (expr.kind === 'literal') ctx.globals[name] = expr.value
+      execOps(clients.clientOps ?? [], ctx.globals, { ...ctx, depth: 0 })
     }
     const returned = callFunction(functionName, args, ctx, 0)
     if (ctx.redisFlow) ctx.redisEvidence.returnProvenance = ctx.redisFlow.current?.origin ?? null
@@ -118,7 +127,7 @@ function callFunction(name, argValues, ctx, depth, argFlow = []) {
   fn.params.forEach((param, i) => { locals[param] = argValues[i] })
   if (ctx.redisFlow) ctx.redisFlow.locals.set(locals, Object.fromEntries(fn.params.map((param, i) => [param, argFlow[i] ?? null])))
   const frame = { ...ctx, currentFunctionName: name, depth }
-  const traceContext = ctx.dataTarget?.kind === 'postgres' && name === 'build_context'
+  const traceContext = ['postgres', 'composite'].includes(ctx.dataTarget?.kind) && name === 'build_context'
   const trainingArgs = traceContext ? trainingSnapshot(argValues) : null
   const signal = execOps(fn.body, locals, frame)
   const result = signal ? signal.value : null
@@ -158,7 +167,7 @@ function execStatement(op, locals, ctx) {
     case 'for': {
       const iterable = evalExpr(op.iterable, locals, ctx)
       const iterableFlow = ctx.redisFlow?.current
-      if (['postgres', 'redis'].includes(ctx.dataTarget?.kind) && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
+      if (['postgres', 'redis', 'composite'].includes(ctx.dataTarget?.kind) && (!Array.isArray(iterable) || iterable.length > 1024)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this bounded iterable')
       for (const [index, item] of (Array.isArray(iterable) ? iterable : []).entries()) {
         locals[op.name] = item
         if (ctx.redisFlow) ctx.redisFlow.locals.get(locals)[op.name] = iterableFlow?.children?.[index] ?? null
@@ -299,7 +308,7 @@ function evalBuiltin(expr, locals, ctx) {
     }
     case 'list': return Array.isArray(value) ? value.slice() : value == null ? [] : Array.from(value)
     case 'len': return Array.isArray(value) || typeof value === 'string' ? value.length : value && typeof value === 'object' ? Object.keys(value).length : 0
-    case 'str': return ctx.dataTarget?.kind === 'postgres' ? pythonPgStr(value) : pythonStr(value)
+    case 'str': return ['postgres', 'composite'].includes(ctx.dataTarget?.kind) ? pythonPgStr(value) : pythonStr(value)
     case 'embed': {
       const deployment = ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'
       if (ctx.dataTarget?.kind !== 'postgres') return embed(value, deployment)
@@ -308,7 +317,7 @@ function evalBuiltin(expr, locals, ctx) {
       return deployment === 'embeddings-v2' ? [...vector, 0, 0, 0, 0] : [...vector]
     }
     case 'training_answer': {
-      if (ctx.dataTarget?.kind !== 'postgres') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
+      if (!['postgres', 'composite'].includes(ctx.dataTarget?.kind)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
       const context = evalExpr(expr.args[1], locals, ctx)
       const trainingArgs = trainingSnapshot([value, context])
       const top = context?.sources?.[0]
@@ -319,6 +328,7 @@ function evalBuiltin(expr, locals, ctx) {
         ? 'I could not find a relevant passage in the supplied sources.'
         : (v3 ? SUPPORT_V3_ALL_QUESTIONS : corpusQuestions()).find(question => question.expectedChunkIds.includes(top))?.answer ?? passage.content
       recordTrainingCall(ctx, 'training_answer', trainingArgs, result)
+      if (ctx.redisFlow) ctx.redisFlow.current = null
       return result
     }
     case 'next': return Array.isArray(value) && value.length ? value[0] : null
@@ -336,7 +346,28 @@ function evalCallSdk(expr, locals, ctx) {
   const argValues = Object.fromEntries(Object.entries(expr.args ?? {}).map(([key, value]) => [key, evalExpr(value, locals, ctx)]))
   if (call.startsWith('postgres.')) return evalPgCall(expr, argValues, locals, ctx)
   if (call.startsWith('redis.')) return evalRedisCall(call, argValues, expr.target ? evalExpr(expr.target, locals, ctx) : null, ctx, fail)
-  const ref = { account: ctx.account, database: ctx.database, container: receiver }
+  if (ctx.redisFlow) ctx.redisFlow.current = null
+  let containerName = receiver
+  if (ctx.dataTarget?.kind === 'composite') {
+    const target = dataTargetFor(ctx.dataTarget, 'cosmos')
+    const bound = expr.target ? evalExpr(expr.target, locals, ctx) : null
+    if (call === 'cosmos.CosmosClient') {
+      if (argValues.url !== `https://${target.account}.documents.azure.com:443/` || argValues.credential !== 'training-only-key') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: Cosmos client differs from the captured target')
+      return { runtimeKind: 'cosmos-client', account: target.account }
+    }
+    if (call === 'cosmos.client.get_database_client') {
+      if (bound?.runtimeKind !== 'cosmos-client' || bound.account !== target.account || argValues.id !== target.database) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: Cosmos database differs from the captured target')
+      return { runtimeKind: 'cosmos-database', account: target.account, database: target.database }
+    }
+    if (call === 'cosmos.database.get_container_client') {
+      if (bound?.runtimeKind !== 'cosmos-database' || bound.database !== target.database || !Object.hasOwn(ctx.appSpec.data.composite.containers, argValues.id)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: undeclared Cosmos container wiring')
+      return { runtimeKind: 'cosmos-container', account: target.account, database: target.database, container: argValues.id }
+    }
+    containerName = ctx.appSpec.data.composite.containers[receiver]
+    if (bound?.runtimeKind !== 'cosmos-container' || bound.account !== target.account || bound.database !== target.database || bound.container !== containerName) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: Cosmos method requires its captured container receiver')
+  }
+  if (ctx.redisFlow) ctx.redisFlow.current = null
+  const ref = { account: ctx.account, database: ctx.database, container: containerName }
   const container = findContainer(ctx.sandboxBox.value, ref)
   if (!container) return fail('NotFound', `Resource Not Found (container '${receiver}')`)
   switch (call) {
@@ -359,7 +390,10 @@ function pgRef(conninfo, ctx) {
     if (!match) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: this libpq connection string')
     fields[match[1]] = (match[2] ?? match[3]).replace(/\\(.)/g, '$1'); position = token.lastIndex
   }
-  const target = ctx.dataTarget
+  const target = dataTargetFor(ctx.dataTarget, 'postgres')
+  if (!target) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: missing PostgreSQL target')
+  if (ctx.dataTarget.kind === 'composite' && ((fields.host && fields.host !== target.server && fields.host !== `${target.server}.postgres.database.azure.com`) || (fields.dbname && fields.dbname !== target.database)
+    || ![5432, 6432].includes(Number(fields.port ?? target.port ?? 5432)))) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL connection differs from the captured target')
   return { server: fields.host ?? target.server, resourceGroup: target.resourceGroup, database: fields.dbname ?? target.database, port: Number(fields.port ?? target.port ?? 5432) }
 }
 
@@ -379,13 +413,17 @@ function closePgResource(resource, ctx) {
   if (!resource || resource.closed) return
   resource.closed = true
   if (resource.pgKind !== 'connection') return
+  for (const [name, previous] of Object.entries(resource.localSettings ?? {})) {
+    if (previous === undefined) delete resource.session.settings[name]
+    else resource.session.settings[name] = previous
+  }
   if (resource.pool) resource.pool.session = resource.session
   ctx.connections.closed++; ctx.connections.active--
   ctx.connections.events.push({ event: 'close', connection: resource.mode, port: resource.ref.port })
 }
 
 function evalPgCall(expr, values, locals, ctx) {
-  if (ctx.dataTarget?.kind !== 'postgres') return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL SDK requires a PostgreSQL data target')
+  if (!dataTargetFor(ctx.dataTarget, 'postgres')) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL SDK requires a PostgreSQL data target')
   const call = expr.call
   if (call === 'postgres.Jsonb') { const adapted = { pgKind: 'jsonb', value: values.obj }; ctx.jsonbValues.add(adapted); return adapted }
   if (call === 'postgres.register_vector') {
@@ -405,8 +443,16 @@ function evalPgCall(expr, values, locals, ctx) {
   if (conn?.pgKind !== 'connection' || conn.closed || target.closed) return fail('ProgrammingError', 'connection or cursor is closed')
   if (call.endsWith('.close')) { closePgResource(target, ctx); return null }
   if (call === 'postgres.connection.cursor') return { pgKind: 'cursor', connection: conn, rowFactory: values.row_factory ?? conn.rowFactory, rows: [], position: 0, closed: false }
-  if (call.endsWith('.fetchall')) { const rows = target.rows.slice(target.position); target.position = target.rows.length; return rows }
-  if (call.endsWith('.fetchone')) return target.rows[target.position++] ?? null
+  if (call.endsWith('.fetchall')) {
+    const rows = target.rows.slice(target.position); target.position = target.rows.length
+    if (ctx.redisFlow) ctx.redisFlow.current = { origin: target.origin, children: rows.map(row => pgRowFlow(row, target.origin)) }
+    return rows
+  }
+  if (call.endsWith('.fetchone')) {
+    const row = target.rows[target.position++] ?? null
+    if (ctx.redisFlow) ctx.redisFlow.current = row === null ? null : pgRowFlow(row, target.origin)
+    return row
+  }
   if (call.endsWith('.execute')) {
     const params = values.params ?? []
     const named = params !== null && typeof params === 'object' && !Array.isArray(params) && !ctx.jsonbValues.has(params)
@@ -417,6 +463,11 @@ function evalPgCall(expr, values, locals, ctx) {
       return value
     }
     const adapted = named ? Object.fromEntries(Object.entries(params).map(([key, value]) => [key, adapt(value)])) : params.map(adapt)
+    const localStatements = parsePgSql(values.query).statements?.filter(stmt => stmt.kind === 'set' && stmt.local) ?? []
+    for (const stmt of localStatements) {
+      conn.localSettings ??= {}
+      if (!Object.hasOwn(conn.localSettings, stmt.name)) conn.localSettings[stmt.name] = conn.session.settings[stmt.name]
+    }
     const executed = executePg(ctx.sandboxBox.value, { ...conn.ref, sql: values.query, params: adapted, session: conn.session, nowMs: ctx.nowMs })
     ctx.sandboxBox.value = executed.sandbox; conn.session = executed.session
     const cursor = target.pgKind === 'cursor' ? target : { pgKind: 'cursor', connection: conn, rowFactory: conn.rowFactory, closed: false }
@@ -437,10 +488,16 @@ function evalPgCall(expr, values, locals, ctx) {
       conn.pendingLatency = 0; ctx.calls.push(record)
       if (result.error) throw new StopExecution(result.error)
       cursor.rows = rows
+      cursor.origin = result.kind === 'select' ? { kind: 'postgres', callIndex: ctx.calls.length - 1 } : null
     }
     return cursor
   }
   return fail('DATA_UNSUPPORTED', `Not supported by the simulator: SDK call '${call}'`)
+}
+
+function pgRowFlow(row, origin) {
+  if (!origin) return null
+  return { origin, children: Object.fromEntries(Object.keys(row).map(key => [key, { origin }])) }
 }
 
 function execReadItem(container, ref, argValues, ctx, receiver) {

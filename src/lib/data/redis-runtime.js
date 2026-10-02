@@ -2,6 +2,7 @@ import { getRedisCluster } from '../sandbox/redis.js'
 import { executeRedis } from './redis-store.js'
 import { executeRedisSearch, float32Blob } from './redis-search.js'
 import { redisEmbed, redisSourceAnswer } from '../../data/fixtures/data/redis.js'
+import { dataTargetFor } from './targets.js'
 
 const MAX_TRACE = 256
 const estimate = 'Simulated estimate — not an Azure guarantee.'
@@ -90,10 +91,11 @@ function responses(value, decode, fail) {
 }
 
 export function evalRedisCall(call, args, target, ctx, fail) {
-  if (ctx.dataTarget?.kind !== 'redis' || !ctx.appSpec.data.redis) return unsupported(fail, 'Redis calls require a trusted Redis app and target')
+  const dataTarget = dataTargetFor(ctx.dataTarget, 'redis')
+  if (dataTarget?.kind !== 'redis' || !ctx.appSpec.data.redis) return unsupported(fail, 'Redis calls require a trusted Redis app and target')
   ctx.redisFlow.current = null
   if (call === 'redis.Redis') {
-    const cluster = getRedisCluster(ctx.sandboxBox.value, { resourceGroup: ctx.dataTarget.resourceGroup, name: ctx.dataTarget.cluster })
+    const cluster = getRedisCluster(ctx.sandboxBox.value, { resourceGroup: dataTarget.resourceGroup, name: dataTarget.cluster })
     if (!cluster || args.host !== cluster.hostName || (args.port ?? 10000) !== cluster.database.port || args.ssl !== true
       || args.password !== 'Training-Only-Redis-Key' || cluster.database.clientProtocol !== 'Encrypted' || cluster.database.accessKeysAuthentication !== 'Enabled') {
       return fail('ConnectionError', 'Redis connection must use the supplied host, port, TLS and training-only key.')
@@ -123,8 +125,8 @@ export function evalRedisCall(call, args, target, ctx, fail) {
     if (values.length < 3 || values.length % 2 !== 1) return fail('ResponseError', "ERR wrong number of arguments for 'hset' command")
     values = [values[0], Object.fromEntries(Array.from({ length: (values.length - 1) / 2 }, (_, i) => [redisText(values[1 + i * 2], fail), values[2 + i * 2]]))]
   }
-  const before = { ...getRedisCluster(ctx.sandboxBox.value, { resourceGroup: ctx.dataTarget.resourceGroup, name: ctx.dataTarget.cluster })?.database.stats }
-  const result = (command.startsWith('FT.') ? executeRedisSearch : executeRedis)(ctx.sandboxBox.value, ctx.dataTarget, command, values, { nowMs: ctx.nowMs ?? 0 })
+  const before = { ...getRedisCluster(ctx.sandboxBox.value, { resourceGroup: dataTarget.resourceGroup, name: dataTarget.cluster })?.database.stats }
+  const result = (command.startsWith('FT.') ? executeRedisSearch : executeRedis)(ctx.sandboxBox.value, dataTarget, command, values, { nowMs: ctx.nowMs ?? 0 })
   ctx.sandboxBox.value = result.sandbox
   ctx.redisEvidence.measurements = { ...snapshot(result.measurements, fail), estimate }
   const deltas = Object.fromEntries(['hits', 'misses', 'expiredKeys', 'rejectedWrites'].map(key => [key, (result.measurements[key] ?? 0) - (before[key] ?? 0)]))
@@ -159,7 +161,8 @@ export function evalRedisCall(call, args, target, ctx, fail) {
 }
 
 export function evalRedisHelper(name, args, ctx, fail, argFlow = []) {
-  if (ctx.dataTarget?.kind !== 'redis' || !ctx.appSpec.data.redis) return unsupported(fail, 'protected Redis helpers require a trusted Redis app and target')
+  if (!['redis', 'composite'].includes(ctx.dataTarget?.kind) || !ctx.appSpec.data.redis) return unsupported(fail, 'protected Redis helpers require a trusted Redis app and target')
+  if (ctx.dataTarget.kind === 'composite' && name === 'source_answer') return unsupported(fail, 'source_answer is forbidden for composite targets')
   ctx.redisFlow.current = null
   switch (name) {
     case 'response_key':
