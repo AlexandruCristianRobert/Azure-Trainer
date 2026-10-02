@@ -126,3 +126,15 @@ Controller requested typed actual ValueError classification and physical receipt
 | 2026-10-02 | Final typed failure/linkage GREEN | Test Files1 passed; Tests25 passed; test bodies80ms | 0 | 2.5997006 |
 
 Follow-up test total **5.3490929 seconds**. Task5 total tests **23.3711940 seconds**, diagnostic **0.0875345 seconds**, combined **23.4587285 seconds**. Starting follow-up cumulative **114.7355111 seconds**; new cumulative known verification **120.0846040 seconds (2.001410 minutes)**. Both typed classification/receipt tests observed missing-field behavioral RED before the narrow VM addition. Existing23 cases still pass. No grading/proof flags or persisted host-schema changes were added.
+
+### Task5 fix round1: decorated declaration admission
+
+Sole scoped Important review finding: decorated classes were skipped without explicit unsupported rejection. Added a positioned host regression for a decorated class both before and after a valid handler, then one admission guard. Same focused command/Stopwatch wrapper; no broader checks or new executable diagnostic.
+
+| Date | Stage | Command | Actual relevant stdout | Exit | Elapsed seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Supplied review diagnostic (not rerun) | Reviewer in-memory Node parser diagnostic | Decorated class diagnostics:[]; unsupported source retained valid handler | 0 | 0.0851225 |
+| 2026-10-02 | Decorated class RED | `npm test -- tests/messaging-functions.test.js` | Tests2 failed /25 passed (27); both before/after cases expected positioned unsupported, received undefined diagnostic | 1 | 2.7455488 |
+| 2026-10-02 | Decorated class GREEN | `npm test -- tests/messaging-functions.test.js` | Test Files1 passed; Tests27 passed; test bodies85ms | 0 | 2.6536924 |
+
+Fix round1 tests **5.3992412 seconds**. Starting cumulative including supplied diagnostic **120.1697265 seconds**; new cumulative known verification **125.5689677 seconds (2.092816 minutes)**. All invocations measured; no full suite/build/cloud/replay/browser/agents. The nonblocking two-FunctionApp-object observation remains outside this fix. Static git diff --check passed with Windows LF/CRLF notices only.

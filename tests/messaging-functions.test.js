@@ -185,4 +185,16 @@ describe('bounded Python Functions host', () => {
     expect(result.diagnostics[0]).toMatchObject({ errorType: 'ValueError', handlerFailure: { kind: 'eventgrid', appId: appId.toLowerCase(), functionName: 'NotifyOrder', functionId: 'function_app.py:notify_order', deliveryId: 'eg-delivery-7', eventRecordId: 'eg-event-5', eventId: 'e7' } })
     expect(result.diagnostics.map(d => d.handlerFailure.attempt)).toEqual([1, 2])
   })
+  it.each(['before', 'after'])('rejects an unsupported decorated class %s a valid handler before receiving work', position => {
+    const f = functionsFixture(), valid = source(success)
+    const declaration = '@unknown_decorator()\nclass Unimplemented:\n    arbitrary_side_effect()\n'
+    const prefix = position === 'before' ? header : valid
+    f.run.project.savedFiles['function_app.py'] = position === 'before' ? valid.replace(header, header + declaration) : valid + declaration
+    const result = runMessagingFunctions(f.run, f.lab)
+    expect(result.diagnostics[0]).toMatchObject({ code: 'MESSAGING_UNSUPPORTED', path: 'function_app.py', line: prefix.split('\n').length, column: 1 })
+    expect(result.run).toBe(f.run)
+    expect(result.run.runtime.messaging.deliveries.some(trace => trace.kind === 'receive')).toBe(false)
+    expect(result.run.runtime.messaging.effects).toEqual({})
+    expect(messages(result)[0].status).toBe('active')
+  })
 })

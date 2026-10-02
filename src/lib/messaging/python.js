@@ -447,6 +447,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     program.imports[path] = []; program.globals[path] = []
     for (const top of children(root)) {
       const node = top.name === 'DecoratedStatement' ? children(top).find(n => n.name === 'FunctionDefinition') : top
+      if (top.name === 'DecoratedStatement' && !node) unsupported('Only supported function declarations may have decorators.', loc(top, path))
       if (node?.name === 'FunctionDefinition') {
         if (top.name === 'DecoratedStatement' && mode !== 'functions') unsupported('Decorators require Functions host mode.', loc(top, path))
         const nameNode = children(node).find(n => n.name === 'VariableName'), name = safeKey(text(nameNode, path), loc(nameNode, path)), id = `${path}:${name}`
