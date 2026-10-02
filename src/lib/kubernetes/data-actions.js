@@ -23,6 +23,8 @@ import { isJsonValue, isPlainObject } from '../labEngine/run.js'
 import { simulatePoolLoad } from '../data/pg-pool.js'
 import { pgDsnPort, pgDeployedArtifact } from '../../data/labs/data-journey/postgres-helpers.js'
 import { applyRedisAction, validRedisScenario } from './redis-actions.js'
+import { applyDataCapstoneAction } from './data-capstone-actions.js'
+export { runCapstoneSteps, validDataCapstoneScenario, applyDataCapstoneAction } from './data-capstone-actions.js'
 
 const round2 = (n) => Math.round(n * 100) / 100
 const NO_READY_ENDPOINTS = Object.freeze({ error: 'ServiceUnavailable' })
@@ -234,6 +236,7 @@ function runLoad(run, lab, manifest, scenario) {
 }
 
 export function applyDataAction(run, action, lab) {
+  if (action.type === 'data-capstone') return applyDataCapstoneAction(run, action, lab)
   if (action.type === 'data-cache') return applyRedisAction(run, action, lab)
   const postgres = lab?.capabilities?.dataPostgres === true
   if (lab?.capabilities?.dataCosmos !== true && !postgres) {

@@ -113,8 +113,9 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
     }
     const returned = callFunction(functionName, args, ctx, 0)
     if (ctx.redisFlow) ctx.redisEvidence.returnProvenance = ctx.redisFlow.current?.origin ?? null
+    const returnDataProvenance = composite ? redisSnapshot(ctx.redisFlow?.current ?? null, fail) : null
     const value = appSpec.data.redis ? redisSnapshot(returned, fail) : returned
-    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...runtimeEvidence() }
+    return { sandbox: ctx.sandboxBox.value, status: 200, value, calls, totalCharge: totalCharge(), ...runtimeEvidence(), ...(composite ? { returnDataProvenance } : {}) }
   } catch (error) {
     if (!(error instanceof StopExecution)) throw error
     return { sandbox: ctx.sandboxBox.value, status: statusFor(error.errorPayload.code), value: null, error: error.errorPayload, calls, totalCharge: totalCharge(), ...runtimeEvidence() }
@@ -264,7 +265,11 @@ function evalExprValue(expr, locals, ctx) {
         if (targetFlow) { delete targetFlow.origin; (targetFlow.children ??= {})[target.length] = valueFlow }
         target.push(value); return null
       }
-      if (expr.method === 'join' && typeof target === 'string' && Array.isArray(value) && value.length <= 1024 && value.every(item => typeof item === 'string')) return value.join(target)
+      if (expr.method === 'join' && typeof target === 'string' && Array.isArray(value) && value.length <= 1024 && value.every(item => typeof item === 'string')) {
+        const origins = value.map((_, index) => valueFlow?.children?.[index]?.origin)
+        if (ctx.dataTarget?.kind === 'composite' && ctx.redisFlow && origins.length && origins.every(origin => origin && JSON.stringify(origin) === JSON.stringify(origins[0]))) ctx.redisFlow.current = { origin: origins[0] }
+        return value.join(target)
+      }
       return fail('DATA_UNSUPPORTED', `Not supported by the simulator: invalid bounded ${expr.method} operation`)
     }
     case 'subscript': {
@@ -321,11 +326,16 @@ function evalBuiltin(expr, locals, ctx) {
     case 'training_answer': {
       if (!['postgres', 'composite'].includes(ctx.dataTarget?.kind)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
       const context = evalExpr(expr.args[1], locals, ctx)
+      const contextFlow = ctx.redisFlow?.current
       const trainingArgs = trainingSnapshot([value, context])
       if (ctx.appSpec.data.composite?.helperProfile === 'capstone') {
         const result = capstoneTrainingAnswer(value, context)
         recordTrainingCall(ctx, 'training_answer', trainingArgs, result)
-        if (ctx.redisFlow) ctx.redisFlow.current = null
+        if (ctx.redisFlow) {
+          const sourceOrigin = contextFlow?.children?.sources?.children?.[0]?.origin
+          const passageOrigin = contextFlow?.children?.passages?.origin
+          ctx.redisFlow.current = sourceOrigin?.kind === 'postgres' && passageOrigin?.kind === 'postgres' && sourceOrigin.callIndex === passageOrigin.callIndex ? { origin: sourceOrigin } : null
+        }
         return result
       }
       const top = context?.sources?.[0]
