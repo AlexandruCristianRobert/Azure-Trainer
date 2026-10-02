@@ -70,6 +70,25 @@ describe('Functions curriculum', () => {
     expect(run.runtime.messaging.eventGrid.deliveries[0].status).toBe('delivered')
     expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
   })
+  it('a completion event published before receipt-bound work cannot prove the completed-business fact', () => {
+    const lab = at(1), source = lab.tasks.at(-1).solution.steps.find(step => step.path === 'function_app.py').content
+    const work = '        perform_order_work(order)\n        record_processed(order)\n'
+    const premature = source.replace(work, '').replace('        publisher.send([event])\n', '        publisher.send([event])\n' + work)
+    expect(premature).not.toBe(source)
+    const run = replay(lab, premature)
+    const measurement = run.runtime.messaging.executionReceipts.at(-1).measurements
+    const physical = measurement.receipts.servicebus.find(row => row.messageId === 'm1')
+    const delivery = measurement.receipts.eventgrid[0]
+    const publicationAt = measurement.trace.findIndex(row => row.kind === 'publish' && row.eventRecordId === delivery.eventRecordId)
+    const markerAt = measurement.trace.findIndex(row => row.kind === 'order-record' && row.messageRecordId === physical.id)
+    expect(publicationAt).toBeGreaterThan(-1)
+    expect(publicationAt).toBeLessThan(markerAt)
+    expect(physical.status).toBe('completed')
+    expect(delivery.status).toBe('delivered')
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 1 })
+    expect(run.runtime.messaging.effects.notifications).toEqual({ 'e-o1': { eventId: 'e-o1', orderId: 'o1' } })
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
   it('host settings and actual app configuration are fresh dependencies; README is harmless', () => {
     const lab = at(1)
     let run = replay(lab)

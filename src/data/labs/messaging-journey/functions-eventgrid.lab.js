@@ -1,5 +1,5 @@
 import { FUNCTIONS_EVENTGRID_STARTER_FILES, FUNCTIONS_EVENTGRID_SOLUTION_FILES } from '../../templates/messaging-python/functions.js'
-import { functionsMetadata, messagingTask, file, command, functionsReady, functionsPaths, functionsResources, functionsReadme, functionsExerciseTask, EVENT_TOPIC_ID, EVENT_SUBSCRIPTION_ID, FUNCTION_APP_ID, FUNCTION_ENDPOINT, eventSubscription, eq, publishedEvents, notifiedFunctionDelivery } from './helpers.js'
+import { functionsMetadata, messagingTask, file, command, functionsReady, functionsPaths, functionsResources, functionsReadme, functionsExerciseTask, EVENT_TOPIC_ID, EVENT_SUBSCRIPTION_ID, FUNCTION_APP_ID, FUNCTION_ENDPOINT, eventSubscription, eq, publishedEvents, notifiedFunctionDelivery, receivedCompletion } from './helpers.js'
 import { seedMessagingStage } from './seeds.js'
 import { processedFunctionOrder } from './functions-servicebus.lab.js'
 
@@ -19,8 +19,13 @@ export const configureFunctionSubscriptionTask = () => messagingTask({ id: 'even
   solution: { steps: [command(`az eventgrid topic event-subscription create --resource-group rg-messaging --topic-name evgt-orders --name order-notifications --endpoint-type azurefunction --endpoint ${FUNCTION_ENDPOINT} --included-event-types Contoso.OrderProcessed --subject-begins-with /orders/EU/`)] },
 })
 function notifiedOrder(measurement) {
-  const fact = functionFact({ id: 'o1', region: 'EU', quantity: 2 }), [row] = measurement.receipts.eventgrid
-  return processedFunctionOrder(measurement) && publishedEvents(measurement, [fact]) && measurement.receipts.eventgrid.length === 1
+  if (!processedFunctionOrder(measurement) || measurement.receipts.eventgrid.length !== 1) return false
+  const physical = measurement.receipts.servicebus[0], receipt = receivedCompletion(measurement, physical)
+  if (!receipt) return false
+  const fact = functionFact(JSON.parse(physical.body)), [row] = measurement.receipts.eventgrid
+  const markerAt = measurement.trace.findIndex(trace => trace.kind === 'order-record' && receipt.linked(trace))
+  const publishAt = measurement.trace.findIndex(trace => trace.kind === 'publish' && trace.eventRecordId === row.eventRecordId && trace.event.id === fact.id)
+  return publishedEvents(measurement, [fact]) && markerAt >= 0 && markerAt < publishAt && publishAt < receipt.completeAt
     && row.attempts === 1 && notifiedFunctionDelivery(measurement, row, fact)
     && measurement.trace.some(trace => trace.kind === 'route' && trace.deliveryId === row.id && trace.eventRecordId === row.eventRecordId)
     && measurement.trace.filter(trace => trace.kind === 'notification').length === 1

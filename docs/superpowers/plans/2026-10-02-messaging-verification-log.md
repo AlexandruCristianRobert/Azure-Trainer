@@ -313,3 +313,15 @@ Base9755c3e; starting cumulative **280.6650023 seconds**. Only the two owning fi
 | 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0423212 |
 
 Five test invocations **14.0490221 seconds**, static **0.0423212 seconds**, combined **14.0913433 seconds**. New cumulative **294.7563456 seconds (4.91260576 minutes)**. No unmeasured executable probes; code/context/status/diff reads are not probes. Full report/raw final GREEN in ignored task-10-report.md. Journey-local MESSAGING_LABS contains all12; aggregate catalog remains Task11. Deferred Task9/controller final-review pointers untouched.
+
+### Task 10 fix round 1: completed-business-fact publication order
+
+Base dd5524f. Supplied reviewer read-only probe **0.2894908 seconds**, already run and not repeated; starting cumulative **295.0458364 seconds**. Read the sole Important finding verbatim and receiving-code-review instructions; reused TDD/verification/systematic-debugging. Lab11 only now derives the expected fact from the actual physical input receipt and requires its same-lock marker before the actual published event, followed by host completion. No runtime, Capstone, other policy or source-template changes. No agents/aggregate/full/legacy/cloud/browser/build/AKS/Container Apps/merge/push/publication.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Premature event RED | npm test -- tests/messaging-labs-functions.test.js | 1 failed /6 passed; publication-before-work still completed and notified correctly, task incorrectly passed; bodies154ms | 1 | 2.8072415 |
+| 2026-10-02 | Final Functions curriculum GREEN | npm test -- tests/messaging-labs-functions.test.js | 7 passed; actual premature publication rejected, existing correct receipt/callback/freshness cases pass; bodies149ms, pristine | 0 | 2.7385055 |
+| 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0411016 |
+
+Two test invocations **5.5457470 seconds**, static **0.0411016 seconds**, combined **5.5868486 seconds**. New cumulative **300.6326850 seconds (5.01054475 minutes)** including the supplied review probe. No executable diagnostic beyond supplied review; no Capstone rerun. Full raw GREEN/fix rationale appended to ignored task-10-report.md. Task11 aggregate/legacy checks and controller static resolution of unchanged binding/configuration constants remain separately owned.
