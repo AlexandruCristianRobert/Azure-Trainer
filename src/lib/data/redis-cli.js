@@ -10,7 +10,7 @@ function display(value) {
 
 export function runRedisCli(sandbox, tokens, context) {
   const fail = error => response(sandbox, { kind: 'connection', error })
-  if (context?.lab?.capabilities?.dataRedis !== true) return fail(unsupported('redis-cli requires the dataRedis capability.'))
+  if (context?.lab?.capabilities?.dataRedis !== true && context?.lab?.capabilities?.dataCapstone !== true) return fail(unsupported('redis-cli requires the dataRedis or dataCapstone capability.'))
   const options = {}, allowed = ['-h', '-p', '-a', '--tls']
   let offset = 0
   while (offset < tokens.length && tokens[offset].startsWith('-')) {

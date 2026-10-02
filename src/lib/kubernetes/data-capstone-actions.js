@@ -14,6 +14,7 @@ import { DATA_CAPSTONE_ROUTES, DATA_CAPSTONE_ROUTE_ARGS } from '../../data/templ
 import { CAPSTONE_REVISION_2, capstoneCorpusRevision, capstoneExpectedAnswer } from '../../data/fixtures/data/capstone.js'
 import { dataStageFrozenActionAllowed } from '../labEngine/data-capstone/stages.js'
 import { fail } from '../labEngine/errors.js'
+import { startDataIncident, observeDataIncident, dataIncidentCacheFacts } from '../labEngine/data-capstone/incidents.js'
 
 const clone = value => structuredClone(value)
 const same = (a, b) => a !== undefined && b !== undefined && canonicalize(a) === canonicalize(b)
@@ -166,7 +167,8 @@ function corpusUpdate(run, lab, step) {
   }
   return { ...run, sandbox }
 }
-export function runCapstoneSteps(input, lab, scenario) {
+export function runCapstoneSteps(input, lab, scenario, primitives) {
+  if (scenario.stageId !== input.stages?.activeStageId) fail('INVALID_DATA_ACTION', 'Capstone steps require the declared active stage.')
   if (input.stages?.cleanupCheckpoint && (!['cleanup', 'inspect'].includes(scenario.mode)
     || scenario.stageId !== input.stages.activeStageId || scenario.steps.some(step => step.action !== 'inspect')))
     fail('DATA_CLEANUP_FROZEN', 'Frozen Data recovery proof permits only inventory inspection.')
@@ -174,9 +176,11 @@ export function runCapstoneSteps(input, lab, scenario) {
   const before = continuation(run, lab)
   run.runtime.dataCapstone ??= { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } }
   const measurements = { status: 200, answersCorrect: true, scopeCorrect: true, provenanceValid: true, responseHits: 0, semanticHits: 0, ragMisses: 0, staleAnswers: 0, traceComplete: true,
-    requests: [], calls: [], totalCharge: 0, historyWrites: 0, displayTraceTruncated: false, artifactIds: [], worker: { before, after: before, handledEventIds: [], invalidatedKeys: [], restarts: [] }, load: null, inventory: null,
+    requests: [], calls: [], totalCharge: 0, historyWrites: 0, displayTraceTruncated: false, artifactIds: [], worker: { before, after: before, handledEventIds: [], invalidatedKeys: [], restarts: [], operations: [] }, load: null, inventory: null,
+    cache: { before: dataIncidentCacheFacts(run, lab), after: null },
     estimate: 'Simulated estimate — not an Azure guarantee.' }
   let representative = []
+  let lastAnswerAtMs = null
   for (const [stepIndex, step] of scenario.steps.entries()) {
     if (measurements.status !== 200) break
     if (step.action === 'advance') { run.runtime.simTimeMs += step.seconds * 1000; continue }
@@ -186,7 +190,12 @@ export function runCapstoneSteps(input, lab, scenario) {
       continue
     }
     if (step.action === 'inspect') { measurements.inventory = clone({ postgres: run.sandbox.postgresServers ?? [], cosmos: run.sandbox.cosmosAccounts ?? [], redis: run.sandbox.redisClusters ?? [] }); continue }
-    if (step.action === 'incident-start') { measurements.status = 400; measurements.error = { code: 'INVALID_DATA_ACTION', message: 'Incident transitions require the incident adapter.' }; continue }
+    if (step.action === 'incident-start') {
+      const started = startDataIncident(run, lab, step.incidentId, primitives ? { ...primitives, corpusUpdate } : undefined)
+      if (started.diagnostics.length) { measurements.status = 400; measurements.error = started.diagnostics[0] }
+      else run = started.run
+      continue
+    }
     if (step.action === 'worker-restart') {
       const previous = workerArtifact(run, lab.dataWorkerTarget)
       const restarted = restartDeploymentResult(run, lab.dataWorkerTarget.clusterId, lab.dataWorkerTarget.namespace, lab.dataWorkerTarget.deploymentName, lab)
@@ -194,7 +203,7 @@ export function runCapstoneSteps(input, lab, scenario) {
       if (restarted.diagnostics.length || !replacement.artifact || replacement.podUid === previous.podUid) { measurements.status = 503; continue }
       run = restarted.run
       run.runtime.dataCapstone.worker = { lastBatch: [], artifactId: replacement.artifact.id }
-      measurements.worker.restarts.push({ beforePodUid: previous.podUid, afterPodUid: replacement.podUid, artifactId: replacement.artifact.id })
+      measurements.worker.restarts.push({ beforePodUid: previous.podUid, afterPodUid: replacement.podUid, artifactId: replacement.artifact.id, stepIndex })
       continue
     }
     if (step.action === 'load') {
@@ -220,7 +229,9 @@ export function runCapstoneSteps(input, lab, scenario) {
       const replicas = run.runtime.kubernetes.clusters[lab.dataRequestTarget.clusterId]?.resources[`Deployment/${lab.dataRequestTarget.namespace}/${lab.dataRequestTarget.deploymentName}`]?.spec.replicas
       const server = run.sandbox.postgresServers?.find(item => item.name === lab.dataTarget.postgres.server && item.resourceGroup === lab.dataTarget.postgres.resourceGroup)
       const originRequests = Math.round(step.requestsPerSecond * step.seconds * misses / requests.length)
-      measurements.load = { ...simulateCapstoneLoad({ ...step, originRequests, replicas, ...(connectionsMatch ? config : {}), server }), mode: config?.mode ?? null, poolMaxSize: config?.poolMaxSize ?? null, replicas }
+      measurements.load = { ...simulateCapstoneLoad({ ...step, originRequests, replicas, ...(connectionsMatch ? config : {}), server }), mode: config?.mode ?? null, poolMaxSize: config?.poolMaxSize ?? null, replicas,
+        startedAtMs: run.runtime.simTimeMs, coldAfterSeconds: lastAnswerAtMs === null ? null : (run.runtime.simTimeMs - lastAnswerAtMs) / 1000,
+        serverParameters: clone(server?.parameters ?? {}) }
       run.runtime.simTimeMs += step.seconds * 1000
       if (measurements.load.failed || measurements.load.errors.length) measurements.status = 503
       continue
@@ -231,16 +242,23 @@ export function runCapstoneSteps(input, lab, scenario) {
       : [{ route: worker ? 'worker:batch' : step.route, args: worker ? [] : step.args }]
     const batch = step.action === 'worker-batch' ? readChangeFeed(findContainer(run.sandbox, { ...lab.dataTarget.cosmos, container: 'events' }), { continuation: continuation(run, lab), startTime: 'Beginning' }) : null
     const batchBeforeKeys = batch ? clone(redisDb(run, lab)?.keys ?? {}) : null
+    const operation = worker ? { action: step.action, stepIndex, artifactId: artifact?.id ?? null, ready: !!artifact, before: continuation(run, lab),
+      beforeKeys: dataIncidentCacheFacts(run, lab), afterKeys: null, after: null, status: 200, handledEventIds: [], invalidatedKeys: [],
+      pendingEventIds: batch?.items.map(item => item.id) ?? [] } : null
+    if (operation) operation.deliveredEventIds = step.action === 'worker-redeliver' ? requests.map(request => request.args[0].id) : []
+    const previousHandled = new Set(measurements.worker.handledEventIds)
     for (const request of requests) {
       const observation = frame(run, lab, artifact, request.route, request.args)
       recordFrame(measurements, observation, request.route, request.args, stepIndex)
       run.sandbox = observation.result.sandbox
       if (request.route === 'GET /answer') {
         representative.push({ action: 'request', ...request })
+        lastAnswerAtMs = run.runtime.simTimeMs
       }
       if (worker) {
         const removed = observation.facts?.cacheEffects.removedKeys.filter(item => item.command === 'DEL') ?? []
         for (const item of removed) if (!measurements.worker.invalidatedKeys.some(old => old.key === item.key)) measurements.worker.invalidatedKeys.push(item)
+        operation.invalidatedKeys.push(...removed)
       }
       if (measurements.status !== 200) break
     }
@@ -259,13 +277,21 @@ export function runCapstoneSteps(input, lab, scenario) {
         if (observed && !measurements.worker.handledEventIds.includes(item.id)) measurements.worker.handledEventIds.push(item.id)
       }
     }
+    if (operation) {
+      operation.after = continuation(run, lab)
+      operation.afterKeys = dataIncidentCacheFacts(run, lab)
+      operation.status = measurements.status
+      operation.handledEventIds = measurements.worker.handledEventIds.filter(id => !previousHandled.has(id))
+      measurements.worker.operations.push(operation)
+    }
   }
   measurements.worker.after = continuation(run, lab)
+  measurements.cache.after = dataIncidentCacheFacts(run, lab)
   measurements.totalCharge = Math.round(measurements.totalCharge * 100) / 100
   return { run, measurements }
 }
 const invalid = (run, message) => ({ run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message }] })
-export function applyDataCapstoneAction(run, action, lab) {
+export function applyDataCapstoneAction(run, action, lab, primitives) {
   if (run.stages?.cleanupCheckpoint && !dataStageFrozenActionAllowed(run, action, lab)) return invalid(run, 'Data recovery proof is frozen; only cleanup verification remains.')
   const manifest = getProjectManifest(run.project.manifestId)
   if (lab.capabilities?.dataCapstone !== true || manifest.dataBackend !== 'composite' || !same(manifest.dataTarget, lab.dataTarget)
@@ -273,13 +299,22 @@ export function applyDataCapstoneAction(run, action, lab) {
   if (!keysAre(action, 'type,scenarioId') || action.type !== 'data-capstone' || !text(action.scenarioId)) return invalid(run, 'Capstone workloads accept only a declared scenarioId.')
   const scenario = lab.scenarios?.[action.scenarioId]
   if (!validDataCapstoneScenario(scenario, lab) || scenario.stageId !== run.stages?.activeStageId) return invalid(run, 'The declared scenario must match the active stage.')
+  const injection = scenario.steps.find(step => step.action === 'incident-start')
+  if (injection) {
+    if (scenario.mode !== 'incident' || scenario.steps.length !== 1 || lab.dataIncident?.scenarioIds?.[injection.incidentId] !== action.scenarioId
+      || lab.tasks.some(task => task.verification?.scenarioId === action.scenarioId))
+      return invalid(run, 'Injection requires its separate declared one-step incident control.')
+    const started = startDataIncident(run, lab, injection.incidentId, primitives ? { ...primitives, corpusUpdate } : undefined)
+    return { ...started, run: refreshKubernetesDependencies(run, started.run, lab) }
+  }
   const task = lab.tasks.find(item => item.verification?.scenarioId === action.scenarioId && item.verification.scenarioVersion === scenario.version && lab.stages.find(stage => stage.id === scenario.stageId)?.taskIds?.includes(item.id))
   if (!task) return invalid(run, 'No active Task verifies this scenario version.')
-  const outcome = runCapstoneSteps(run, lab, scenario)
+  const outcome = runCapstoneSteps(run, lab, scenario, primitives)
   const knownFault = ['ConnectionError', 'TooManyRequests'].includes(outcome.measurements.error?.code) || outcome.measurements.load?.errors.some(error => error.includes('too many clients already'))
   const completed = outcome.measurements.traceComplete && (outcome.measurements.status === 200 || scenario.mode === 'incident' && knownFault === true)
   const refreshed = refreshKubernetesDependencies(run, outcome.run, lab)
   if (run.stages?.cleanupCheckpoint && scenario.mode === 'inspect') return { run, lines: [{ kind: 'out', text: 'Frozen Data inventory inspection.', measurements: outcome.measurements }], portalEvents: [], diagnostics: [] }
-  const next = recordVerification(refreshed, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version, outcome: completed ? 'passed' : 'failed', completed, startedAtMs: run.runtime.simTimeMs, endedAtMs: outcome.run.runtime.simTimeMs, measurements: outcome.measurements })
+  let next = recordVerification(refreshed, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version, outcome: completed ? 'passed' : 'failed', completed, startedAtMs: run.runtime.simTimeMs, endedAtMs: outcome.run.runtime.simTimeMs, measurements: outcome.measurements })
+  next = observeDataIncident(next, lab, next.evidence.currentEvidenceByTask[task.id])
   return { run: next, lines: [{ kind: completed ? 'out' : 'err', text: `Data capstone ${action.scenarioId}: HTTP ${outcome.measurements.status}. ${outcome.measurements.estimate}`, status: outcome.measurements.status, measurements: outcome.measurements }], portalEvents: [], diagnostics: [] }
 }

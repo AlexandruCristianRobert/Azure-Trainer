@@ -110,3 +110,23 @@ export function capstoneExpectedAnswer(question, scope, revision = 1) {
   const live = revision === 2 ? capstoneCorpusRevision(CAPSTONE_CORPUS, scope.product) : CAPSTONE_CORPUS
   return { answer: live.chunks.find(c => c.id === entry.expectedChunkIds[0]).content, sources: [...entry.expectedChunkIds], product: scope.product, version: scope.version, language: scope.language }
 }
+
+// Injection controls are separate from each task's ordinary observation Verify.
+// The final Lab assigns these authored scenarios to its actual stage IDs.
+export function capstoneIncidentScenarios(workerStageId, poolStageId) {
+  const answer = (question, message) => ({ action: 'request', route: 'GET /answer', args: [question, 'contoso-backup', 'v1', 'en', 'incident-session', message] })
+  const exact = () => answer('How many days are Contoso Backup v1 snapshots retained by default?', 'exact')
+  const semantic = () => answer('How long does Contoso Backup keep my snapshots?', 'semantic')
+  const scenario = (stageId, steps) => ({ kind: 'data-capstone', version: 1, stageId, mode: 'incident', steps })
+  return {
+    'inject-worker': scenario(workerStageId, [{ action: 'incident-start', incidentId: 'worker-checkpoint' }]),
+    'worker-diagnostic': scenario(workerStageId, [{ action: 'worker-batch' }, exact(), semantic()]),
+    'worker-recovery': scenario(workerStageId, [{ action: 'worker-batch' }, { action: 'worker-redeliver' }, exact(), semantic(),
+      { action: 'worker-restart' }, { action: 'worker-batch' },
+      { action: 'request', route: 'POST /feedback', args: ['capstone-positive', 'contoso-backup', true] }, { action: 'worker-batch' }]),
+    'inject-pool': scenario(poolStageId, [{ action: 'incident-start', incidentId: 'cache-masked-pool' }]),
+    'pool-warm': scenario(poolStageId, [exact(), { action: 'load', requestsPerSecond: 200, seconds: 5 }]),
+    'pool-cold': scenario(poolStageId, [{ action: 'advance', seconds: 61 }, { action: 'load', requestsPerSecond: 200, seconds: 5 }]),
+    'pool-recovery': scenario(poolStageId, [exact(), { action: 'advance', seconds: 61 }, { action: 'load', requestsPerSecond: 200, seconds: 5 }]),
+  }
+}

@@ -235,8 +235,8 @@ function runLoad(run, lab, manifest, scenario) {
   return { ...request, status, expectedObservation, load: { ...load, mode, replicas, poolMaxSize } }
 }
 
-export function applyDataAction(run, action, lab) {
-  if (action.type === 'data-capstone') return applyDataCapstoneAction(run, action, lab)
+export function applyDataAction(run, action, lab, primitives) {
+  if (action.type === 'data-capstone') return applyDataCapstoneAction(run, action, lab, primitives)
   if (action.type === 'data-cache') return applyRedisAction(run, action, lab)
   const postgres = lab?.capabilities?.dataPostgres === true
   if (lab?.capabilities?.dataCosmos !== true && !postgres) {

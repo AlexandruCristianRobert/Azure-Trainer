@@ -21,6 +21,18 @@ qa_history = db.get_container_client("qa_history")
 events = db.get_container_client("events")
 leases = db.get_container_client("leases")
 `
+// Incident replacement accepts these complete authored client variants only.
+const pooledClients = (port, size) => CLIENTS.replace(POSTGRES_NAIVE_CLIENTS,
+  `from psycopg_pool import ConnectionPool\nfrom psycopg.rows import dict_row\n\nDSN = "host=pg-assistant.postgres.database.azure.com port=${port} dbname=knowledge user=assistant_admin password=Training-Only-Pa55! sslmode=require"\npool = ConnectionPool(DSN, min_size=1, max_size=${size}, kwargs={"row_factory": dict_row})\n\ndef connect():\n    return pool.connection()\n`)
+export const DATA_CAPSTONE_CLIENT_VARIANTS = Object.freeze({ naive: CLIENTS, pooled: pooledClients(5432, 5), fault: pooledClients(5432, 12), fixed: pooledClients(6432, 4) })
+export const DATA_CAPSTONE_FAULTY_PROCESS_CHANGES = `def process_changes():
+    # Incident: ignores the durable lease and starts after pending events.
+    changes = list(events.query_items_change_feed(start_time="Now"))
+    for item in changes:
+        apply_change(item)
+    # Incident: no durable checkpoint is saved.
+    return len(changes)
+`
 const APP_HEADER = `"""Fictional Knowledge Assistant: PG sources, Redis caches, Cosmos history."""
 from clients import connect, cache, sessions, qa_history, events
 from pgvector.psycopg import register_vector

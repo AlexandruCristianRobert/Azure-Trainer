@@ -47,6 +47,21 @@ const bicepDeploymentProvenance = bicep => ({ nextAttempt: bicep?.nextAttempt ??
       .map(field => [field, target[field]]))])) })
 
 function actionError(run, message) { return envelope(run, [], [], [diagnostic('INVALID_ACTION', message)]) }
+function saveFileAction(run, action, lab) {
+  if (!validPath(action.path, run) || (action.text !== undefined && typeof action.text !== 'string')) return actionError(run, 'Save path or text is invalid.')
+  const text = action.text ?? run.project.draftFiles[action.path]
+  const saved = saveProjectFile(run.project, action.path, text)
+  if (saved.diagnostics.length) return envelope(run, [], [], saved.diagnostics)
+  if (run.project.savedFiles[action.path] === text) return envelope({ ...run, project: { ...run.project,
+    draftFiles: { ...run.project.draftFiles, [action.path]: text }, diagnostics: [] } })
+  const key = `file:${action.path}`
+  const journaled = capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab)
+  if (journaled && run.project.sourceJournal.length >= MAX_SOURCE_SAVES) return actionError(run, 'The Capstone source save limit has been reached.')
+  const project = journaled ? { ...saved.project, sourceJournal: [...run.project.sourceJournal, { sequence: run.nextSequence,
+    path: action.path, version: saved.project.fileVersions[action.path], hash: sourceTextHash(text) }] } : saved.project
+  return envelope({ ...run, project, nextSequence: run.nextSequence + Number(journaled),
+    dependencyGenerations: { ...run.dependencyGenerations, [key]: (run.dependencyGenerations[key] ?? 0) + 1 } })
+}
 function validPath(path, run) { return typeof path === 'string' && getProjectManifest(run?.project?.manifestId).files.includes(path) }
 function appendOutput(run, lines, commandLine = null, clear = false) {
   return { ...run, scrollback: [...(clear ? [] : run.scrollback), ...lines].slice(-600),
@@ -601,7 +616,7 @@ export function applyRunAction(run, action, lab) {
     return result
   }
   if (action.type === 'data-capstone' || action.type === 'data-request' || action.type === 'data-worker' || action.type === 'data-load' || action.type === 'data-cache') {
-    const data = applyDataAction(run, action, lab)
+    const data = applyDataAction(run, action, lab, { command: commandAction, saveFile: saveFileAction })
     const refreshed = refreshKubernetesDependencies(run, data.run, lab)
     const result = { ...data, run: refreshed }
     validateBehavioralRun(result.run, lab)
@@ -692,23 +707,7 @@ export function applyRunAction(run, action, lab) {
       result = envelope({ ...run, project }); break
     }
     case 'save-file': {
-      if (!validPath(action.path, run) || (action.text !== undefined && typeof action.text !== 'string')) return actionError(run, 'Save path or text is invalid.')
-      const text = action.text ?? run.project.draftFiles[action.path]
-      const saved = saveProjectFile(run.project, action.path, text)
-      if (saved.diagnostics.length) result = envelope(run, [], [], saved.diagnostics)
-      else if (run.project.savedFiles[action.path] === text) result = envelope({ ...run, project: { ...run.project,
-        draftFiles: { ...run.project.draftFiles, [action.path]: text }, diagnostics: [] } })
-      else {
-        const key = `file:${action.path}`
-        if ((capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab)) && run.project.sourceJournal.length >= MAX_SOURCE_SAVES)
-          return actionError(run, 'The Capstone source save limit has been reached.')
-        const project = capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab)
-          ? { ...saved.project, sourceJournal: [...run.project.sourceJournal, { sequence: run.nextSequence,
-            path: action.path, version: saved.project.fileVersions[action.path], hash: sourceTextHash(text) }] }
-          : saved.project
-        result = envelope({ ...run, project, nextSequence: run.nextSequence + (capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab) ? 1 : 0),
-          dependencyGenerations: { ...run.dependencyGenerations, [key]: (run.dependencyGenerations[key] ?? 0) + 1 } })
-      }
+      result = saveFileAction(run, action, lab)
       break
     }
     case 'hint':

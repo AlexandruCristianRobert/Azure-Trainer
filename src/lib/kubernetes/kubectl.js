@@ -110,7 +110,7 @@ function apply(run, selection, options, lab) {
       return response(run.sandbox, [out(options.output === 'json' ? kubeJson(value) : kubeYaml(value))])
     }
     for (let i = 0; i < source.documents.length; i++) {
-      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true, dataCosmos: lab?.capabilities?.dataCosmos === true }, sourceLocation: source.locations[i] })
+      const checked = validateKubernetesObject(source.documents[i], { namespace: options.namespace, capabilities: { kubernetesConfiguration: lab?.capabilities?.kubernetesConfiguration === true, kubernetesProbes: lab?.capabilities?.kubernetesProbes === true, kubernetesResources: lab?.capabilities?.kubernetesResources === true, dataCosmos: lab?.capabilities?.dataCosmos === true, dataCapstone: lab?.capabilities?.dataCapstone === true }, sourceLocation: source.locations[i] })
       if (checked.diagnostics.length) return response(run.sandbox, [err(`Error: ${checked.diagnostics[0].message}`)])
     }
     const value = source.documents.length === 1 ? source.documents[0] : source.documents
