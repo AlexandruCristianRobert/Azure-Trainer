@@ -21,6 +21,14 @@ export function presentFunctionApp(app) {
   }
 }
 
+export function presentFunctionAppIdentity(app, sandbox) {
+  const ids = app.userAssignedIdentityIds ?? []
+  return { type: ids.length ? 'UserAssigned' : 'None', userAssignedIdentities: Object.fromEntries(ids.map(id => {
+    const identity = sandbox.managedIdentities.find(item => item.id === id)
+    return [id, { clientId: identity.clientId, principalId: identity.principalId }]
+  })) }
+}
+
 export function presentAppSettings(app, { includeValues = false, names = null } = {}) {
   const selected = names === null ? Object.keys(app.appSettings) : names
   return selected.map((name) => ({ name, value: includeValues ? app.appSettings[name] ?? null : null, slotSetting: false }))

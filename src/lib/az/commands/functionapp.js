@@ -1,6 +1,6 @@
 import { defineGroup, defineCommand, ARG, LATENCY, event } from '../tree.js'
 import * as functions from '../../sandbox/functions.js'
-import { presentAppSettings, presentCors, presentFunctionApp } from '../functions-arm.js'
+import { presentAppSettings, presentCors, presentFunctionApp, presentFunctionAppIdentity } from '../functions-arm.js'
 
 const NAME = ARG.name('Name of the Function App.')
 const STORAGE_ACCOUNT = { name: '--storage-account', aliases: [], required: true, kind: 'string', dest: 'storageAccount', help: 'Name of the storage account used by the Function App.' }
@@ -13,6 +13,21 @@ const SETTINGS = { name: '--settings', aliases: [], required: true, kind: 'raw',
 const SETTING_NAMES = { name: '--setting-names', aliases: [], required: true, kind: 'raw', dest: 'settingNames', help: 'One or more custom application setting names.' }
 const ALLOWED_ORIGINS = { name: '--allowed-origins', aliases: ['-a'], required: false, kind: 'raw', dest: 'allowedOrigins', help: 'Space-separated CORS origins.' }
 const functionAppEvent = (type, app) => event(type, 'functionApp', { name: app.name, resourceGroup: app.resourceGroup })
+const IDENTITIES = { name: '--identities', aliases: [], required: true, kind: 'raw', dest: 'identities', help: 'Actual user-assigned identity ARM IDs.' }
+const identityGroup = defineGroup(['functionapp', 'identity'], 'Manage attached application identities.', {
+  ...Object.fromEntries(['assign', 'remove'].map(action => [action, defineCommand(['functionapp', 'identity', action], `${action} user-assigned identities.`, {
+    latencyMs: LATENCY.mutate, args: [NAME, ARG.resourceGroup, IDENTITIES],
+    run: ({ sandbox }, values) => {
+      const mutate = action === 'assign' ? functions.assignFunctionAppIdentity : functions.removeFunctionAppIdentity
+      const { sandbox: next, resource } = mutate(sandbox, values)
+      return { sandbox: next, output: presentFunctionAppIdentity(resource, next), events: [functionAppEvent('updated', resource)] }
+    },
+  })])),
+  show: defineCommand(['functionapp', 'identity', 'show'], 'Show attached application identities.', {
+    args: [NAME, ARG.resourceGroup],
+    run: ({ sandbox }, values) => ({ sandbox, output: presentFunctionAppIdentity(functions.getFunctionApp(sandbox, values.resourceGroup, values.name), sandbox) }),
+  }),
+})
 
 const appSettingsGroup = defineGroup(['functionapp', 'config', 'appsettings'], 'Manage custom Function App application settings.', {
   set: defineCommand(['functionapp', 'config', 'appsettings', 'set'], 'Set custom Function App application settings.', {
@@ -84,4 +99,5 @@ export const functionappGroup = defineGroup(['functionapp'], 'Manage Azure Funct
   }),
   config: configGroup,
   cors: corsGroup,
+  identity: identityGroup,
 })

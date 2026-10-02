@@ -3,6 +3,15 @@ import { normalizeLocation } from './locations.js'
 import { getResourceGroup } from './ops.js'
 import { AzError } from './errors.js'
 import { detachIdentityFromApps } from './containerapps.js'
+import { detachIdentityFromFunctionApps } from './functions.js'
+
+function detachSecurityIdentity(sandbox, identities) {
+  const ids = identities.map(identity => identity.id)
+  const principals = new Set(identities.map(identity => identity.principalId.toLowerCase()))
+  detachIdentityFromFunctionApps(sandbox, ids)
+  for (const resource of [...(sandbox.keyVaults ?? []), ...(sandbox.appConfigurationStores ?? [])])
+    resource.roleAssignments = resource.roleAssignments.filter(assignment => !principals.has(assignment.principalId.toLowerCase()))
+}
 
 const NAME_RE = /^(?=.{3,128}$)[A-Za-z0-9][A-Za-z0-9_-]*[A-Za-z0-9]$/
 const same = (left, right) => String(left).toLowerCase() === String(right).toLowerCase()
@@ -52,6 +61,7 @@ export function deleteIdentity(sandbox, { resourceGroup, name }) {
   const identity = getIdentity(sandbox, resourceGroup, name)
   const next = cloneSandbox(sandbox)
   detachIdentityFromApps(next, [identity.id])
+  detachSecurityIdentity(next, [identity])
   next.managedIdentities = next.managedIdentities.filter((item) => !same(item.id, identity.id))
   next.roleAssignments = next.roleAssignments.filter((assignment) => !same(assignment.principalId, identity.principalId))
   return { sandbox: next, resource: identity }
@@ -62,6 +72,7 @@ export function deleteIdentitiesInGroup(sandbox, resourceGroup) {
   const removed = next.managedIdentities.filter((identity) => same(identity.resourceGroup, resourceGroup))
   const principals = new Set(removed.map((identity) => identity.principalId.toLowerCase()))
   detachIdentityFromApps(next, removed.map((identity) => identity.id))
+  detachSecurityIdentity(next, removed)
   next.managedIdentities = next.managedIdentities.filter((identity) => !same(identity.resourceGroup, resourceGroup))
   next.roleAssignments = next.roleAssignments.filter((assignment) => !principals.has(assignment.principalId.toLowerCase()))
   return next
