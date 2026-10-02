@@ -127,7 +127,7 @@ export function parseDataApp(files, manifest = {}) {
       const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
       const collision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, protectedNames, ctx.text))
       if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
-      const trustedConstructors = ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', 'psycopg', 'psycopg.connect', 'psycopg_pool', 'psycopg_pool.ConnectionPool', 'pgvector.psycopg.register_vector', 'psycopg.types.json.Jsonb'] : [])]
+      const trustedConstructors = ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', ...PG_IMPORT_IDENTITIES] : [])]
       const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => trustedConstructors.includes(binding)).map(([name]) => name))
       if (composite) findNode(ctx.tree.topNode, node => {
         if (node.name === 'ImportStatement') for (const [name, binding] of redisImportEntries(node, ctx.text, composite)) {
@@ -453,6 +453,12 @@ function lastContinuationReceiver(node, text, manifest) {
 
 const BUILTINS = new Set(['list', 'len', 'str'])
 const PG_CONSTRUCTORS = { 'psycopg.connect': 'postgres.module.connect', 'connect': 'postgres.module.connect', 'ConnectionPool': 'postgres.pool.ConnectionPool', 'psycopg_pool.ConnectionPool': 'postgres.pool.ConnectionPool', 'register_vector': 'postgres.register_vector', 'pgvector.psycopg.register_vector': 'postgres.register_vector', 'Jsonb': 'postgres.Jsonb', 'psycopg.types.json.Jsonb': 'postgres.Jsonb' }
+// Any imported module prefix that can reach a supported constructor carries
+// the same immutable identity as a direct constructor import.
+const PG_IMPORT_IDENTITIES = Object.freeze([...new Set(Object.keys(PG_CONSTRUCTORS).filter(name => name.includes('.')).flatMap(name => {
+  const parts = name.split('.')
+  return parts.map((_, index) => parts.slice(0, index + 1).join('.'))
+}))])
 
 function pgConstructorKey(calleeName, ctx) {
   if (!ctx.composite) return PG_CONSTRUCTORS[calleeName]

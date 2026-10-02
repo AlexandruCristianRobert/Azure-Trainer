@@ -141,6 +141,20 @@ describe('parseDataApp', () => {
         expect(jsonResult.value.value).toEqual({ kind: 'article' })
       }
     }
+    for (const [vectorImport, vectorName, vectorConstructor] of [
+      ['import pgvector.psycopg', 'pgvector', 'pgvector.psycopg.register_vector'],
+      ['import pgvector.psycopg as vector_sdk', 'vector_sdk', 'vector_sdk.register_vector'],
+      ['from pgvector.psycopg import register_vector', 'register_vector', 'register_vector'],
+    ]) {
+      const vectorApp = `${vectorImport}\n${mixedFiles['app.py']}\ndef vector_probe():\n    with connect() as conn:\n        return ${vectorConstructor}(conn)\n`
+      const vectorParsed = parseDataApp({ ...mixedFiles, 'app.py': vectorApp }, { ...mixedManifest, editZones: [...mixedManifest.editZones, 'vector_probe'] })
+      expect(vectorParsed.diagnostics, vectorImport).toEqual([])
+      expect(runDataFunction({ appSpec: vectorParsed.appSpec, sandbox: cached, dataTarget: mixedTarget, functionName: 'vector_probe', nowMs: 0 }).status).toBe(200)
+      const shadowedApp = `${vectorImport}\n${mixedFiles['app.py']}\ndef vector_probe(${vectorName}):\n    return ${vectorConstructor}(None)\n`
+      const shadowed = parseDataApp({ ...mixedFiles, 'app.py': shadowedApp }, { ...mixedManifest, editZones: [...mixedManifest.editZones, 'vector_probe'] })
+      expect.soft(shadowed.diagnostics.some(d => d.code === 'DATA_UNSUPPORTED'), vectorImport).toBe(true)
+      expect.soft(shadowed.appSpec === null, vectorImport).toBe(true)
+    }
   })
   it('executes a parameterized Redis semantic hit from real binary vectors and protected decoders', () => {
     const target = REDIS_TARGET
