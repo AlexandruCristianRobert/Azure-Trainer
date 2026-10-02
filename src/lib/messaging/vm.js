@@ -1,0 +1,357 @@
+import { applyServiceBusOperation } from './servicebus.js'
+import { validateMessagingState, finiteJson } from './state.js'
+import { SDK_SIGNATURES, SDK_EXPORTS, bindArguments, messagingError, safeKey } from './python.js'
+
+const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
+const clone = value => JSON.parse(JSON.stringify(value))
+const RETURN = Symbol('return')
+const cap = (value, fallback) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, fallback) : fallback
+
+/** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
+export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
+  let current = state, steps = 0, depth = 0, receiverSequence = 0
+  const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap()
+  let outputBytes = 0
+  const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
+  const maximumFrames = cap(limits.frames, 100), maximumValues = 128 * 1024
+  const fail = (message, loc, code = 'MESSAGING_RUNTIME') => { throw messagingError(code, message, loc) }
+  const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
+  const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
+  const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
+  const callable = (name, owner) => handle('callable', { name, owner })
+  function jsonValue(value, loc, seen = new Set(), nesting = 0) {
+    tick(loc)
+    if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
+    if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
+    if (value === null || typeof value === 'boolean' || typeof value === 'string' || Number.isSafeInteger(value)) return value
+    if (!value || typeof value !== 'object' || seen.has(value)) fail('A finite JSON value is required.', loc)
+    seen.add(value)
+    const result = Array.isArray(value) ? [] : Object.create(null)
+    for (const [key, item] of Object.entries(value)) { safeKey(key, loc); result[key] = jsonValue(item, loc, seen, nesting + 1) }
+    seen.delete(value)
+    return result
+  }
+  function stringify(value, loc) {
+    const result = JSON.stringify(jsonValue(value, loc))
+    if (result.length > maximumValues) fail('Application data exceeds 128 KiB.', loc, 'MESSAGING_LIMIT')
+    return result
+  }
+  function truth(value) {
+    if (value === null || value === false || value === 0 || value === '') return false
+    if (Array.isArray(value)) return value.length > 0
+    if (value && typeof value === 'object' && !info(value)) return Object.keys(value).length > 0
+    return true
+  }
+  function string(value, loc) {
+    const object = info(value)
+    if (object?.type === 'receipt') return object.record.body
+    if (object?.type === 'bytes') return object.value
+    if (object) fail('This SDK resource cannot be converted to a string.', loc)
+    if (typeof value === 'string') return value
+    if (value === null) return 'None'
+    if (typeof value === 'boolean') return value ? 'True' : 'False'
+    return typeof value === 'object' ? stringify(value, loc) : String(value)
+  }
+  function lookup(env, name, loc) {
+    safeKey(name, loc)
+    if (env.has(name)) return env.get(name)
+    if (['str', 'len', 'print', 'ValueError'].includes(name)) return callable(name)
+    fail(`Unbound name '${name}'.`, loc)
+  }
+  function readIndex(object, key, loc) {
+    safeKey(key, loc)
+    if (info(object) || object === null || !['object', 'string'].includes(typeof object)) fail('Only lists, strings and dictionaries support indexing.', loc)
+    if ((Array.isArray(object) || typeof object === 'string') && (!Number.isSafeInteger(key) || key < 0)) fail('A nonnegative integer index is required.', loc)
+    if (!own(Object(object), key)) fail(`Missing index '${key}'.`, loc)
+    return object[key]
+  }
+  function attribute(value, name, loc) {
+    safeKey(name, loc)
+    const object = info(value)
+    if (!object) fail(`Unsupported attribute '${name}'.`, loc, 'MESSAGING_UNSUPPORTED')
+    if (object.type === 'module') {
+      if (own(SDK_EXPORTS, `${object.module}.${name}`)) return handle('module', { module: `${object.module}.${name}` })
+      return importValue({ module: object.module, name, loc })
+    }
+    if (object.type === 'localmodule') return lookup(initialize(object.path), name, loc)
+    if (object.type === 'subqueue' && name === 'DEAD_LETTER') return 'deadletter'
+    if (object.type === 'receipt') {
+      const metadata = { message_id: 'messageId', session_id: 'sessionId', application_properties: 'properties', delivery_count: 'deliveryCount', dead_letter_reason: 'deadLetterReason', dead_letter_error_description: 'deadLetterDescription' }
+      if (name === 'body') return handle('bytes', { value: object.record.body })
+      if (own(metadata, name)) return clone(object.record[metadata[name]])
+    }
+    const method = `${object.type}.${name}`
+    if (own(SDK_SIGNATURES, method)) return callable(method, value)
+    fail(`Unsupported member '${name}' on ${object.type}.`, loc, 'MESSAGING_UNSUPPORTED')
+  }
+  function broker(operation, loc) {
+    tick(loc)
+    const result = applyServiceBusOperation(current, sandbox, operation)
+    if (result.diagnostics.length) throw messagingError(result.diagnostics[0].code, result.diagnostics[0].message, loc)
+    if (trace.length + result.trace.length > maximumTraces) fail(`Execution exceeds ${maximumTraces} trace records.`, loc, 'MESSAGING_LIMIT')
+    // Retained receipt history is also bounded across repeated script invocations.
+    const locks = Object.values(result.state.entities).reduce((sum, entity) => sum + entity.messages.reduce((count, message) => count + message.lockHistory.length, 0), 0)
+    if (locks > 500) fail('Retained lock history exceeds 500 receipts; reset this fixture.', loc, 'MESSAGING_LIMIT')
+    current = result.state
+    trace.push(...result.trace)
+    return result.value
+  }
+  function namespace(endpoint, loc) {
+    if (typeof endpoint !== 'string') fail('Supply a Service Bus fully qualified namespace.', loc, 'MESSAGING_CONFIG')
+    const matches = (sandbox?.namespaces ?? []).filter(ns => `${ns.name}.servicebus.windows.net`.toLowerCase() === endpoint.toLowerCase())
+    if (matches.length !== 1) fail('The Service Bus endpoint must resolve to exactly one supplied Sandbox namespace.', loc, 'MESSAGING_CONFIG')
+    return { resourceGroup: matches[0].resourceGroup, namespace: matches[0].name }
+  }
+  function usable(owner, loc) {
+    const object = info(owner)
+    if (!object || object.closed) fail('The SDK resource is closed or invalid.', loc)
+    if (object.parent) usable(object.parent, loc)
+    return object
+  }
+  function effects(name, key, value, loc, increment = false) {
+    if (typeof key !== 'string' || !key) fail('Teaching record IDs must be nonempty strings.', loc)
+    safeKey(key, loc)
+    const next = clone(current), map = own(next.effects, name) ? next.effects[name] : {}
+    if (!map || typeof map !== 'object' || Array.isArray(map)) fail('Teaching record state is malformed.', loc, 'MESSAGING_CONFIG')
+    if (!own(map, key) && Object.keys(map).length >= 50) fail('Teaching record store exceeds 50 records.', loc, 'MESSAGING_LIMIT')
+    if (increment) {
+      const count = own(map, key) ? map[key] : 0
+      if (!Number.isSafeInteger(count) || count < 0 || count >= Number.MAX_SAFE_INTEGER) fail('Business effect counter is invalid.', loc, 'MESSAGING_CONFIG')
+      map[key] = count + 1
+    } else if (!own(map, key)) map[key] = clone(value)
+    next.effects[name] = map; current = next
+    return null
+  }
+  function call(target, args, kwargs, loc) {
+    tick(loc)
+    const functionInfo = info(target)
+    if (functionInfo?.type === 'function') return invoke(functionInfo.id, args, kwargs, loc)
+    if (functionInfo?.type !== 'callable' || !own(SDK_SIGNATURES, functionInfo.name)) fail('Unresolved callable.', loc, 'MESSAGING_UNSUPPORTED')
+    const { name, owner } = functionInfo, [names, required] = SDK_SIGNATURES[name]
+    const a = bindArguments(names, required, args, kwargs, loc)
+    if (name === 'DefaultAzureCredential') return handle('credential')
+    if (name === 'ServiceBusClient') {
+      if (info(a.credential)?.type !== 'credential') fail('Use the simulated DefaultAzureCredential identity.', loc, 'MESSAGING_CONFIG')
+      return handle('bus', { target: namespace(a.fully_qualified_namespace, loc), closed: false })
+    }
+    if (name === 'ServiceBusMessage') {
+      const body = info(a.body)?.type === 'bytes' ? info(a.body).value : a.body
+      if (typeof body !== 'string') fail('ServiceBusMessage body must be a string or bytes.', loc)
+      const properties = a.application_properties === undefined ? {} : jsonValue(a.application_properties, loc)
+      if (!properties || Array.isArray(properties) || typeof properties !== 'object') fail('application_properties must be a dictionary.', loc)
+      return handle('outgoing', { message: { body, properties, ...(a.message_id === undefined ? {} : { messageId: a.message_id }), ...(a.session_id === undefined ? {} : { sessionId: a.session_id }) } })
+    }
+    if (name.startsWith('bus.')) {
+      const bus = usable(owner, loc), receiver = name.endsWith('receiver')
+      for (const field of ['queue_name', 'topic_name', 'subscription_name']) if (a[field] !== undefined && (typeof a[field] !== 'string' || !a[field])) fail(`${field} must be a nonempty string.`, loc, 'MESSAGING_CONFIG')
+      if (a.max_wait_time !== undefined && (!Number.isSafeInteger(a.max_wait_time) || a.max_wait_time < 0)) fail('max_wait_time must be a nonnegative integer (simulated, no wall-clock wait).', loc)
+      const target = { ...bus.target, ...(a.queue_name ? { queue: a.queue_name } : { topic: a.topic_name }), ...(a.subscription_name ? { subscription: a.subscription_name } : {}) }
+      if (a.sub_queue !== undefined && !['active', 'deadletter'].includes(a.sub_queue)) fail('Only the active or DEAD_LETTER subqueue is supported.', loc)
+      return handle(receiver ? 'receiver' : 'sender', { target, parent: owner, closed: false, receiverId: `python-${current.nextId}-${++receiverSequence}`, sessionId: a.session_id, subQueue: a.sub_queue ?? 'active' })
+    }
+    if (name === 'sender.send_messages') {
+      const sender = usable(owner, loc), items = Array.isArray(a.messages) ? a.messages : [a.messages]
+      if (items.length > 50) fail('A send batch exceeds 50 messages.', loc, 'MESSAGING_LIMIT')
+      const payloads = items.map(item => {
+        if (info(item)?.type !== 'outgoing') fail('send_messages requires ServiceBusMessage values.', loc)
+        return info(item).message
+      })
+      for (const message of payloads) broker({ kind: 'send', target: sender.target, message }, loc)
+      return null
+    }
+    if (name.startsWith('receiver.')) {
+      const receiver = usable(owner, loc)
+      if (name === 'receiver.receive_messages') {
+        if (a.max_wait_time !== undefined && (!Number.isSafeInteger(a.max_wait_time) || a.max_wait_time < 0)) fail('max_wait_time must be a nonnegative integer.', loc)
+        const records = broker({ kind: 'receive', target: receiver.target, receiverId: receiver.receiverId, count: a.max_message_count ?? 1, subQueue: receiver.subQueue, ...(receiver.sessionId === undefined ? {} : { sessionId: receiver.sessionId }) }, loc)
+        return records.map(record => handle('receipt', { record }))
+      }
+      const receipt = info(a.message)
+      if (receipt?.type !== 'receipt') fail('Settlement requires the actual received message.', loc)
+      const kind = name === 'receiver.complete_message' ? 'complete' : name === 'receiver.abandon_message' ? 'abandon' : 'deadletter'
+      broker({ kind, target: receiver.target, receiverId: receiver.receiverId, lockToken: receipt.record.lockToken, ...(a.reason === undefined ? {} : { reason: a.reason }), ...(a.error_description === undefined ? {} : { description: a.error_description }) }, loc)
+      return null
+    }
+    if (name === 'bytes.decode') {
+      if (a.encoding !== undefined && !['utf-8', 'utf8'].includes(a.encoding)) fail('Only UTF-8 decoding is supported.', loc, 'MESSAGING_UNSUPPORTED')
+      return info(owner).value
+    }
+    if (name === 'json.dumps') return stringify(a.obj, loc)
+    if (name === 'json.loads') {
+      const source = info(a.s)?.type === 'bytes' ? info(a.s).value : a.s
+      if (typeof source !== 'string') fail('json.loads requires a string or bytes.', loc)
+      if (source.length > maximumValues) fail('JSON exceeds 128 KiB.', loc, 'MESSAGING_LIMIT')
+      try { return jsonValue(JSON.parse(source), loc) } catch (error) { if (error.diagnostic) throw error; fail('Invalid JSON payload.', loc) }
+    }
+    if (name === 'str') return string(a.object, loc)
+    if (name === 'len') {
+      if (info(a.object) || a.object === null || !['string', 'object'].includes(typeof a.object)) fail('len requires a string, list or dictionary.', loc)
+      return typeof a.object === 'string' || Array.isArray(a.object) ? a.object.length : Object.keys(a.object).length
+    }
+    if (name === 'print') {
+      const line = a.map(value => string(value, loc)).join(' ')
+      outputBytes += line.length
+      if (output.length >= 500 || outputBytes > maximumValues) fail('Printed output exceeds its bounded buffer.', loc, 'MESSAGING_LIMIT')
+      output.push(line)
+      return null
+    }
+    if (name === 'ValueError') return handle('error', { message: string(a.message, loc) })
+    if (name === 'was_processed') {
+      safeKey(a.order_id, loc)
+      return own(current.effects, 'processed') && own(current.effects.processed, a.order_id)
+    }
+    if (name === 'handler_status') {
+      safeKey(a.order_id, loc)
+      return input.handlerStatus && own(input.handlerStatus, a.order_id) ? input.handlerStatus[a.order_id] : 200
+    }
+    if (name === 'record_notification') {
+      if (typeof a.order_id !== 'string' || !a.order_id) fail('Notification order_id must be a nonempty string.', loc)
+      safeKey(a.order_id, loc)
+      return effects('notifications', a.event_id, { eventId: a.event_id, orderId: a.order_id }, loc)
+    }
+    if (name === 'perform_order_work' || name === 'record_processed') {
+      const order = jsonValue(a.order, loc)
+      if (!order || Array.isArray(order) || typeof order !== 'object' || !own(order, 'id')) fail('An order dictionary with id is required.', loc)
+      return name === 'perform_order_work' ? effects('workByOrder', order.id, null, loc, true) : effects('processed', order.id, order, loc)
+    }
+    fail(`Unsupported call '${name}'.`, loc, 'MESSAGING_UNSUPPORTED')
+  }
+  function evaluate(node, env) {
+    tick(node.loc)
+    switch (node.kind) {
+      case 'literal': return node.value
+      case 'bytes': return handle('bytes', { value: node.value })
+      case 'name': return lookup(env, node.name, node.loc)
+      case 'list': return node.items.map(item => evaluate(item, env))
+      case 'dict': {
+        const value = Object.create(null)
+        for (const [key, item] of node.entries) value[safeKey(evaluate(key, env), key.loc)] = evaluate(item, env)
+        return value
+      }
+      case 'index': return readIndex(evaluate(node.object, env), evaluate(node.index, env), node.loc)
+      case 'attribute': return attribute(evaluate(node.object, env), node.name, node.loc)
+      case 'call': return call(evaluate(node.callee, env), node.args.map(arg => evaluate(arg, env)), Object.fromEntries(Object.entries(node.kwargs).map(([name, value]) => [name, evaluate(value, env)])), node.loc)
+      case 'unary': {
+        const value = evaluate(node.value, env)
+        if (node.op === 'not') return !truth(value)
+        if (!Number.isSafeInteger(value)) fail('Unary arithmetic requires an integer.', node.loc)
+        return node.op === '-' ? -value : value
+      }
+      case 'binary': {
+        const left = evaluate(node.left, env)
+        if (node.op === 'and') return truth(left) ? evaluate(node.right, env) : left
+        if (node.op === 'or') return truth(left) ? left : evaluate(node.right, env)
+        const right = evaluate(node.right, env)
+        if (node.op === '+') {
+          if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(left + right)) fail('Addition requires safe integers.', node.loc)
+          return left + right
+        }
+        if (node.op === '==' || node.op === '!=') {
+          const equal = info(left) || info(right) ? left === right : stringify(left, node.loc) === stringify(right, node.loc)
+          return node.op === '==' ? equal : !equal
+        }
+        if (node.op === 'is' || node.op === 'is not') return node.op === 'is' ? left === right : left !== right
+        if (node.op === 'in' || node.op === 'not in') {
+          let contains
+          if (Array.isArray(right)) contains = right.some(value => value === left)
+          else if (typeof right === 'string' && typeof left === 'string') contains = right.includes(left)
+          else if (right && typeof right === 'object' && !info(right)) contains = own(right, safeKey(left, node.loc))
+          else fail('Membership requires a list, string or dictionary.', node.loc)
+          return node.op === 'in' ? contains : !contains
+        }
+        if (typeof left !== typeof right || !['number', 'string'].includes(typeof left)) fail('Ordered comparisons require matching strings or integers.', node.loc)
+        return node.op === '<' ? left < right : node.op === '<=' ? left <= right : node.op === '>' ? left > right : left >= right
+      }
+      default: fail('Unknown expression IR.', node.loc, 'MESSAGING_UNSUPPORTED')
+    }
+  }
+  function block(body, env) {
+    for (const statement of body) {
+      tick(statement.loc)
+      if (statement.kind === 'pass') continue
+      if (statement.kind === 'if') {
+        const branch = statement.branches.find(item => truth(evaluate(item.test, env)))
+        const result = block(branch ? branch.body : statement.otherwise, env)
+        if (result?.signal === RETURN) return result
+        continue
+      }
+      const value = evaluate(statement.value, env)
+      switch (statement.kind) {
+        case 'assign':
+          if (statement.target.kind === 'name') env.set(safeKey(statement.target.name, statement.loc), value)
+          else {
+            const object = evaluate(statement.target.object, env), key = evaluate(statement.target.index, env)
+            safeKey(key, statement.loc)
+            if (!object || typeof object !== 'object' || info(object)) fail('Assignment requires a dictionary or list.', statement.loc)
+            if (Array.isArray(object) && (!Number.isSafeInteger(key) || key < 0 || key >= object.length)) fail('List assignment requires an existing index.', statement.loc)
+            object[key] = value
+          }
+          break
+        case 'expression': break
+        case 'return': return { signal: RETURN, value }
+        case 'raise': {
+          if (info(value)?.type !== 'error') fail('Only ValueError may be raised.', statement.loc)
+          fail(`ValueError: ${info(value).message}`, statement.loc); break
+        }
+        case 'for': {
+          if (!Array.isArray(value)) fail('For requires a bounded list.', statement.loc)
+          for (const item of value) { tick(statement.loc); env.set(statement.name, item); const result = block(statement.body, env); if (result?.signal === RETURN) return result }
+          break
+        }
+        case 'with': {
+          const resource = usable(value, statement.loc)
+          if (!['bus', 'sender', 'receiver'].includes(resource.type)) fail('Only SDK resources support with.', statement.loc)
+          env.set(statement.name, value)
+          try { const result = block(statement.body, env); if (result?.signal === RETURN) return result }
+          finally { resource.closed = true }
+          break
+        }
+        default: fail('Unknown statement IR.', statement.loc, 'MESSAGING_UNSUPPORTED')
+      }
+    }
+    return null
+  }
+  function invoke(id, args, kwargs, loc) {
+    if (++depth > maximumFrames) fail(`Execution exceeds ${maximumFrames} local call frames.`, loc, 'MESSAGING_LIMIT')
+    try {
+      const fn = program.functions[id]
+      if (!fn) fail('Missing lowered function.', loc, 'MESSAGING_UNSUPPORTED')
+      const env = new Map(initialize(fn.path)), bound = bindArguments(fn.params, fn.params.length, args, kwargs, loc)
+      Object.entries(bound).forEach(([key, value]) => env.set(key, value))
+      return block(fn.body, env)?.value ?? null
+    } finally { depth-- }
+  }
+  function importValue(item) {
+    if (own(SDK_EXPORTS, item.module)) {
+      if (!item.name) return handle('module', { module: item.module.startsWith(`${item.alias}.`) ? item.alias : item.module })
+      if (!SDK_EXPORTS[item.module].includes(item.name)) fail('Unsupported import.', item.loc, 'MESSAGING_UNSUPPORTED')
+      if (item.name === 'ServiceBusSubQueue') return handle('subqueue')
+      return callable(item.module === 'json' ? `json.${item.name}` : item.name)
+    }
+    const path = `${item.module.replace(/\./g, '/')}.py`, env = initialize(path)
+    return item.name ? lookup(env, item.name, item.loc) : handle('localmodule', { path })
+  }
+  function initialize(path) {
+    if (modules.has(path)) return modules.get(path)
+    const env = new Map(); modules.set(path, env)
+    for (const [id, fn] of Object.entries(program.functions)) if (fn.path === path) env.set(fn.name, handle('function', { id }))
+    for (const item of program.imports[path] ?? []) env.set(item.alias, importValue(item))
+    block(program.globals[path] ?? [], env)
+    return env
+  }
+  let value = null
+  try {
+    if (!validateMessagingState(state) || !finiteJson(input)) fail('Invalid messaging state or fixture input.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    for (const key of ['messages', 'events']) if (Array.isArray(input[key]) && input[key].length > 50) fail('Fixture messages/events exceed 50 records.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
+    if (input.handlerStatus && Object.keys(input.handlerStatus).length > 50) fail('Handler fixture exceeds 50 outcomes.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
+    if (input.handlerStatus !== undefined && (!input.handlerStatus || typeof input.handlerStatus !== 'object' || Array.isArray(input.handlerStatus)
+      || Object.values(input.handlerStatus).some(status => !Number.isSafeInteger(status) || status < 100 || status > 599))) fail('Handler fixture outcomes must be integer HTTP statuses.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    value = invoke(program.main, [], {}, { path: program.entry, line: 1, column: 1 })
+    // The public result is JSON-only; receipt/client closures never escape.
+    value = jsonValue(value, { path: program.entry, line: 1, column: 1 })
+  } catch (error) {
+    value = null
+    diagnostics.push(error.diagnostic ?? { code: 'MESSAGING_RUNTIME', message: 'The bounded script could not execute this value.', path: program.entry, line: 1, column: 1 })
+  }
+  return { state: current, value, trace, diagnostics, output }
+}

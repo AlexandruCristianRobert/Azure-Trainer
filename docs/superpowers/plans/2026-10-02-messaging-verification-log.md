@@ -28,3 +28,25 @@ Task 2 fix round 1 test total: **6.252178 seconds**. Total Task 2 npm/Vitest inv
 Cumulative known verification, including the controller baseline and supplied review diagnostic: **29.0003938 seconds** (0.483340 minutes).
 
 Task 1 also passed `git diff --check`. Git emitted Windows LF-to-CRLF conversion notices; there were no whitespace errors. This is not a test invocation and is excluded from the test-time total.
+
+## Task 3 source lowering and VM
+
+Every test invocation below used only the owning file. Diagnostics and all RED/error reruns are included; each invocation was measured with PowerShell Stopwatch.
+
+| Date | Stage | Command | Result | Elapsed seconds |
+| --- | --- | --- | --- | ---: |
+| 2026-10-02 | AST inspection quoting correction | Inline `node --input-type=module -e` Lezer inspection | PowerShell removed quotes; Node SyntaxError, exit 1 | 0.0446033 |
+| 2026-10-02 | AST inspection | PowerShell here-string piped to `node --input-type=module` | Lezer node tree for imports/annotations/dict/list/with/for/if/calls printed, exit 0 | 0.0877604 |
+| 2026-10-02 | Task 3 initial RED | `npm test -- tests/messaging-python.test.js` | Expected missing `messaging/python.js`; no tests collected, exit 1 | 1.2498773 |
+| 2026-10-02 | Task 3 first GREEN | `npm test -- tests/messaging-python.test.js` | 15/15 passed, exit 0 | 1.4205397 |
+| 2026-10-02 | Task 3 semantic regression RED | `npm test -- tests/messaging-python.test.js` | 20 passed, 7 failed: branch/list receiver preflight, top-level effects, dotted imports, output, fixture limits; exit 1 | 2.9063045 |
+| 2026-10-02 | Task 3 semantic GREEN | `npm test -- tests/messaging-python.test.js` | 27/27 passed, exit 0 | 1.4713172 |
+| 2026-10-02 | Task 3 annotation/input RED | `npm test -- tests/messaging-python.test.js` | 29 passed, 2 failed: executable annotations and mutable handler fixture; exit 1 | 1.5212338 |
+| 2026-10-02 | Task 3 correction rerun | `npm test -- tests/messaging-python.test.js` | JavaScript ASI syntax error in added annotation loop; no tests collected, exit 1 | 1.2129749 |
+| 2026-10-02 | Task 3 annotation/input GREEN | `npm test -- tests/messaging-python.test.js` | 31/31 passed, exit 0 | 1.5803462 |
+| 2026-10-02 | Task 3 final preflight RED | `npm test -- tests/messaging-python.test.js` | 31 passed, 3 failed: empty-loop receiver merge, mutated list aliases, literal unsafe dictionary keys; exit 1 | 1.5019686 |
+| 2026-10-02 | Task 3 final GREEN | `npm test -- tests/messaging-python.test.js` | 34/34 passed, exit 0; test bodies 114ms | 1.4883258 |
+
+Task 3 npm/Vitest total: **14.3528880 seconds**. Task 3 diagnostic total: **0.1323637 seconds**. Task 3 combined: **14.4852517 seconds**.
+
+New cumulative known verification: **43.4856455 seconds (0.724761 minutes)**, starting from the previously recorded **29.0003938 seconds**. No full suite, AKS, Container Apps, legacy replay, cloud, browser or build checks ran. Static `git diff --check` passed; Windows line-ending notices are not test failures.
