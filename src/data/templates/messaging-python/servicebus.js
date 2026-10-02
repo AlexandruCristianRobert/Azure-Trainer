@@ -128,3 +128,105 @@ def main():
 `,
 })
 export const SERVICEBUS_DEADLETTER_SOLUTION_FILES = Object.freeze({ ...SERVICEBUS_DEADLETTER_STARTER_FILES, 'worker.py': quarantineWorker, 'producer.py': recoveryDriver })
+
+export const SERVICEBUS_IDEMPOTENCY_STARTER_FILES = Object.freeze({
+  ...SERVICEBUS_RECEIVE_STARTER_FILES,
+  'worker.py': workerHeader + `def main():
+    # Guard before work; complete both new and duplicate order deliveries.
+    raise ValueError("Finish the duplicate-safe worker")
+`,
+})
+export const SERVICEBUS_IDEMPOTENCY_SOLUTION_FILES = Object.freeze({ ...SERVICEBUS_IDEMPOTENCY_STARTER_FILES, 'worker.py': SERVICEBUS_SOLUTION_FILES['worker.py'] })
+
+const topicProducer = `from azure.servicebus import ServiceBusMessage
+from clients import bus
+from worker import process_subscriptions
+import json
+
+def main():
+    with bus.get_topic_sender(topic_name="order-work") as sender:
+        eu = {"id": "o1", "region": "EU", "quantity": 2}
+        us = {"id": "o2", "region": "US", "quantity": 1}
+        sender.send_messages(ServiceBusMessage(json.dumps(eu), message_id="eu1", application_properties={"region": eu["region"]}))
+        sender.send_messages(ServiceBusMessage(json.dumps(us), message_id="us1", application_properties={"region": us["region"]}))
+    process_subscriptions()
+`
+const topicWorker = workerHeader + `def consume_subscription(name):
+    with bus.get_subscription_receiver(topic_name="order-work", subscription_name=name) as receiver:
+        for message in receiver.receive_messages(max_message_count=10):
+            order = json.loads(str(message))
+            perform_order_work(order)
+            record_processed(order)
+            receiver.complete_message(message)
+
+def process_subscriptions():
+    consume_subscription("eu-orders")
+    consume_subscription("all-orders")
+
+def main():
+    process_subscriptions()
+`
+export const SERVICEBUS_TOPICS_STARTER_FILES = Object.freeze({
+  ...SERVICEBUS_RECEIVE_SOLUTION_FILES,
+  'producer.py': `from clients import bus
+from worker import process_subscriptions
+
+def main():
+    # Publish EU and US orders with region application properties, then consume.
+    raise ValueError("Finish the topic producer")
+`,
+  'worker.py': workerHeader + `def process_subscriptions():
+    # Independently consume eu-orders and all-orders.
+    raise ValueError("Finish the subscription consumers")
+
+def main():
+    process_subscriptions()
+`,
+})
+export const SERVICEBUS_TOPICS_SOLUTION_FILES = Object.freeze({ ...SERVICEBUS_TOPICS_STARTER_FILES, 'producer.py': topicProducer, 'worker.py': topicWorker })
+
+const sessionProducer = `from azure.servicebus import ServiceBusMessage
+from clients import bus
+from worker import process_steps
+import json
+
+def main():
+    with bus.get_queue_sender(queue_name="order-steps") as sender:
+        first = {"id": "o1", "region": "EU", "quantity": 2, "step": 1}
+        other = {"id": "o2", "region": "EU", "quantity": 1, "step": 1}
+        second = {"id": "o1", "region": "EU", "quantity": 2, "step": 2}
+        sender.send_messages(ServiceBusMessage(json.dumps(first), message_id="o1-step1", session_id=first["id"]))
+        sender.send_messages(ServiceBusMessage(json.dumps(other), message_id="o2-step1", session_id=other["id"]))
+        sender.send_messages(ServiceBusMessage(json.dumps(second), message_id="o1-step2", session_id=second["id"]))
+    process_steps()
+`
+const sessionWorker = workerHeader + `def process_steps():
+    with bus.get_queue_receiver(queue_name="order-steps", session_id="o1") as receiver:
+        for message in receiver.receive_messages(max_message_count=10):
+            order = json.loads(str(message))
+            # Each distinct step is work; a whole-order guard would skip step 2.
+            perform_order_work(order)
+            record_processed(order)
+            receiver.complete_message(message)
+
+def main():
+    process_steps()
+`
+export const SERVICEBUS_SESSIONS_STARTER_FILES = Object.freeze({
+  ...SERVICEBUS_IDEMPOTENCY_SOLUTION_FILES,
+  'producer.py': `from clients import bus
+from worker import process_steps
+
+def main():
+    # Send o1 step 1, o2 step 1, o1 step 2 with each order's session ID.
+    raise ValueError("Finish the session producer")
+`,
+  'worker.py': workerHeader + `def process_steps():
+    # Receive explicit session o1 and process its two distinct steps in order.
+    raise ValueError("Finish the session worker")
+
+def main():
+    process_steps()
+`,
+})
+export const SERVICEBUS_SESSIONS_SOLUTION_FILES = Object.freeze({ ...SERVICEBUS_SESSIONS_STARTER_FILES, 'producer.py': sessionProducer, 'worker.py': sessionWorker })

@@ -224,3 +224,18 @@ The original causal finding is addressed. New Important finding: private receipt
 | 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; LF/CRLF notices only | 0 | 0.0392182 |
 
 Fix round2 tests **10.6764454 seconds**, static **0.0392182 seconds**, combined **10.7156636 seconds**. Starting cumulative including supplied reviewer probe **194.7314346 seconds**; final cumulative **205.4470982 seconds (3.4241183033 minutes)**. All invocations measured using whole-invocation PowerShell Stopwatch; no repeated review probe, Lab rerun or additional coverage. Only VM, owning Python test and this log changed; report retains full TDD/final stdout. No broad/aggregate/full suite/Functions/AKS/Container Apps/legacy/cloud/browser/build/agents/merge/push/publication.
+
+## Task 8: advanced Service Bus Labs 4–6
+
+Controller-authorized command only: `npm test -- tests/messaging-labs-servicebus.test.js -t advanced`, measured around the whole invocation with PowerShell Stopwatch. Initial cumulative **205.4470982 seconds**. No catalog/runtime changes, agents, full/aggregate/foundation suite, AKS/Container Apps/legacy/cloud/browser/build/load/performance checks, merge/push/publication.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial RED | focused advanced command above | Tests7 failed /7 skipped; missing advanced Labs export; bodies13ms; Vitest2.25s | 1 | 3.1941269 |
+| 2026-10-02 | First implementation diagnostic | focused advanced command above | Tests2 failed /5 passed /7 skipped; EU also received US because double-quoted $Default expanded; bodies127ms; Vitest2.35s | 1 | 3.2773994 |
+| 2026-10-02 | Literal rule-name GREEN | focused advanced command above | Tests7 passed /7 skipped; bodies145ms; Vitest2.30s | 0 | 3.2547478 |
+| 2026-10-02 | Independent consumer-order RED | focused advanced command above | Tests1 failed /7 passed /7 skipped; valid all-orders-first work completed but rejected; bodies148ms; Vitest2.33s | 1 | 3.2560970 |
+| 2026-10-02 | Final GREEN | focused advanced command above | Tests8 passed /7 skipped; bodies159ms; Vitest2.34s; stdout pristine | 0 | 3.2673783 |
+| 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; existing Git LF/CRLF notices only | 0 | 0.0427380 |
+
+Task8 tests **16.2497494 seconds**, static **0.0427380 seconds**, combined **16.2924874 seconds**. Final cumulative **221.7395856 seconds (3.69565976 minutes)**. Ordinary source/context/diff reads were not execution probes. Detailed RED and full final stdout live in ignored task-8-report.md. Catalog integration is explicitly Task11-owned; advanced Labs export is ready for that aggregation. Controller-deferred minor state.js malformed null-trace guard remains final-review work.

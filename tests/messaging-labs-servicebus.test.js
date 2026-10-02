@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SERVICEBUS_FOUNDATION_LABS } from '../src/data/labs/messaging-journey/index.js'
+import * as messagingJourney from '../src/data/labs/messaging-journey/index.js'
 import { LABS } from '../src/data/labs/index.js'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
@@ -103,5 +104,96 @@ def main():
   it('appends the independent simulated labs to the catalog in journey order', () => {
     expect(SERVICEBUS_FOUNDATION_LABS.map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
     expect(LABS.slice(-3).map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
+  })
+})
+
+// Breaks caught: duplicate business work, wrong subscription consumption/filter
+// routing, and session business work reordered independently of broker receipts.
+describe('advanced Service Bus curriculum', () => {
+  const advanced = messagingJourney.SERVICEBUS_ADVANCED_LABS ?? []
+  const labAt = index => {
+    expect(advanced).toHaveLength(3)
+    return advanced[index]
+  }
+  const rows = run => Object.values(run.runtime.messaging.entities).flatMap(entity => entity.messages)
+  it('advanced independent baselines start with all new Tasks and execution proof pending', () => {
+    expect(advanced.map(lab => [lab.id, lab.journeyOrder])).toEqual([
+      ['messaging-idempotency', 4], ['messaging-topics', 5], ['messaging-sessions', 6],
+    ])
+    for (const lab of advanced) {
+      const run = createBehavioralRun(lab, { attemptId: `advanced-start-${lab.id}` })
+      expect(evaluateLab(lab, run).tasks.every(task => !task.done)).toBe(true)
+      expect(run.runtime.messaging.executionReceipts).toEqual([])
+      expect(run.runtime.messaging.effects).toEqual({})
+      expect(run.evidence.experimentsById).toEqual({})
+    }
+  })
+  it('advanced idempotency Lab counts one business effect for repeated delivery', () => {
+    const lab = labAt(0), run = replayMessagingSolution(lab)
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 1 })
+    expect(rows(run).map(row => [row.messageId, row.status, row.lockHistory.map(lock => lock.settlement)])).toEqual([
+      ['m1', 'completed', ['complete']], ['m1-retry', 'completed', ['complete']],
+    ])
+    expect(run.runtime.messaging.deliveries.filter(row => row.kind === 'order-work').map(row => row.messageId)).toEqual(['m1'])
+    expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.every(task => task.done)).toBe(true)
+  })
+  it('advanced topic subscriptions consume independent EU and all-region copies', () => {
+    const lab = labAt(1), run = replayMessagingSolution(lab)
+    expect(rows(run).map(row => [row.entityId.split('/').at(-1), row.messageId, row.status, JSON.parse(row.body).region])).toEqual([
+      ['eu-orders', 'eu1', 'completed', 'EU'], ['all-orders', 'eu1', 'completed', 'EU'], ['all-orders', 'us1', 'completed', 'US'],
+    ])
+    const euCopies = rows(run).filter(row => row.messageId === 'eu1')
+    expect(euCopies[0].id).not.toBe(euCopies[1].id)
+    expect(euCopies[0].sourceMessageId).toBe(euCopies[1].sourceMessageId)
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 2, o2: 1 })
+    expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.every(task => task.done)).toBe(true)
+  })
+  it('advanced sessions perform two ordered o1 steps while another session remains unconsumed', () => {
+    const lab = labAt(2), run = replayMessagingSolution(lab)
+    expect(rows(run).map(row => [row.messageId, row.sessionId, row.status])).toEqual([
+      ['o1-step1', 'o1', 'completed'], ['o2-step1', 'o2', 'active'], ['o1-step2', 'o1', 'completed'],
+    ])
+    expect(run.runtime.messaging.deliveries.filter(row => row.kind === 'order-work').map(row => [row.messageId, row.order.step])).toEqual([
+      ['o1-step1', 1], ['o1-step2', 2],
+    ])
+    const entity = Object.values(run.runtime.messaging.entities).find(row => row.id.endsWith('/queues/order-steps'))
+    expect(Object.keys(entity.sessions)).toEqual(['o1'])
+    expect(entity.sessions.o1.receiverId).toBe(rows(run)[0].lockHistory[0].receiverId)
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 2 })
+    expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.every(task => task.done)).toBe(true)
+  })
+  it('advanced topic consumers may process independent subscriptions in either order', () => {
+    const lab = labAt(1)
+    const source = lab.tasks.at(-1).solution.steps[0].content.replace('    consume_subscription("eu-orders")\n    consume_subscription("all-orders")', '    consume_subscription("all-orders")\n    consume_subscription("eu-orders")')
+    const run = replayMessagingSolution(lab, { 'worker.py': source })
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 2, o2: 1 })
+    expect(rows(run).every(row => row.status === 'completed')).toBe(true)
+    expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
+  })
+  it('advanced idempotency rejects work before the processed guard even though the marker is idempotent', () => {
+    const lab = labAt(0)
+    const source = lab.tasks.at(-1).solution.steps[0].content.replace('            if not was_processed(order["id"]):\n                perform_order_work(order)', '            perform_order_work(order)\n            if not was_processed(order["id"]):')
+    const run = replayMessagingSolution(lab, { 'worker.py': source })
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 2 })
+    expect(rows(run).every(row => row.status === 'completed')).toBe(true)
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  it('advanced topics reject consuming all-orders twice and leaving the EU copy active', () => {
+    const lab = labAt(1)
+    const source = lab.tasks.at(-1).solution.steps[0].content.replace('consume_subscription("eu-orders")', 'consume_subscription("all-orders")')
+    const run = replayMessagingSolution(lab, { 'worker.py': source })
+    expect(rows(run).filter(row => row.entityId.endsWith('/eu-orders')).map(row => row.status)).toEqual(['active'])
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  it('advanced sessions reject reordered actual work even with correct final totals and settlements', () => {
+    const lab = labAt(2)
+    const source = lab.tasks.at(-1).solution.steps[0].content.replace('        for message in receiver.receive_messages(max_message_count=10):', '        batch = receiver.receive_messages(max_message_count=10)\n        for message in [batch[1], batch[0]]:')
+    const run = replayMessagingSolution(lab, { 'worker.py': source })
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 2 })
+    expect(rows(run).filter(row => row.sessionId === 'o1').every(row => row.status === 'completed')).toBe(true)
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
   })
 })

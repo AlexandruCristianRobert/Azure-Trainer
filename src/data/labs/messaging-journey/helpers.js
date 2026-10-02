@@ -85,3 +85,31 @@ export function completedOrderWork(measurement, row, id, quantity) {
     && (measurement.effects.after.workByOrder?.[id] ?? 0) - (measurement.effects.before.workByOrder?.[id] ?? 0) === 1
     && orderPayload(measurement.effects.after.processed?.[id], id, quantity)
 }
+
+// Advanced copies/steps have distinct business semantics. This checks only the
+// actual same-lock application sequence; each Lab owns its effect policy.
+export const exactOrder = (actual, expected) => actual && typeof actual === 'object'
+  && Object.keys(actual).length === Object.keys(expected).length
+  && Object.entries(expected).every(([key, value]) => actual[key] === value)
+
+export function receivedCompletion(measurement, row) {
+  if (row.status !== 'completed' || row.subQueue !== 'active' || row.lockHistory.length !== 1) return null
+  const lock = row.lockHistory[0]
+  if (lock.settlement !== 'complete') return null
+  const linked = trace => trace.entityId === row.entityId && trace.messageRecordId === row.id
+    && trace.messageId === row.messageId && trace.receiverId === lock.receiverId && trace.lockToken === lock.lockToken
+  const receiveAt = measurement.trace.findIndex(trace => trace.kind === 'receive' && trace.subQueue === 'active' && linked(trace))
+  const completeAt = measurement.trace.findIndex(trace => trace.kind === 'complete' && trace.subQueue === 'active' && linked(trace))
+  return receiveAt >= 0 && completeAt > receiveAt ? { linked, receiveAt, completeAt } : null
+}
+
+export function receiptApplicationWork(measurement, row, expectedOrder, recordChanged = true) {
+  const receipt = receivedCompletion(measurement, row)
+  if (!receipt || !exactOrder(JSON.parse(row.body), expectedOrder)) return false
+  const work = measurement.trace.filter(trace => ['order-work', 'order-record'].includes(trace.kind) && receipt.linked(trace))
+  if (work.length !== 2 || work[0].kind !== 'order-work' || !work[0].changed
+    || work[1].kind !== 'order-record' || work[1].changed !== recordChanged
+    || work.some(trace => !exactOrder(trace.order, expectedOrder))) return false
+  const workAt = measurement.trace.indexOf(work[0]), markerAt = measurement.trace.indexOf(work[1])
+  return receipt.receiveAt < workAt && workAt < markerAt && markerAt < receipt.completeAt
+}
