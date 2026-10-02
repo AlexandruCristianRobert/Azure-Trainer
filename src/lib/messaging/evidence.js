@@ -74,7 +74,7 @@ export function validMessagingEvidence(record, run, lab) {
   const declaration = lab.messagingExercise?.tasks.find(item => item.taskId === record.taskId)
   if (!declaration) return !lab.messagingExercise || !lab.tasks.find(task => task.id === record.taskId)?.verification
   const m = record.measurements, state = run.runtime.messaging
-  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).sort().join(',') !== 'diagnostics,effects,entry,executionId,mode,receipts,sourcePaths,trace,value'
     || m.entry !== declaration.entry || m.mode !== declaration.mode
     || !Array.isArray(m.sourcePaths) || m.sourcePaths.length < 1 || m.sourcePaths.length > 20
     || new Set(m.sourcePaths).size !== m.sourcePaths.length || !m.sourcePaths.includes(m.entry)
@@ -85,6 +85,9 @@ export function validMessagingEvidence(record, run, lab) {
     || !Array.isArray(m.receipts.eventgrid) || m.receipts.eventgrid.length > 50
     || !plainObject(m.effects) || Object.keys(m.effects).sort().join(',') !== 'after,before'
     || !plainObject(m.effects.before) || !plainObject(m.effects.after)) return false
+  const execution = state.executionReceipts?.find(receipt => receipt.id === m.executionId)
+  const { executionId, ...snapshot } = m
+  if (!execution || execution.entry !== m.entry || execution.mode !== m.mode || canonicalize(snapshot) !== canonicalize(execution.measurements)) return false
   const traceIds = new Set(), retained = [...state.deliveries, ...(state.eventGrid?.traces ?? [])]
   for (const trace of m.trace) {
     const match = /^(?:trace|eg-trace)-([1-9]\d*)$/.exec(trace?.id)
@@ -118,4 +121,42 @@ export function validMessagingEvidence(record, run, lab) {
       && m.sourcePaths.every(path => Object.hasOwn(task.dependencies ?? {}, `messaging:file:${path}`))
       && declaration.check(JSON.parse(JSON.stringify(m))) === true
   } catch { return false }
+}
+
+/** Actual latest boundaries anchor runtime; older snapshots remain their prior outcomes. */
+export function validMessagingExecutionReceipts(state) {
+  const effects = new Map(), bus = new Map(), grid = new Map()
+  for (const execution of state.executionReceipts ?? []) {
+    const m = execution.measurements
+    if (canonicalize(Object.keys(m.effects.before).sort()) !== canonicalize(Object.keys(m.effects.after).sort())) return false
+    for (const [family, values] of Object.entries(m.effects.after)) {
+      const before = m.effects.before[family]
+      if (canonicalize(Object.keys(before).sort()) !== canonicalize(Object.keys(values).sort())) return false
+      for (const [key, value] of Object.entries(values)) {
+        const identity = JSON.stringify([family, key]), old = before[key]
+        if (canonicalize(old) === canonicalize(value) || effects.has(identity) && canonicalize(effects.get(identity)) !== canonicalize(old)) return false
+        if (family === 'workByOrder' ? !Number.isSafeInteger(value) || value <= (old ?? 0) || old !== null && (!Number.isSafeInteger(old) || old < 0)
+          : old !== null || !plainObject(value) || (family === 'processed' ? value.id !== key : value.eventId !== key || typeof value.orderId !== 'string')) return false
+        effects.set(identity, value)
+      }
+    }
+    for (const [rows, latest, linkage] of [[m.receipts.servicebus, bus, 'messageRecordId'], [m.receipts.eventgrid, grid, 'deliveryId']]) {
+      const ids = new Set()
+      for (const row of rows) {
+        if (!plainObject(row) || typeof row.id !== 'string' || ids.has(row.id) || !m.trace.some(trace => trace[linkage] === row.id)) return false
+        latest.set(row.id, row)
+        ids.add(row.id)
+      }
+    }
+  }
+  for (const [identity, value] of effects) {
+    const [family, key] = JSON.parse(identity)
+    if (canonicalize(value) !== canonicalize(state.effects[family]?.[key] ?? null)) return false
+  }
+  const actualBus = Object.values(state.entities).flatMap(entity => entity.messages)
+  for (const [latest, actual] of [[bus, actualBus], [grid, state.eventGrid?.deliveries ?? []]]) for (const [id, row] of latest) {
+    const current = actual.find(item => item.id === id)
+    if (!current || canonicalize(row) !== canonicalize(current)) return false
+  }
+  return true
 }

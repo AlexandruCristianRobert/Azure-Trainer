@@ -204,6 +204,8 @@ describe('messaging shell, current behavior evidence and persistence', () => {
     expect(handled.diagnostics).toEqual([])
     expect(handled.run.runtime.messaging.eventGrid.deliveries[0]).toMatchObject({ status: 'delivered', attempts: 2 })
     expect(handled.run.runtime.messaging.effects.notifications.e1.orderId).toBe('o1')
+    expect(Object.values(handled.run.evidence.experimentsById)[0].measurements.receipts.eventgrid[0].status).toBe('pending')
+    expect(() => deserializeRun(serializeRun(handled.run, f.lab), f.lab)).not.toThrow()
     const unfiltered = command(f.run, f.lab, 'az eventgrid topic event-subscription update -g rg-messaging --topic-name evgt-orders -n order-notifications --subject-begins-with ""').run
     const leaked = command(unfiltered, f.lab, 'python events.py').run
     expect(leaked.runtime.messaging.eventGrid.deliveries).toHaveLength(2)
@@ -257,6 +259,68 @@ describe('messaging shell, current behavior evidence and persistence', () => {
     const forged = JSON.parse(serializeRun(proved, f.lab))
     Object.values(forged.evidence.experimentsById)[0].measurements.receipts.servicebus[0].status = 'active'
     expect(() => deserializeRun(JSON.stringify(forged), f.lab)).toThrow()
+  })
+  it('rejects failed guard behavior changed to passed by tampering only with measured work', () => {
+    const f = engineFixture()
+    const defective = f.original.replace('if not was_processed(order["id"]):', 'if True:')
+    const failed = command(save(f.run, f.lab, 'worker.py', defective), f.lab).run
+    expect(done(f.lab, failed)).toBe(false)
+    expect(failed.runtime.messaging.effects.workByOrder.o1).toBe(2)
+    const forged = JSON.parse(serializeRun(failed, f.lab)), record = Object.values(forged.evidence.experimentsById)[0]
+    expect(record.outcome).toBe('failed')
+    record.outcome = 'passed'
+    record.measurements.effects.after.workByOrder.o1 = 1
+    expect(() => deserializeRun(JSON.stringify(forged), f.lab)).toThrow()
+  })
+  it('rejects measured settlement and status changes even on a failed result', () => {
+    const f = engineFixture(), failed = command(save(f.run, f.lab, 'worker.py', f.changed), f.lab).run
+    const forged = JSON.parse(serializeRun(failed, f.lab)), row = Object.values(forged.evidence.experimentsById)[0].measurements.receipts.servicebus[0]
+    expect(row.status).toBe('locked')
+    row.status = 'completed'
+    row.lockHistory.at(-1).settlement = 'complete'
+    row.lockHistory.at(-1).settledAtMs = 0
+    expect(() => deserializeRun(JSON.stringify(forged), f.lab)).toThrow()
+  })
+  it('preserves historical measured effects after an ungraded command changes the same application key', () => {
+    const f = engineFixture(), proved = command(f.run, f.lab).run
+    const source = 'from training_runtime import perform_order_work\ndef main():\n    perform_order_work({"id":"o1","region":"EU"})\n'
+    const later = command(save(proved, f.lab, 'producer.py', source), f.lab, 'python producer.py').run
+    expect(later.runtime.messaging.effects.workByOrder.o1).toBe(2)
+    expect(Object.values(later.evidence.experimentsById)[0].measurements.effects.after.workByOrder.o1).toBe(1)
+    expect(() => deserializeRun(serializeRun(later, f.lab), f.lab)).not.toThrow()
+    const edited = save(later, f.lab, 'worker.py', f.changed)
+    const reconfigured = command(edited, f.lab, 'az servicebus queue update -g rg-messaging --namespace-name sb-orders -n orders --status Disabled').run
+    expect(() => deserializeRun(serializeRun(reconfigured, f.lab), f.lab)).not.toThrow()
+    expect(Object.values(reconfigured.evidence.experimentsById)[0].outcome).toBe('passed')
+    expect(done(f.lab, reconfigured)).toBe(false)
+  })
+  it('rejects a latest execution boundary that contradicts current application effects', () => {
+    const f = engineFixture(), proved = command(f.run, f.lab).run
+    const contradictory = JSON.parse(serializeRun(proved, f.lab))
+    contradictory.runtime.messaging.effects.workByOrder.o1 = 3
+    expect(() => deserializeRun(JSON.stringify(contradictory), f.lab)).toThrow()
+  })
+  it('stops at the bounded execution journal before producing another application effect', () => {
+    const f = engineFixture()
+    let run = save(f.run, f.lab, 'producer.py', 'from training_runtime import perform_order_work\ndef main():\n    perform_order_work({"id":"o1"})\n')
+    for (let index = 0; index < 50; index++) run = command(run, f.lab, 'python producer.py').run
+    expect(run.runtime.messaging.effects.workByOrder.o1).toBe(50)
+    const refused = command(run, f.lab, 'python producer.py')
+    expect(refused.diagnostics[0]?.code).toBe('MESSAGING_LIMIT')
+    expect(refused.run.runtime.messaging.effects.workByOrder.o1).toBe(50)
+    expect(refused.run.runtime.messaging.executionReceipts).toHaveLength(50)
+    expect(createBehavioralRun(f.lab, { attemptId: 'reset-journal' }).runtime.messaging.executionReceipts).toEqual([])
+  })
+  it('rejects null execution journal state before any verification', () => {
+    const f = engineFixture(), malformed = JSON.parse(serializeRun(f.run, f.lab))
+    malformed.runtime.messaging.executionReceipts = null
+    expect(() => deserializeRun(JSON.stringify(malformed), f.lab)).toThrow()
+  })
+  it('rejects malformed ungraded command receipt trace state', () => {
+    const f = engineFixture(), run = command(f.run, f.lab, 'python producer.py').run
+    const malformed = JSON.parse(serializeRun(run, f.lab))
+    malformed.runtime.messaging.executionReceipts[0].measurements.trace[0].kind = 'invented'
+    expect(() => deserializeRun(JSON.stringify(malformed), f.lab)).toThrow()
   })
   it('invalidates reached client saves and preserves proof for unrelated resource creation', () => {
     const f = engineFixture(), proved = command(f.run, f.lab).run

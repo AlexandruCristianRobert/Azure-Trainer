@@ -28,7 +28,34 @@ export function finiteJson(value, ancestors = new Set()) {
 }
 
 export function emptyMessagingState() {
-  return { version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {} }
+  return { version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {}, executionReceipts: [] }
+}
+
+/** Immutable command-boundary data; not executable IR or a grading outcome. */
+function validExecutionMeasurement(value) {
+  if (!plainObject(value) || Object.keys(value).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+    || !['producer.py', 'worker.py', 'events.py', 'handler.py', 'function_app.py'].includes(value.entry)
+    || !(value.mode === 'functions' ? value.entry === 'function_app.py' : value.mode === 'script' && value.entry !== 'function_app.py')
+    || !Array.isArray(value.sourcePaths) || value.sourcePaths.length < 1 || value.sourcePaths.length > 20
+    || !value.sourcePaths.includes(value.entry) || new Set(value.sourcePaths).size !== value.sourcePaths.length
+    || value.sourcePaths.some(path => typeof path !== 'string' || path.length > 256)
+    || !Array.isArray(value.trace) || value.trace.length > 500 || !Array.isArray(value.diagnostics) || value.diagnostics.length > 500
+    || !plainObject(value.receipts) || Object.keys(value.receipts).sort().join(',') !== 'eventgrid,servicebus'
+    || !Array.isArray(value.receipts.servicebus) || value.receipts.servicebus.length > 50
+    || !Array.isArray(value.receipts.eventgrid) || value.receipts.eventgrid.length > 50
+    || !plainObject(value.effects) || Object.keys(value.effects).sort().join(',') !== 'after,before'
+    || !plainObject(value.effects.before) || !plainObject(value.effects.after)
+    || new TextEncoder().encode(JSON.stringify(value.value)).length > 128 * 1024) return false
+  let locks = 0
+  for (const receipt of value.receipts.servicebus) {
+    if (!plainObject(receipt) || !Array.isArray(receipt.lockHistory)) return false
+    locks += receipt.lockHistory.length
+  }
+  if (locks > 500) return false
+  for (const side of ['before', 'after']) for (const [family, entries] of Object.entries(value.effects[side])) {
+    if (!['workByOrder', 'processed', 'notifications'].includes(family) || !plainObject(entries) || Object.keys(entries).length > 50) return false
+  }
+  return true
 }
 
 function validHostRecords(hosts, timeMs) {
@@ -74,6 +101,29 @@ export function validateMessagingState(state) {
     maximumId = Math.max(maximumId, Number(match[1]))
     if (unique) allocated.add(value)
     return true
+  }
+  const executions = state.executionReceipts === undefined ? [] : state.executionReceipts
+  if (!Array.isArray(executions) || executions.length > 50) return false
+  let previousExecution = 0
+  for (const execution of executions) {
+    const match = /^execution-([1-9]\d*)$/.exec(execution?.id)
+    if (!plainObject(execution) || Object.keys(execution).sort().join(',') !== 'entry,id,measurements,mode'
+      || !match || !counter(Number(match[1])) || Number(match[1]) <= previousExecution || allocated.has(execution.id)
+      || !validExecutionMeasurement(execution.measurements)
+      || execution.entry !== execution.measurements.entry || execution.mode !== execution.measurements.mode) return false
+    const sequence = Number(match[1]), traces = new Set()
+    for (const trace of execution.measurements.trace) {
+      const traceId = /^(?:trace|eg-trace)-([1-9]\d*)$/.exec(trace?.id)
+      if (!plainObject(trace) || !traceId || traces.has(trace.id) || Number(traceId[1]) <= previousExecution
+        || Number(traceId[1]) >= sequence || !counter(trace.timeMs) || trace.timeMs > state.timeMs) return false
+      const kinds = trace.id.startsWith('eg-trace-') ? ['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance']
+        : ['send', 'duplicate', 'enqueue', 'receive', 'complete', 'abandon', 'deadletter', 'advance', 'lock-expired', 'message-expired']
+      if (!kinds.includes(trace.kind)) return false
+      traces.add(trace.id)
+    }
+    allocated.add(execution.id)
+    maximumId = Math.max(maximumId, sequence)
+    previousExecution = sequence
   }
   let messageCount = 0
   for (const [key, entity] of Object.entries(state.entities)) {

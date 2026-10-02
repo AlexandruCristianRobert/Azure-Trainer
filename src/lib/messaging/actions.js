@@ -11,10 +11,19 @@ export function applyMessagingAction(run, action, lab) {
   if (!isJsonValue(action) || Object.keys(action).length !== 3 || action.type !== 'messaging-run'
     || !messagingCommandAllowed(run, lab, action.entry, action.mode)
     || action.mode === 'functions' && (lab.messagingInput?.functions?.entry ?? 'function_app.py') !== action.entry) fail('INVALID_EFFECT', 'Messaging execution intent is malformed or unavailable.')
+  if ((run.runtime.messaging.executionReceipts?.length ?? 0) >= 50 || run.runtime.messaging.nextId >= Number.MAX_SAFE_INTEGER - 1) {
+    const diagnostic = { code: 'MESSAGING_LIMIT', message: 'The command receipt limit is reached. Reset for a fresh attempt.', path: action.entry, line: 1, column: 1 }
+    return { run, lines: [`${action.entry}:1:1 ${diagnostic.code}: ${diagnostic.message}`], portalEvents: [], diagnostics: [diagnostic], execution: null }
+  }
   const result = action.mode === 'functions' ? runMessagingFunctions(run, lab) : executeMessagingEntry(run, lab, action.entry, action.mode)
   let next = result.run
   if (result.execution) {
     const measurements = cloneJson(messagingMeasurements(run.runtime.messaging, next.runtime.messaging, result.execution, action.entry, action.mode, result.diagnostics))
+    const state = next.runtime.messaging, executionId = `execution-${state.nextId}`
+    const receipt = { id: executionId, entry: action.entry, mode: action.mode, measurements: cloneJson(measurements) }
+    next = { ...next, runtime: { ...next.runtime, messaging: { ...state, nextId: state.nextId + 1,
+      executionReceipts: [...(state.executionReceipts ?? []), receipt] } } }
+    measurements.executionId = executionId
     const safeDiagnostics = messagingDiagnosticsExpected(measurements, lab.messagingExercise)
     for (const declaration of lab.messagingExercise.tasks.filter(item => item.entry === action.entry && item.mode === action.mode)) {
       const task = lab.tasks.find(task => task.id === declaration.taskId)

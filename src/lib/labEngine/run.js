@@ -15,7 +15,7 @@ import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDat
 import { dataProtectedRefs } from './data-capstone/ownership.js'
 import { emptyMessagingState, validateMessagingState } from '../messaging/state.js'
 import { validateMessagingExercise } from '../messaging/shell.js'
-import { validMessagingEvidence } from '../messaging/evidence.js'
+import { validMessagingEvidence, validMessagingExecutionReceipts } from '../messaging/evidence.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -232,7 +232,8 @@ export function validateBehavioralRun(run, lab = null) {
       if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
       if (candidate !== run) { run.runtime = candidate.runtime; run.nextSequence = candidate.nextSequence }
     }
-    if (lab.capabilities?.messaging === true && !validateMessagingState(run.runtime.messaging)) {
+    if (lab.capabilities?.messaging === true && (!validateMessagingState(run.runtime.messaging)
+      || !validMessagingExecutionReceipts(run.runtime.messaging))) {
       fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')
     }
     if (lab.capabilities?.messaging === true && !evidenceRecords.every(record => validMessagingEvidence(record, run, lab))) {

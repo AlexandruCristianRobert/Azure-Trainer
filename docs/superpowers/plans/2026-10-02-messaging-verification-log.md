@@ -158,3 +158,19 @@ All test invocations: `npm test -- tests/messaging-engine.test.js`. Complete inv
 | 2026-10-02 | Static whitespace diagnostic | `git diff --check`; Windows LF/CRLF notices only | 0 | 0.0461453 |
 
 Task6 test total **27.9222783 seconds**; executable diagnostic probes **0 seconds**; measured static whitespace diagnostic **0.0461453 seconds**. Starting cumulative **125.5689677 seconds**; new cumulative known verification **153.5373913 seconds (2.558957 minutes)**. No full suite, AKS/Container Apps/legacy replay, cloud, broad browser, builds, agents, publication or large probes. All37 final cases pass. Source/config change/revert freshness, saved versus unsaved draft, unrelated README/resource/no-op edits, JSON resume/reset, strict intent admission, current-command receipts/effect changes, actual WebHook retry/filter behavior and typed actual Functions invalid-receipt/sibling outcomes are covered. Raw final stdout and exact curriculum exercise/dependency/measurement API retained in task-6-report.md.
+
+### Task6 fix round1: causal command-boundary admission
+
+Only `npm test -- tests/messaging-engine.test.js`, each complete invocation measured with PowerShell Stopwatch. Supplied reviewer probe included without rerun. Minimal controller-approved bounded executionReceipts journal anchors exact evidence payloads for failed/passed results, chains effect changes and latest actual physical receipt outcomes, preserves prior boundaries after later commands and refuses command51 before execution. No crypto/authentication or general provenance system.
+
+| Date | Stage | Actual relevant stdout | Exit | Seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Reviewer supplied diagnostic | actualWork2/measuredWork2 failed; change measuredWork1/outcome passed accepted true while actualWork2 | 0 | 0.2716955 |
+| 2026-10-02 | Effect/settlement RED | Tests2 failed /38 passed (40); forged effects and failed settlement snapshots did not throw | 1 | 2.8334328 |
+| 2026-10-02 | Capacity/latest boundary RED | Tests4 failed /38 passed (42); latest actual effect mismatch accepted; effect51 not refused | 1 | 2.8912201 |
+| 2026-10-02 | Causal journal GREEN | Test Files1 passed; Tests42 passed; bodies350ms | 0 | 2.9537305 |
+| 2026-10-02 | Typed journal RED | Tests2 failed /42 passed (44); null journal and invented ungraded trace kind accepted | 1 | 2.9586068 |
+| 2026-10-02 | Final GREEN | Test Files1 passed; Tests44 passed; bodies364ms; Vitest duration2.07s | 0 | 2.9743383 |
+| 2026-10-02 | Static whitespace diagnostic | git diff --check; deferred LF/CRLF notices only | 0 | 0.0442256 |
+
+Fix tests **14.6113285 seconds**, static **0.0442256 seconds**. Starting cumulative including reviewer **153.8090868 seconds**; new cumulative **168.4646409 seconds (2.807744 minutes)**. All attempts measured. No broad suites/builds/cloud/browser/replay/agents/merge/push/publication. Full final stdout, exact refined receipt/evidence shape and historical/capacity limitations in task-6-report.md. Existing completed-result persistence unchanged; generic Data/whole-journey checks remain Task11. Minor line-ending cleanup deferred by controller.
