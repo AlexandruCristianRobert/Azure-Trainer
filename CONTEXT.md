@@ -43,7 +43,7 @@ A final Lab that combines the topics practiced in the preceding Labs, requiring 
 _Avoid_: Final quiz, Final exam
 
 **Learning Journey**:
-An ordered series of Labs covering one platform or service family, organized into topics that each progress through Guided, Troubleshooting and Independent Labs, and ending in one Capstone Lab. The Data journey covers Cosmos DB for NoSQL, Azure Database for PostgreSQL and Azure Managed Redis and ends in a single Capstone that combines all three.
+An ordered series of Labs covering a related platform or service family and ending in one Capstone Lab. A Journey may use Guided/Troubleshooting/Independent topic groups or progressive build-focused Labs, according to its learning goals.
 _Avoid_: Track, Course, Path, Module
 
 **Application Factory**:
@@ -57,6 +57,10 @@ _Avoid_: General-purpose chatbot, live AI assistant
 **Conversation History**:
 The Knowledge Assistant's record of sessions, the questions asked, the answers returned and learner feedback on those answers. It is also searched for similar previously answered questions.
 _Avoid_: Chat log, Transcript, Memory
+
+**Order Processing Application**:
+The shared business example in the Messaging Learning Journey, in which orders are accepted and their processing is coordinated across application components. Successive Labs develop this same example.
+_Avoid_: Knowledge Assistant, unrelated per-Lab demo
 
 **Response Cache**:
 Stored answers reused only when a new request has exactly the same normalized question and filters.
@@ -83,8 +87,16 @@ One of up to two on-demand nudges attached to a Task, ordered from concept to co
 _Avoid_: Tip, Clue, Help
 
 **Solution**:
-The complete worked answer to a Task, including the commands or file changes needed to satisfy it, revealed on demand after the Hints as the last resort. Recorded on the Lab Result like a Hint.
+The complete worked answer to a Task, including the commands or file changes needed to satisfy it, revealed only when the learner requests it. Consulting a Solution is recorded on the Lab Result; it is not automatic task completion.
 _Avoid_: Answer, Cheat, Reveal
+
+**Task Rationale**:
+An on-demand explanation of why a particular resource, setting or code construct is chosen for a Task and what it accomplishes. It is distinct from a Hint or an Exam Note.
+_Avoid_: Hint, Exam Note, Solution
+
+**Explanation Prompt**:
+A self-contained request for further explanation of a Task's concept, including its learning context and the learner's C# background. It supports understanding rather than revealing the Task's complete Solution.
+_Avoid_: Solution, Hint, automatic AI explanation
 
 **Exam Note**:
 The one- or two-sentence exam-relevant insight shown when a Task ticks (e.g. "Topics require Standard tier or higher").
