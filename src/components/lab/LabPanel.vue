@@ -59,16 +59,17 @@ function stateOf(t, stage) { return t.done ? 'done' : isCapstone.value
   ? stage?.status === 'Active' && stage.tasks.find(task => !task.done)?.id === t.id ? 'current' : 'pending'
   : t.id === run.currentTaskId || t.status === 'needs-verification' ? 'current' : 'pending' }
 const capstone = computed(() => run.lab?.capabilities?.acaCapstone === true ? run.behavioralRun : null)
+const dataCapstone = computed(() => run.lab?.capabilities?.dataCapstone === true ? run.behavioralRun : null)
 const aksCapstone = computed(() => run.lab?.capabilities?.aksCapstone === true && run.behavioralRun
   ? inspectAksCapstone(toRaw(run.behavioralRun), run.lab) : null)
-const isCapstone = computed(() => !!capstone.value || !!aksCapstone.value)
-const sealed = computed(() => capstone.value?.stages?.sealedStages ?? [])
+const isCapstone = computed(() => !!capstone.value || !!aksCapstone.value || !!dataCapstone.value)
+const sealed = computed(() => (capstone.value ?? dataCapstone.value)?.stages?.sealedStages ?? [])
 const panelTasks = computed(() => capstone.value ? evaluateLab(run.lab, capstone.value).tasks : run.taskStates)
 const stages = computed(() => aksCapstone.value?.stages ?? (run.lab?.stages ?? []).map((stage, index) => ({ ...stage, index,
   tasks: panelTasks.value.filter((task) => stage.taskIds.includes(task.id)),
   seal: sealed.value[index] ?? null,
-  status: !capstone.value ? 'Open' : sealed.value[index] ? 'Sealed'
-    : capstone.value.stages?.activeStageId === stage.id ? 'Active' : 'Locked',
+  status: !capstone.value && !dataCapstone.value ? 'Open' : sealed.value[index] ? 'Sealed'
+    : (capstone.value ?? dataCapstone.value).stages?.activeStageId === stage.id ? 'Active' : 'Locked',
 })))
 const activeStage = computed(() => stages.value.find(stage => stage.status === 'Active'))
 const canAdvance = computed(() => aksCapstone.value ? aksCapstone.value.canAdvance : !!activeStage.value && activeStage.value.tasks.every(task => task.done)
@@ -135,6 +136,7 @@ async function restart() {
     </template>
     <template v-else-if="run.isComplete">
       <LabCompletePanel :error="errorMessage" @restart="restart" />
+      <section v-if="dataCapstone" class="lab-panel__capstone-result" aria-label="Data capstone sealed checkpoints"><h3>Sealed checkpoints</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }} · {{ stage.seal?.evidenceIds.length ?? 0 }} evidence records</li></ol><p>Fresh recovery checkpoint frozen. Exact owned cleanup verified; supplied resources and historical receipts retained.</p></section>
       <section v-if="aksCapstone" class="lab-panel__capstone-result" aria-label="Capstone sealed stages">
         <h3>Sealed stages</h3><ol><li v-for="stage in stages" :key="stage.id">{{ stage.title }} · {{ stage.status }} · {{ stage.evidenceMode }} evidence</li></ol>
         <p>Cleanup checkpoint {{ aksCapstone.cleanup.checkpoint ? 'sealed' : 'pending' }} · {{ aksCapstone.cleanup.remaining.length }} owned resources remaining</p>
@@ -209,7 +211,7 @@ async function restart() {
           <p v-if="aksCapstone" class="lab-panel__stage-meta">{{ stage.evidenceMode === 'historical' ? 'Historical sealed evidence' : 'Current evidence' }} · {{ stage.proofs.length }} durable receipts</p>
           <ol class="lab-panel__tasks"><TaskRow v-for="t in stage.tasks" :key="t.id" :task="t" :state="stateOf(t, stage)" :hints-revealed="run.hintsRevealed[t.id] ?? 0" :solution-revealed="!!run.solutionsRevealed[t.id]" :exam-note-open="openNotes.has(t.id)" :help-disabled="run.readOnly || run.loading || !!run.storageError || run.busy || (isCapstone && stage.status !== 'Active')" @toggle-exam-note="toggleNote(t.id)" @reveal-hint="assistance('revealHint', t.id)" @reveal-solution="assistance('revealSolution', t.id)" /></ol>
           <div v-if="aksCapstone && stage.status === 'Active'" class="lab-panel__recovery-actions" aria-label="AKS checkpoint verification"><button v-for="task in stage.tasks" :key="task.id" type="button" class="btn btn--secondary" :aria-label="`Verify ${task.title ?? task.id}`" :disabled="!task.verification?.scenarioId || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt || (aksCapstone.cleanup.frozen && !['cleanup-app', 'cleanup-cloud'].includes(task.id))" @click="verifyAksTask(task)">Verify {{ task.title ?? task.id }}</button></div>
-          <button v-if="isCapstone && stage.status === 'Active'" type="button" class="btn btn--primary lab-panel__advance" :disabled="!canAdvance || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt" @click="stageAction(aksCapstone ? 'aks-advance-stage' : 'advance-stage')">{{ stages[stage.index + 1] ? `Advance to ${stages[stage.index + 1].title}` : 'Seal cleanup and complete Lab' }}</button>
+          <button v-if="isCapstone && stage.status === 'Active'" type="button" class="btn btn--primary lab-panel__advance" :disabled="!canAdvance || run.loading || run.readOnly || run.busy || !!run.storageError || !!run.completedAt" @click="stageAction(dataCapstone ? 'data-advance-stage' : aksCapstone ? 'aks-advance-stage' : 'advance-stage')">{{ stages[stage.index + 1] ? `Advance to ${stages[stage.index + 1].title}` : 'Seal cleanup and complete Lab' }}</button>
         </section>
       </template>
       <ol v-else class="lab-panel__tasks"><TaskRow v-for="t in run.taskStates" :key="t.id" :task="t" :state="t.done ? 'done' : t.id === run.currentTaskId ? 'current' : 'pending'" :hints-revealed="run.hintsRevealed[t.id] ?? 0" :solution-revealed="!!run.solutionsRevealed[t.id]" :exam-note-open="openNotes.has(t.id)" @toggle-exam-note="toggleNote(t.id)" @reveal-hint="run.revealHint(t.id)" @reveal-solution="run.revealSolution(t.id)" /></ol>

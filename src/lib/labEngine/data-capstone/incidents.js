@@ -88,13 +88,16 @@ function workerRecovered(run, entry, records) {
   return !!restartProof && replay && positive && afterRestart
 }
 function poolObserved(entry, records) {
-  const warm = records.find(record => record.measurements.load?.originRequests === 0 && record.measurements.load.failed === 0
-    && record.measurements.artifactIds.includes(entry.faultArtifactId))
-  return !!warm && records.some(record => record.sequence > warm.sequence && record.measurements.load?.startedAtMs >= warm.endedAtMs + 61000
-    && record.measurements.artifactIds.includes(entry.faultArtifactId) && record.measurements.load?.originRequests > 0
-    && record.measurements.load.failed > 0 && record.measurements.load.mode === 'pool' && record.measurements.load.poolMaxSize === 12
-    && record.measurements.load.replicas === 3 && record.measurements.load.serverParameters.max_connections === '20'
-    && record.measurements.load.errors.some(error => error.includes('too many clients already')))
+  const loads = records.flatMap(record => (record.measurements.loads?.length ? record.measurements.loads
+    : record.measurements.load ? [{ ...record.measurements.load, artifactId: record.measurements.artifactIds.includes(entry.faultArtifactId) ? entry.faultArtifactId : null, stepIndex: 0 }] : [])
+    .map(load => ({ load, sequence: record.sequence })))
+  const fault = load => load.artifactId === entry.faultArtifactId && load.mode === 'pool' && load.poolMaxSize === 12
+    && load.replicas === 3 && load.serverParameters.max_connections === '20'
+  return loads.some(({ load: warm, sequence }) => fault(warm) && warm.originRequests === 0 && warm.failed === 0
+    && loads.some(({ load: cold, sequence: later }) => fault(cold)
+      && (later > sequence || later === sequence && cold.stepIndex > warm.stepIndex)
+      && cold.startedAtMs >= warm.startedAtMs + 66000 && cold.originRequests > 0 && cold.failed > 0
+      && cold.errors.some(error => error.includes('too many clients already'))))
 }
 function poolRecovered(run, entry, records) {
   return records.some(record => {

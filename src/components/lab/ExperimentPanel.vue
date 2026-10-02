@@ -8,6 +8,7 @@ import CpuExperimentPanel from './CpuExperimentPanel.vue'
 import ProbeExperimentPanel from './ProbeExperimentPanel.vue'
 import FoundryRequestPanel from './FoundryRequestPanel.vue'
 import AksExperimentPanel from './AksExperimentPanel.vue'
+import DataCapstonePanel from './DataCapstonePanel.vue'
 
 const run = useLabRunStore()
 const appId = ref('')
@@ -43,7 +44,8 @@ async function send() {
 
 <template>
   <section class="experiment-tool" aria-label="Experiment Controls">
-    <section v-if="run.lab?.capabilities?.dataRedis" aria-label="Redis workload controls">
+    <DataCapstonePanel v-if="run.lab?.capabilities?.dataCapstone && run.behavioralRun" />
+    <section v-if="!run.lab?.capabilities?.dataCapstone && run.lab?.capabilities?.dataRedis" aria-label="Redis workload controls">
       <h2>Redis cache workloads</h2>
       <p>Requests use the deployed application. Advances move simulated time immediately.</p>
       <div class="experiment-tool__controls"><button v-for="[id] in redisScenarios" :key="id" class="btn" type="button" :disabled="locked" @click="runRedis(id)">{{ id }}</button></div>
@@ -60,8 +62,8 @@ async function send() {
         <details><summary>Redis operation trace</summary><p v-if="redisResult.displayTraceTruncated">Display limited to 256 operations; measurements include all complete request frames.</p><pre>{{ JSON.stringify(redisResult.calls, null, 2) }}</pre></details>
       </div>
     </section>
-    <AksExperimentPanel v-if="run.lab?.capabilities?.kubernetes" />
-    <template v-else>
+    <AksExperimentPanel v-if="!run.lab?.capabilities?.dataCapstone && run.lab?.capabilities?.kubernetes" />
+    <template v-if="!run.lab?.capabilities?.dataCapstone && !run.lab?.capabilities?.kubernetes">
     <header><h2>Experiment Controls</h2><p>Simulated requests use the active deployment's captured source and configuration.</p></header>
     <CpuExperimentPanel v-if="run.lab?.capabilities?.cpuScaling" />
     <ProbeExperimentPanel v-if="run.lab?.capabilities?.healthProbes" />

@@ -306,6 +306,15 @@ function evalBuiltin(expr, locals, ctx) {
   if (ctx.redisFlow) ctx.redisFlow.current = expr.name === 'next' ? valueFlow?.children?.[0] ?? null
     : expr.name === 'list' && Array.isArray(value) ? { children: { ...valueFlow?.children } } : null
   switch (expr.name) {
+    case 'training_no_match': {
+      if (ctx.appSpec.data.composite?.helperProfile !== 'capstone' || !Array.isArray(value) || value.length !== 0)
+        return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: no-match requires an empty capstone retrieval result')
+      const result = "I couldn't find that in the documentation."
+      recordTrainingCall(ctx, 'training_no_match', trainingSnapshot([value]), result)
+      if (ctx.redisFlow) ctx.redisFlow.current = valueFlow?.origin?.kind === 'postgres'
+        ? { origin: { ...valueFlow.origin, noMatch: true } } : null
+      return result
+    }
     case 'float': {
       const text = value?.redisKind === 'bytes' ? redisText(value, fail) : value
       if (typeof text !== 'number' && (typeof text !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text.trim()))) return fail('ValueError', 'could not convert string to float')
@@ -504,7 +513,7 @@ function evalPgCall(expr, values, locals, ctx) {
       // Request-local identities distinguish actually used pools, including
       // pools with identical configuration; unused globals contribute nothing.
       if (conn.pool && !ctx.pgPoolIds.has(conn.pool)) ctx.pgPoolIds.set(conn.pool, ctx.pgPoolIds.size + 1)
-      const record = { call, sql: values.query, plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
+      const record = { call, sql: values.query, ...(ctx.dataTarget.kind === 'composite' ? { params: trainingSnapshot(adapted) } : {}), plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
         poolLifetime: conn.pool?.lifetime ?? null, poolMaxSize: conn.pool?.max_size ?? null,
         poolIdentity: conn.pool ? ctx.pgPoolIds.get(conn.pool) : null,
         charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }

@@ -4,6 +4,7 @@ import { renderInline } from '../../lib/inlineCode.js'
 import FluentIcon from '../icons/FluentIcon.vue'
 import HintBox from './HintBox.vue'
 import ExamNote from './ExamNote.vue'
+import { useLabRunStore } from '../../stores/labRun.js'
 
 const props = defineProps({
   task: { type: Object, required: true },
@@ -14,13 +15,17 @@ const props = defineProps({
   helpDisabled: { type: Boolean, default: false },
 })
 const emit = defineEmits(['toggle-exam-note', 'reveal-hint', 'reveal-solution'])
+const run = useLabRunStore()
+const fileContent = step => run.lab?.capabilities?.dataCapstone && step.kind === 'file' && typeof step.resolver === 'function'
+  ? step.resolver(run.behavioralRun) : step.content
 const copied = ref(false)
 const nextHint = computed(() => props.hintsRevealed + 1)
 const steps = computed(() => typeof props.task.solution === 'string' ? null : props.task.solution?.steps ?? [])
 const alternatives = computed(() => props.task.solution?.alternatives ?? [])
 const stepText = (step) => {
   if (step.kind === 'command') return step.resolver && step.instruction ? `${step.instruction}\n${step.line ?? ''}`.trim() : step.line ?? step.instruction ?? ''
-  if (step.kind === 'file') return `${step.path}\n${step.content}`
+  if (step.kind === 'file') return `${step.path}\n${fileContent(step)}`
+  if (step.kind === 'action' && run.lab?.capabilities?.dataCapstone) return step.instruction
   if (step.kind === 'scenario') return step.instruction ?? step.command ?? `Run ${step.scenarioId} in Experiments.`
   if (step.kind === 'advance') return step.instruction ?? `Advance the AKS simulation by ${step.seconds} seconds using the experiment controls.`
   if (step.kind === 'aks-resource-next-incident') return step.instruction ?? 'Continue to the next resource incident in Experiments.'
@@ -29,7 +34,7 @@ const stepText = (step) => {
 }
 const stepLabel = (step) => step.kind === 'command' ? 'Cloud Shell' : step.kind === 'file' ? `Files · ${step.path}`
   : step.kind === 'inspect' ? 'Inspect' : step.kind === 'scenario' ? 'Experiments' : 'Experiments'
-const stepCode = (step) => step.kind === 'file' ? step.content : step.kind === 'command' ? step.line ?? null : null
+const stepCode = (step) => step.kind === 'file' ? fileContent(step) : step.kind === 'command' ? step.line ?? null : null
 async function copySolution() {
   const value = typeof props.task.solution === 'string' ? props.task.solution
     : [steps.value.map(stepText).join('\n'), ...alternatives.value.map(alternative => `${alternative.title}\n${alternative.steps.map(stepText).join('\n')}`)].join('\n\n')

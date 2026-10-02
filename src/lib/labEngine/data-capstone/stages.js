@@ -19,6 +19,7 @@ const latest = (run, taskId, before = run.nextSequence) => Object.values(run.evi
   .filter(record => record.taskId === taskId && record.sequence < before).sort((a, b) => b.sequence - a.sequence)[0]
 const stageFor = (lab, id) => lab.stages.find(stage => stage.id === id)
 const cleanupTask = (lab, task) => lab.scenarios?.[task.verification?.scenarioId]?.mode === 'cleanup'
+const historicalDiagnostic = task => task.evidenceMode === 'historical' && ['worker-fault-observed', 'pool-fault-observed'].includes(task.id)
 const finalTasks = lab => lab.tasks.filter(task => lab.stages.at(-1).taskIds.includes(task.id) && !cleanupTask(lab, task))
 const pick = (value, keys) => value ? Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, cloneJson(value[key])])) : null
 
@@ -133,8 +134,8 @@ export function dataEvidenceCurrent(run, lab, task, record = latest(run, task.id
   try {
     validateProof(run, lab, record)
     const context = contextFor(run)
-    return same(record.dataCapstoneProof.sourceVersions, run.project.fileVersions)
-      && same(record.dataCapstoneProof.fingerprint, dataLiveFingerprint(run, lab))
+    return (historicalDiagnostic(task) || same(record.dataCapstoneProof.sourceVersions, run.project.fileVersions)
+      && same(record.dataCapstoneProof.fingerprint, dataLiveFingerprint(run, lab)))
       && same(record.dataCapstoneProof.incidentStarts, incidentStarts(run))
       && same(Object.keys(record.dependencyValues).sort(), Object.keys(task.dependencies ?? {}).sort())
       && Object.entries(task.dependencies ?? {}).every(([key, selector]) => same(record.dependencyValues[key], selector(context, task))
@@ -161,7 +162,7 @@ function validateSnapshot(run, lab, snapshot, tasks, previousSequence) {
   const records = tasks.map(task => latest(run, task.id, snapshot.sequence))
   if (records.some((record, index) => !record || record.sequence <= previousSequence || record.outcome !== 'passed' || record.completed !== true
     || record.dataCapstoneProof.stageId !== snapshot.stageId || record.id !== snapshot.evidenceIds[index]
-    || !same(record.dataCapstoneProof.sourceVersions, snapshot.sourceVersions)
+    || !historicalDiagnostic(tasks[index]) && !same(record.dataCapstoneProof.sourceVersions, snapshot.sourceVersions)
     || snapshot.evidenceHashes[record.id] !== hash(record) || !same(snapshot.dependencyValues[record.taskId], record.dependencyValues)
     || !same(snapshot.dependencyGenerations[record.taskId], record.dependencyGenerations))) fail('INVALID_RUN', 'Data checkpoint must link the latest ordered successful measured evidence.')
   if (!same(snapshot.artifactIds, [...new Set(records.flatMap(record => record.dataCapstoneProof.artifactIds))].sort()))

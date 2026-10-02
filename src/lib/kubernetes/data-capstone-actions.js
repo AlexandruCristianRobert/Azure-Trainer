@@ -103,11 +103,20 @@ function frame(run, lab, artifact, route, args) {
     })
     && result.trainingCalls?.some(call => call.functionName === 'training_answer' && call.result === result.value?.answer && same(call.args[1]?.sources, sourceIds)
       && call.args[1]?.passages === sourceIds.map(id => rows.find(row => row.id === id).content).join('\n\n'))
-  const returnedFrom = reads.gets.length ? 'response-cache' : reads.searches.length ? 'semantic-cache' : sourceValid ? 'postgres' : null
+  // Empty sources qualify only through the protected helper consuming that
+  // actual scoped empty result. An incidental SELECT plus literal is unlinked.
+  const sourceOrigin = result.returnDataProvenance?.children?.sources?.origin
+  const emptySourceValid = complete && origin?.noMatch === true && sourceOrigin?.kind === 'postgres'
+    && sourceOrigin.callIndex === origin.callIndex && Array.isArray(sourceCall?.rows) && sourceCall.rows.length === 0
+    && Array.isArray(result.value?.sources) && result.value.sources.length === 0
+    && ['product', 'version', 'language'].every((key, index) => sourceCall.params?.[index + 1] === scope[key])
+    && result.trainingCalls?.some(call => call.functionName === 'training_no_match' && call.result === result.value.answer
+      && Array.isArray(call.args[0]) && call.args[0].length === 0)
+  const returnedFrom = reads.gets.length ? 'response-cache' : reads.searches.length ? 'semantic-cache' : sourceValid || emptySourceValid ? 'postgres' : null
   const patch = CAPSTONE_REVISION_2[scope.product]
   const database = pgDb(next, lab)
   const revised = patch?.chunks.every(row => database?.tables.find(table => table.name === 'chunks')?.rows.some(live => live.id === row.id && live.content === row.content))
-  const expectedAnswer = route === 'GET /answer' && same(result.value, capstoneExpectedAnswer(args[0], scope, revised ? 2 : 1))
+  const expectedAnswer = ['GET /answer', 'GET /rag'].includes(route) && same(result.value, capstoneExpectedAnswer(args[0], scope, revised ? 2 : 1))
   const historyWrites = route === 'GET /answer' ? ['sessions', 'qa_history'].filter(container => {
     if (!cosmosCalls.some(call => !call.error && call.call === 'cosmos.container.upsert_item' && call.container === container)) return false
     const ref = { ...lab.dataTarget.cosmos, container }
@@ -121,7 +130,7 @@ function frame(run, lab, artifact, route, args) {
       && item.sessionId === args[4] && item.answer === result.value?.answer && same(item.sources, result.value?.sources)
   }).length : 0
   const facts = { status: result.status, body: result.value, artifactId: artifact.id, returnedFrom, sourceIds, scope, pgCalls, cosmosCalls, redisCalls,
-    trainingCalls: result.trainingCalls ?? [], expectedAnswer, historyWrites,
+    trainingCalls: result.trainingCalls ?? [], expectedAnswer, historyWrites, emptySourceValid,
     originRequests: Number(pgCalls.some(call => !call.error && /^\s*SELECT\b/i.test(call.sql))), traceComplete: complete,
     cacheEffects: cacheEffects(redisCalls, beforeKeys, redisDb(next, lab)?.keys ?? {}, run.runtime.simTimeMs, complete) }
   return { result, facts }
@@ -135,7 +144,7 @@ function recordFrame(measurements, observation, route, args, stepIndex) {
   measurements.requests.push({ ...facts, route, args: clone(args), stepIndex })
   if (!measurements.artifactIds.includes(facts.artifactId)) measurements.artifactIds.push(facts.artifactId)
   measurements.historyWrites += facts.historyWrites
-  if (route === 'GET /answer') {
+  if (['GET /answer', 'GET /rag'].includes(route)) {
     measurements.responseHits += Number(facts.returnedFrom === 'response-cache')
     measurements.semanticHits += Number(facts.returnedFrom === 'semantic-cache')
     measurements.ragMisses += facts.originRequests
@@ -177,7 +186,7 @@ export function runCapstoneSteps(input, lab, scenario, primitives) {
   const before = continuation(run, lab)
   run.runtime.dataCapstone ??= { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } }
   const measurements = { status: 200, answersCorrect: true, scopeCorrect: true, provenanceValid: true, responseHits: 0, semanticHits: 0, ragMisses: 0, staleAnswers: 0, traceComplete: true,
-    requests: [], calls: [], totalCharge: 0, historyWrites: 0, displayTraceTruncated: false, artifactIds: [], worker: { before, after: before, handledEventIds: [], invalidatedKeys: [], restarts: [], operations: [] }, load: null, inventory: null,
+    requests: [], calls: [], totalCharge: 0, historyWrites: 0, displayTraceTruncated: false, artifactIds: [], worker: { before, after: before, handledEventIds: [], invalidatedKeys: [], restarts: [], operations: [] }, load: null, loads: [], inventory: null,
     cache: { before: dataIncidentCacheFacts(run, lab), after: null },
     estimate: 'Simulated estimate — not an Azure guarantee.' }
   let representative = []
@@ -233,6 +242,7 @@ export function runCapstoneSteps(input, lab, scenario, primitives) {
       measurements.load = { ...simulateCapstoneLoad({ ...step, originRequests, replicas, ...(connectionsMatch ? config : {}), server }), mode: config?.mode ?? null, poolMaxSize: config?.poolMaxSize ?? null, replicas,
         startedAtMs: run.runtime.simTimeMs, coldAfterSeconds: lastAnswerAtMs === null ? null : (run.runtime.simTimeMs - lastAnswerAtMs) / 1000,
         serverParameters: clone(server?.parameters ?? {}) }
+      measurements.loads.push({ ...clone(measurements.load), artifactId: artifact?.id ?? null, stepIndex })
       run.runtime.simTimeMs += step.seconds * 1000
       if (measurements.load.failed || measurements.load.errors.length) measurements.status = 503
       continue

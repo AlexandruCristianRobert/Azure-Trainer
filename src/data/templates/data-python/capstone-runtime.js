@@ -1,6 +1,6 @@
 import { CAPSTONE_QUESTIONS, CAPSTONE_NO_MATCH, CAPSTONE_WHITESPACE_PATTERN, capstoneNormalize } from '../../fixtures/data/capstone.js'
 
-export const CAPSTONE_HELPER_ARITIES = Object.freeze({ response_key: [4], semantic_key: [4], encode_answer: [1], decode_answer: [1], pack_embedding: [1], decode_search: [1], embed: [1, 2], training_answer: [2] })
+export const CAPSTONE_HELPER_ARITIES = Object.freeze({ response_key: [4], semantic_key: [4], encode_answer: [1], decode_answer: [1], pack_embedding: [1], decode_search: [1], embed: [1, 2], training_answer: [2], training_no_match: [1] })
 const vectors = Object.fromEntries(CAPSTONE_QUESTIONS.map(q => [capstoneNormalize(q.text), q.vector]))
 // Real executable Python mirrors the bounded JS codecs and context helper.
 // No fixture answer/ID map is available to the application.
@@ -54,5 +54,10 @@ def training_answer(question, context):
     if not sources or not isinstance(passages, str) or not passages:
         return ${JSON.stringify(CAPSTONE_NO_MATCH)}
     return passages.split("\\n\\n")[0]
+
+def training_no_match(rows):
+    if not isinstance(rows, list) or rows:
+        raise ValueError("An empty retrieval result is required")
+    return ${JSON.stringify(CAPSTONE_NO_MATCH)}
 ` })
 export const CAPSTONE_RUNTIME_MANIFEST = Object.freeze({ helperProfile: 'capstone', runtimeFiles: Object.freeze(['training_runtime.py']), runtimeFunctions: Object.freeze(Object.keys(CAPSTONE_HELPER_ARITIES)), fixedFiles: CAPSTONE_HELPER_FILES })

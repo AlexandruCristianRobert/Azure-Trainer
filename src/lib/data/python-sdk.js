@@ -558,7 +558,7 @@ function lowerCall(node, ctx) {
       const helper = ctx.redisHelpers[name]
       if (!ctx.helperArities[helper]) return unsupported(ctx, node, `'${name}(...)' is outside the protected helper profile`)
       if (args.keywords.length || !ctx.helperArities[helper].includes(args.positional.length)) return unsupported(ctx, node, `'${name}(...)' arguments`)
-      if (ctx.composite && ctx.manifest.helperProfile === 'capstone' && helper === 'training_answer') {
+      if (ctx.composite && ctx.manifest.helperProfile === 'capstone' && ['training_answer', 'training_no_match'].includes(helper)) {
         return { kind: 'builtin', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }
       }
       return { kind: 'redis-helper', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }

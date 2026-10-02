@@ -36,7 +36,7 @@ export const DATA_CAPSTONE_FAULTY_PROCESS_CHANGES = `def process_changes():
 const APP_HEADER = `"""Fictional Knowledge Assistant: PG sources, Redis caches, Cosmos history."""
 from clients import connect, cache, sessions, qa_history, events
 from pgvector.psycopg import register_vector
-from training_runtime import embed, training_answer, response_key, semantic_key, encode_answer, decode_answer, pack_embedding, decode_search
+from training_runtime import embed, training_answer, training_no_match, response_key, semantic_key, encode_answer, decode_answer, pack_embedding, decode_search
 
 `
 // This wrapper is ordinary parsed Python, so hits retain real Redis origins.
@@ -45,6 +45,9 @@ const CACHE_LOOKUP = `def cache_lookup(question, product, version, language):
     if value is not None:
         return decode_answer(value)
     return semantic_lookup(question, product, version, language, 0.05)
+`
+const RAG_ROUTE = `def rag_route(question, product, version, language):
+    return rag_answer(question, product, version, language)
 `
 const WORKER_HEADER = `"""Pull-model worker; this lease is an application checkpoint, not a managed
 Cosmos change-feed processor lease. The separate worker_server.py polls it."""
@@ -58,7 +61,7 @@ export const DATA_CAPSTONE_SOLUTION_FUNCTIONS = Object.freeze({
   rag_answer: `def rag_answer(question, product, version, language):
     rows = retrieve_passages(question, product, version, language)
     if len(rows) == 0:
-        return {"answer": "I couldn't find that in the documentation.", "sources": [], "product": product, "version": version, "language": language}
+        return {"answer": training_no_match(rows), "sources": rows, "product": product, "version": version, "language": language}
     context = build_context(rows)
     return {"answer": training_answer(question, context), "sources": context["sources"], "product": product, "version": version, "language": language}
 `,
@@ -71,8 +74,8 @@ export const DATA_CAPSTONE_SOLUTION_FUNCTIONS = Object.freeze({
     cache.set(key, encode_answer(result), ex=ttl)
     return result
 `,
-  semantic_lookup: REDIS_SOLUTION_FUNCTIONS.semantic_lookup,
-  remember_semantic: REDIS_SOLUTION_FUNCTIONS.remember_semantic,
+  semantic_lookup: REDIS_SOLUTION_FUNCTIONS.semantic_lookup.replace('    query =', '    if embed(question) == [0, 0, 0, 0, 0, 0, 0, 0]:\n        return None\n    query ='),
+  remember_semantic: REDIS_SOLUTION_FUNCTIONS.remember_semantic.replace('    key =', '    if embed(question) == [0, 0, 0, 0, 0, 0, 0, 0]:\n        return None\n    key ='),
   invalidate_product: REDIS_SOLUTION_FUNCTIONS.invalidate_product,
   answer: `def answer(question, product, version, language, session_id, message_id):
     result = cache_lookup(question, product, version, language)
@@ -139,6 +142,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import app
 
 ROUTES = {
+    ("GET", "/rag"): (app.rag_route, ["question", "product", "version", "language"]),
     ("GET", "/answer"): (app.answer, ["question", "product", "version", "language", "session_id", "message_id"]),
     ("GET", "/sessions"): (app.get_session, ["session_id", "message_id"]),
     ("GET", "/similar"): (app.find_similar_questions, ["question", "product", "version", "language"]),
@@ -258,21 +262,22 @@ const COMMON_FILES = {
   'clients.py': CLIENTS, 'server.py': SERVER, 'worker_server.py': WORKER_SERVER,
   Dockerfile: 'FROM python:3.12-slim\nWORKDIR /app\nRUN pip install azure-cosmos "psycopg[binary]" psycopg_pool pgvector redis\nCOPY app.py worker.py clients.py training_runtime.py server.py worker_server.py ./\nEXPOSE 8080\nCMD ["python", "server.py"]\n',
   'schema.sql': DATA_CAPSTONE_SCHEMA,
+  'indexes.sql': '',
   'k8s/deployment.yaml': deployment('assistant-api'), 'k8s/worker.yaml': deployment('feedback-worker', true), 'k8s/service.yaml': SERVICE,
 }
 const workerNames = ['read_lease', 'save_lease', 'apply_change', 'process_changes']
 const appNames = Object.keys(DATA_CAPSTONE_SOLUTION_FUNCTIONS).filter(name => !workerNames.includes(name))
 const starter = name => `${DATA_CAPSTONE_SOLUTION_FUNCTIONS[name].split('\n')[0]}\n    raise NotImplementedError("Lab task")\n`
 export const DATA_CAPSTONE_STARTER_FILES = Object.freeze({ ...COMMON_FILES,
-  'app.py': APP_HEADER + CACHE_LOOKUP + '\n' + appNames.map(starter).join('\n'),
+  'app.py': APP_HEADER + CACHE_LOOKUP + '\n' + RAG_ROUTE + '\n' + appNames.map(starter).join('\n'),
   'worker.py': WORKER_HEADER + workerNames.map(starter).join('\n'),
 })
 export const DATA_CAPSTONE_SOLUTION_FILES = Object.freeze({ ...COMMON_FILES,
-  'app.py': APP_HEADER + CACHE_LOOKUP + '\n' + appNames.map(name => DATA_CAPSTONE_SOLUTION_FUNCTIONS[name]).join('\n'),
+  'app.py': APP_HEADER + CACHE_LOOKUP + '\n' + RAG_ROUTE + '\n' + appNames.map(name => DATA_CAPSTONE_SOLUTION_FUNCTIONS[name]).join('\n'),
   'worker.py': WORKER_HEADER + workerNames.map(name => DATA_CAPSTONE_SOLUTION_FUNCTIONS[name]).join('\n'),
 })
-export const DATA_CAPSTONE_ROUTES = Object.freeze({ 'GET /answer': 'answer', 'GET /sessions': 'get_session', 'GET /similar': 'find_similar_questions', 'POST /feedback': 'submit_feedback', 'worker:batch': 'process_changes', 'worker:item': 'apply_change' })
-export const DATA_CAPSTONE_ROUTE_ARGS = Object.freeze({ 'GET /answer': ['question', 'product', 'version', 'language', 'session_id', 'message_id'], 'GET /sessions': ['session_id', 'message_id'], 'GET /similar': ['question', 'product', 'version', 'language'], 'POST /feedback': ['event_id', 'product', 'positive'], 'worker:batch': [], 'worker:item': ['item'] })
+export const DATA_CAPSTONE_ROUTES = Object.freeze({ 'GET /rag': 'rag_route', 'GET /answer': 'answer', 'GET /sessions': 'get_session', 'GET /similar': 'find_similar_questions', 'POST /feedback': 'submit_feedback', 'worker:batch': 'process_changes', 'worker:item': 'apply_change' })
+export const DATA_CAPSTONE_ROUTE_ARGS = Object.freeze({ 'GET /rag': ['question', 'product', 'version', 'language'], 'GET /answer': ['question', 'product', 'version', 'language', 'session_id', 'message_id'], 'GET /sessions': ['session_id', 'message_id'], 'GET /similar': ['question', 'product', 'version', 'language'], 'POST /feedback': ['event_id', 'product', 'positive'], 'worker:batch': [], 'worker:item': ['item'] })
 export const DATA_CAPSTONE_EDIT_ZONES = Object.freeze(Object.keys(DATA_CAPSTONE_SOLUTION_FUNCTIONS))
 const BUILD_FILES = Object.freeze(['app.py', 'worker.py', 'clients.py', 'training_runtime.py', 'server.py', 'worker_server.py', 'Dockerfile'])
 const KUBERNETES_FILES = Object.freeze(['k8s/deployment.yaml', 'k8s/service.yaml', 'k8s/worker.yaml'])
@@ -282,7 +287,7 @@ export const DATA_CAPSTONE_MANIFEST = Object.freeze({
   files: Object.freeze(Object.keys(DATA_CAPSTONE_STARTER_FILES)), buildFiles: BUILD_FILES, kubernetesFiles: KUBERNETES_FILES,
   pythonInstallInstruction: 'RUN pip install azure-cosmos "psycopg[binary]" psycopg_pool pgvector redis',
   fixedFiles: Object.freeze({ ...CAPSTONE_HELPER_FILES, ...DATA_CAPSTONE_POLICIES, 'server.py': SERVER, 'worker_server.py': WORKER_SERVER, 'schema.sql': DATA_CAPSTONE_SCHEMA }),
-  fixedFunctions: Object.freeze({ 'app.py': Object.freeze({ cache_lookup: CACHE_LOOKUP }) }),
+  fixedFunctions: Object.freeze({ 'app.py': Object.freeze({ cache_lookup: CACHE_LOOKUP, rag_route: RAG_ROUTE }) }),
   editZones: DATA_CAPSTONE_EDIT_ZONES, receivers: Object.freeze({ sessions: 'cosmos-container', qa_history: 'cosmos-container', events: 'cosmos-container', leases: 'cosmos-container' }),
   routes: DATA_CAPSTONE_ROUTES, routeArgs: DATA_CAPSTONE_ROUTE_ARGS,
   maxFiles: 20, maxFileBytes: 64 * 1024, maxTotalBytes: 256 * 1024, maxTokens: 20_000,
