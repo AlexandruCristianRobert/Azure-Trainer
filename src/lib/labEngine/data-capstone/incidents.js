@@ -180,8 +180,10 @@ export function startDataIncident(input, lab, incidentId, primitives) {
       execute({ type: 'command', line: `kubectl delete deployment ${target.deploymentName} -n ${target.namespace}` })
       run = primitives.corpusUpdate(run, lab, { product: 'contoso-backup', revision: 2, eventId: entry.eventId })
       const event = readItem(run.sandbox, { ...lab.dataTarget.cosmos, container: 'events' }, entry.eventId, 'contoso-backup')
-      entry.updateReceipt = { afterStopSequence: entry.receipts[0].sequence, beforeSaveSequence: run.nextSequence,
-        event: clone(event), continuation: lease(run, lab), revision: 2 }
+      const update = { afterStopSequence: entry.receipts[0].sequence, beforeSaveSequence: run.nextSequence,
+        event: clone(event), change: clone(findContainer(run.sandbox, { ...lab.dataTarget.cosmos, container: 'events' }).changeLog.at(-1)),
+        continuation: lease(run, lab), revision: 2 }
+      entry.updateReceipt = { ...update, receiptHash: hash(update) }
     }
     execute({ type: 'save-file', path, text: incidentId === ids[0] ? source.replace(originalProcess, DATA_CAPSTONE_FAULTY_PROCESS_CHANGES) : DATA_CAPSTONE_CLIENT_VARIANTS.fault })
     execute({ type: 'command', line: `az acr build --registry ${registry.name} --image assistant:${tag} .` })
@@ -274,12 +276,24 @@ export function validateDataIncident(run, lab) {
       const previousSource = worker ? files['worker.py'].replace(DATA_CAPSTONE_FAULTY_PROCESS_CHANGES, DATA_CAPSTONE_SOLUTION_FUNCTIONS.process_changes)
         : snapshotFiles(run, entry.baseline.apiArtifactId)['clients.py']
       if (sourceReceipt.beforeHash !== sourceTextHash(previousSource)) return false
-      if (worker && (!exactKeys(entry.updateReceipt, 'afterStopSequence,beforeSaveSequence,event,continuation,revision')
+      if (worker && (!exactKeys(entry.updateReceipt, 'afterStopSequence,beforeSaveSequence,event,change,continuation,revision,receiptHash')
         || entry.updateReceipt.afterStopSequence !== entry.receipts[0].sequence || entry.updateReceipt.beforeSaveSequence !== sourceReceipt.beforeSequence
         || entry.updateReceipt.continuation !== entry.baseline.continuation || entry.updateReceipt.revision !== 2
         || entry.updateReceipt.event.id !== entry.eventId || entry.updateReceipt.event.type !== 'document-update'
         || entry.updateReceipt.event.product !== 'contoso-backup' || entry.updateReceipt.event.revision !== 2
         || !Number.isSafeInteger(entry.updateReceipt.event._version)) || !worker && entry.updateReceipt !== null) return false
+      if (worker) {
+        const { receiptHash, ...update } = entry.updateReceipt
+        const { change, event } = update
+        const originalBody = Object.fromEntries(Object.entries(event).filter(([key]) => !key.startsWith('_')))
+        const container = findContainer(run.sandbox, { ...lab.dataTarget.cosmos, container: 'events' })
+        // Change feed strips item metadata and remains append-only across later
+        // writes. Keep the captured version in the hash after service cleanup.
+        if (hash(update) !== receiptHash || !exactKeys(change, 'lsn,id,partition,ts,body')
+          || !Number.isSafeInteger(change.lsn) || change.lsn < 1 || change.id !== event.id || change.partition !== event.product
+          || change.ts !== event._ts || !same(change.body, originalBody)
+          || container && !(container.changeLog ?? []).some(retained => same(retained, change))) return false
+      }
       if (entry.observationEvidenceIds.length && entry.recoveryEvidenceIds.length
         && Math.max(...entry.observationEvidenceIds.map(id => recordFor(run, id).sequence)) >= Math.min(...entry.recoveryEvidenceIds.map(id => recordFor(run, id).sequence))) return false
       for (const field of ['observationEvidenceIds', 'recoveryEvidenceIds']) {
