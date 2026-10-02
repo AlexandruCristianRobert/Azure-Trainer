@@ -13,6 +13,7 @@ import { createAksCapstoneSeed } from '../../data/labs/aks-journey/capstone-seed
 import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/ownership.js'
 import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDataStageState } from './data-capstone/stages.js'
 import { dataProtectedRefs } from './data-capstone/ownership.js'
+import { emptyMessagingState, validateMessagingState } from '../messaging/state.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -228,6 +229,9 @@ export function validateBehavioralRun(run, lab = null) {
       if (!validateKubernetesRuntime(candidate.runtime.kubernetes, candidate, lab)) fail('INVALID_RUN', 'Kubernetes runtime state is missing or malformed.')
       if (candidate !== run) { run.runtime = candidate.runtime; run.nextSequence = candidate.nextSequence }
     }
+    if (lab.capabilities?.messaging === true && !validateMessagingState(run.runtime.messaging)) {
+      fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')
+    }
     if (Array.isArray(lab.bicepTargets)) {
       const state = run.runtime.bicep
       if (!state) fail('INVALID_RUN', 'The independent Bicep provenance is missing.')
@@ -312,6 +316,7 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     runtime: { simTimeMs: 0, deploymentsByApp: {}, replicasByApp: {}, activeScenario: null, scheduledEvents: [],
       ...(isDataCapstone(lab) ? { dataCapstone: { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } } } : {}),
       ...(lab.capabilities?.kubernetes === true ? { kubernetes: emptyKubernetesRuntime() } : {}),
+      ...(lab.capabilities?.messaging === true ? { messaging: emptyMessagingState() } : {}),
       ...(lab.capabilities?.bicepDeployment === true ? { bicep: emptyBicepProvenance({
         trackIncident: lab.capabilities?.bicepIdentityFault === true }) } : {}) },
     evidence: { experimentsById: {}, currentEvidenceByTask: {}, milestoneRecords: [],
