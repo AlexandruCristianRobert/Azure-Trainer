@@ -1,4 +1,6 @@
 import { SUBSCRIPTION_ID } from '../sandbox/model.js'
+import { validateSecurityObservabilityState } from '../security/state.js'
+import { validSecurityMeasurement, validSecuritySnapshot } from '../security/evidence.js'
 import { isValidEventGridWebhookEndpoint, parseEventGridFunctionEndpoint, parseEventGridDeadLetterDestination, validRetryValue } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
@@ -73,7 +75,8 @@ export function validEventGridApplicationTrace(trace, state, inFlight = false) {
 
 /** Immutable command-boundary data; not executable IR or a grading outcome. */
 function validExecutionMeasurement(value) {
-  if (!plainObject(value) || Object.keys(value).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+  if (!plainObject(value) || Object.keys(value).filter(key => key !== 'securityObservability').sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+    || Object.hasOwn(value, 'securityObservability') && !validSecurityMeasurement(value.securityObservability)
     || !['producer.py', 'worker.py', 'events.py', 'handler.py', 'function_app.py'].includes(value.entry)
     || !(value.mode === 'functions' ? value.entry === 'function_app.py' : value.mode === 'script' && value.entry !== 'function_app.py')
     || !Array.isArray(value.sourcePaths) || value.sourcePaths.length < 1 || value.sourcePaths.length > 20
@@ -149,6 +152,7 @@ export function validateMessagingState(state) {
     || !counter(state.timeMs) || !plainObject(state.entities) || !Array.isArray(state.deliveries)
     || state.deliveries.length > 500 || !plainObject(state.effects) || !plainObject(state.hosts)) return false
   if (!validHostRecords(state.hosts, state.timeMs) || !validEffects(state.effects)) return false
+  if (Object.hasOwn(state, 'securityObservability') && !validateSecurityObservabilityState(state.securityObservability)) return false
   let maximumId = 0
   const allocated = new Set()
   const id = (value, unique = false, eventGrid = false) => {
@@ -168,6 +172,7 @@ export function validateMessagingState(state) {
       || !match || !counter(Number(match[1])) || Number(match[1]) <= previousExecution || allocated.has(execution.id)
       || !validExecutionMeasurement(execution.measurements)
       || execution.entry !== execution.measurements.entry || execution.mode !== execution.measurements.mode) return false
+    if (execution.measurements.securityObservability !== undefined && !validSecuritySnapshot(execution.measurements.securityObservability, state.securityObservability)) return false
     const sequence = Number(match[1]), traces = new Set()
     for (const trace of execution.measurements.trace) {
       const traceId = /^(?:trace|eg-trace)-([1-9]\d*)$/.exec(trace?.id)

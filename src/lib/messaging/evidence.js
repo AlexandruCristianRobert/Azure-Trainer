@@ -1,5 +1,6 @@
 import { canonicalize } from '../labEngine/evidence.js'
 import { finiteJson, plainObject, validateMessagingState } from './state.js'
+import { securityMeasurements, validSecuritySnapshot, validSecurityJournal, securityActivity } from '../security/evidence.js'
 
 /** Select Sandbox configuration only; broker records and clocks are never dependencies. */
 export function messagingResourceConfiguration(value, dataDictionary = false) {
@@ -47,6 +48,7 @@ export function messagingMeasurements(before, after, execution, entry, mode, dia
     effects.after[family] = Object.fromEntries(keys.map(key => [key, current[key] ?? null]))
   }
   return { entry, mode, trace: execution.trace, value: execution.value ?? null, sourcePaths: execution.sourcePaths,
+    ...(after.securityObservability !== undefined ? { securityObservability: securityMeasurements(before.securityObservability, after.securityObservability) } : {}),
     receipts: {
       servicebus: Object.values(after.entities).flatMap(entity => entity.messages).filter(row => busIds.has(row.id)),
       eventgrid: (after.eventGrid?.deliveries ?? []).filter(row => eventIds.has(row.id)),
@@ -75,7 +77,8 @@ export function validMessagingEvidence(record, run, lab) {
   const declaration = lab.messagingExercise?.tasks.find(item => item.taskId === record.taskId)
   if (!declaration) return !lab.messagingExercise || !lab.tasks.find(task => task.id === record.taskId)?.verification
   const m = record.measurements, state = run.runtime.messaging
-  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).sort().join(',') !== 'diagnostics,effects,entry,executionId,mode,receipts,sourcePaths,trace,value'
+  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).filter(key => key !== 'securityObservability').sort().join(',') !== 'diagnostics,effects,entry,executionId,mode,receipts,sourcePaths,trace,value'
+    || (lab.capabilities?.securityObservability === true ? !validSecuritySnapshot(m.securityObservability, state.securityObservability) : Object.hasOwn(m, 'securityObservability'))
     || m.entry !== declaration.entry || m.mode !== declaration.mode
     || !Array.isArray(m.sourcePaths) || m.sourcePaths.length < 1 || m.sourcePaths.length > 20
     || new Set(m.sourcePaths).size !== m.sourcePaths.length || !m.sourcePaths.includes(m.entry)
@@ -118,7 +121,7 @@ export function validMessagingEvidence(record, run, lab) {
   if (record.outcome !== 'passed') return true
   const task = lab.tasks.find(task => task.id === record.taskId)
   try {
-    return m.trace.some(row => row.kind !== 'advance') && messagingDiagnosticsExpected(m, lab.messagingExercise)
+    return (lab.capabilities?.securityObservability === true ? securityActivity(m.securityObservability) : m.trace.some(row => row.kind !== 'advance')) && messagingDiagnosticsExpected(m, lab.messagingExercise)
       && m.sourcePaths.every(path => Object.hasOwn(task.dependencies ?? {}, `messaging:file:${path}`))
       && declaration.check(JSON.parse(JSON.stringify(m))) === true
   } catch { return false }
@@ -126,6 +129,7 @@ export function validMessagingEvidence(record, run, lab) {
 
 /** Actual latest boundaries anchor runtime; older snapshots remain their prior outcomes. */
 export function validMessagingExecutionReceipts(state) {
+  if (!validSecurityJournal(state)) return false
   const effects = new Map(), bus = new Map(), grid = new Map()
   for (const execution of state.executionReceipts ?? []) {
     const m = execution.measurements

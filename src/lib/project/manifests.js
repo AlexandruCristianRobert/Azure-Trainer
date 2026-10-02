@@ -25,6 +25,7 @@ import { REDIS_MANIFEST } from '../../data/templates/data-python/redis.js'
 import { POSTGRES_INDEPENDENT_MANIFEST } from '../../data/templates/data-python/postgres-independent.js'
 import { DATA_CAPSTONE_MANIFEST } from '../../data/templates/data-python/capstone.js'
 import { MESSAGING_MANIFEST } from '../../data/templates/messaging-python/manifest.js'
+import { SECURITY_MANIFEST } from '../../data/templates/security-python/manifest.js'
 
 const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROBE_MANIFEST.id]: PROBE_MANIFEST,
   [INDEPENDENT_PROBE_MANIFEST.id]: INDEPENDENT_PROBE_MANIFEST, [FOUNDRY_MANIFEST.id]: FOUNDRY_MANIFEST,
@@ -40,6 +41,6 @@ const manifests = Object.freeze({ [PROJECT_MANIFEST.id]: PROJECT_MANIFEST, [PROB
   [DIAGNOSIS_MANIFEST.id]: DIAGNOSIS_MANIFEST, [AKS_CAPSTONE_MANIFEST.id]: AKS_CAPSTONE_MANIFEST,
   [COSMOS_MANIFEST.id]: COSMOS_MANIFEST, [POSTGRES_MANIFEST.id]: POSTGRES_MANIFEST, [REDIS_MANIFEST.id]: REDIS_MANIFEST,
   [POSTGRES_INDEPENDENT_MANIFEST.id]: POSTGRES_INDEPENDENT_MANIFEST, [DATA_CAPSTONE_MANIFEST.id]: DATA_CAPSTONE_MANIFEST,
-  [MESSAGING_MANIFEST.id]: MESSAGING_MANIFEST })
+  [MESSAGING_MANIFEST.id]: MESSAGING_MANIFEST, [SECURITY_MANIFEST.id]: SECURITY_MANIFEST })
 
 export function getProjectManifest(manifestId) { return manifests[manifestId] ?? PROJECT_MANIFEST }

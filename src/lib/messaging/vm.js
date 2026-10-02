@@ -1,7 +1,8 @@
 import { applyServiceBusOperation } from './servicebus.js'
 import { applyEventGridOperation, getEventGridDelivery, validateEventGridWebhookRegistration } from './eventgrid.js'
 import { validateMessagingState, finiteJson } from './state.js'
-import { SDK_SIGNATURES, SDK_EXPORTS, bindArguments, messagingError, safeKey } from './python.js'
+import { messagingSdkContract, bindArguments, messagingError, safeKey } from './python.js'
+import { createSecuritySession, SECURITY_PROFILE } from '../security/sdk.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
@@ -27,6 +28,8 @@ const scalarStringArguments = Object.freeze({
 
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
 export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
+  const { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS } = messagingSdkContract(program.profile)
+  let security = null
   let current = state, steps = 0, depth = 0, receiverSequence = 0, eventSequence = 0, draining = false, activeDelivery = null
   const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap(), orderOrigins = new WeakMap()
   let outputBytes = 0
@@ -40,7 +43,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
-  const unbox = value => info(value)?.type === 'bodytext' ? info(value).value : value
+  const unbox = value => ['bodytext', 'configvalue'].includes(info(value)?.type) ? info(value).value : value
   const callable = (name, owner) => handle('callable', { name, owner })
   function chargeBytes(budget, bytes, loc) {
     budget.bytes += bytes
@@ -61,6 +64,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function jsonValue(value, loc, seen = new Set(), nesting = 0, budget = { bytes: 0 }) {
     tick(loc)
+    security?.guard(value, loc)
     value = unbox(value)
     if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
@@ -114,8 +118,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     return true
   }
   function string(value, loc) {
+    security?.guard(value, loc)
     const object = info(value)
-    if (object?.type === 'bodytext') return object.value
+    if (['bodytext', 'configvalue'].includes(object?.type)) return object.value
     if (object?.type === 'receipt') return object.record.body
     if (object?.type === 'bytes') return object.value
     if (object) fail('This SDK resource cannot be converted to a string.', loc)
@@ -133,6 +138,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   function readIndex(object, key, loc) {
     object = unbox(object); key = unbox(key)
     safeKey(key, loc)
+    const selected = security?.index(object, key, loc)
+    if (selected?.handled) return selected.value
     if (info(object) || object === null || !['object', 'string'].includes(typeof object)) fail('Only lists, strings and dictionaries support indexing.', loc)
     if ((Array.isArray(object) || typeof object === 'string') && (!Number.isSafeInteger(key) || key < 0)) fail('A nonnegative integer index is required.', loc)
     if (!own(Object(object), key)) fail(`Missing index '${key}'.`, loc)
@@ -140,6 +147,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function attribute(value, name, loc) {
     safeKey(name, loc)
+    const selected = security?.member(value, name, loc)
+    if (selected?.handled) return selected.value
     const object = info(value)
     if (!object) fail(`Unsupported attribute '${name}'.`, loc, 'MESSAGING_UNSUPPORTED')
     if (object.type === 'module') {
@@ -197,13 +206,13 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const fn = program.functions[fnId]
     if (record.endpointType !== 'WebHook' || !own(input.eventGridHandlers ?? {}, record.endpoint) || input.eventGridHandlers[record.endpoint] !== fn?.path)
       fail('This endpoint/source is not registered as an allowlisted training webhook handler.', loc, 'MESSAGING_CONFIG')
-    const before = current, traceCount = trace.length, previousDelivery = activeDelivery
+    const before = current, traceCount = trace.length, previousDelivery = activeDelivery, securityCheckpoint = security?.checkpoint()
     activeDelivery = record
     try {
       const status = invoke(fnId, [handle('event', { event: clone(record.event) })], {}, loc)
       eventGrid({ kind: 'deliver', deliveryId, status }, loc)
       return status
-    } catch (error) { current = before; trace.length = traceCount; throw error }
+    } catch (error) { current = before; trace.length = traceCount; if (securityCheckpoint) security.restore(securityCheckpoint); throw error }
     finally { activeDelivery = previousDelivery }
   }
   function hostFunctions(loc) {
@@ -254,7 +263,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         const endpoint = parseEventGridFunctionEndpoint(record.endpoint)
         const handler = program.handlers.find(handler => handler.kind === 'eventgrid' && handler.functionName.toLowerCase() === endpoint?.functionName.toLowerCase())
         if (!handler) fail('Delivery requires the actual registered AzureFunction target.', loc, 'MESSAGING_CONFIG')
-        const before = current, traceCount = trace.length, diagnosticCount = diagnostics.length, previousDelivery = activeDelivery
+        const before = current, traceCount = trace.length, diagnosticCount = diagnostics.length, previousDelivery = activeDelivery, securityCheckpoint = security?.checkpoint()
         activeDelivery = record
         try {
           let successful = false
@@ -267,6 +276,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
           // Retain a callback only with its delivery outcome. Keep earlier
           // completed siblings, but never journal an unacknowledged callback trace.
           current = before; trace.length = traceCount; diagnostics.length = diagnosticCount
+          if (securityCheckpoint) security.restore(securityCheckpoint)
           throw error
         }
         finally { activeDelivery = previousDelivery }
@@ -317,8 +327,10 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const functionInfo = info(target)
     if (functionInfo?.type === 'function') return invoke(functionInfo.id, args, kwargs, loc)
     if (functionInfo?.type !== 'callable' || !own(SDK_SIGNATURES, functionInfo.name)) fail('Unresolved callable.', loc, 'MESSAGING_UNSUPPORTED')
-    const { name, owner } = functionInfo, [names, required] = SDK_SIGNATURES[name]
-    const a = bindArguments(names, required, args, kwargs, loc)
+    const { name, owner } = functionInfo, [names, required, , positionalLimit] = SDK_SIGNATURES[name]
+    const a = bindArguments(names, required, args, kwargs, loc, positionalLimit)
+    const secured = security?.call(name, owner, a, loc)
+    if (secured?.handled) return secured.value
     // Only scalar consumers normalize. json.loads still sees the receive binding;
     // dictionaries, SDK handles and numeric arguments retain their existing types.
     for (const field of scalarStringArguments[name] ?? []) if (own(a, field)) a[field] = unbox(a[field])
@@ -439,6 +451,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     }
     if (name === 'print') {
       const line = a.map(value => string(value, loc)).join(' ')
+      security?.guard(line, loc)
       outputBytes += line.length
       if (output.length >= 500 || outputBytes > maximumValues) fail('Printed output exceeds its bounded buffer.', loc, 'MESSAGING_LIMIT')
       output.push(line)
@@ -456,6 +469,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       return outcome[Math.min(activeDelivery?.attempts ?? 0, outcome.length - 1)]
     }
     if (name === 'record_notification') {
+      if (security) fail('Secure notifications require send_notification with an actual retrieved credential.', loc, 'MESSAGING_CONFIG')
       if (typeof a.order_id !== 'string' || !a.order_id) fail('Notification order_id must be a nonempty string.', loc)
       safeKey(a.order_id, loc)
       const value = jsonValue({ eventId: a.event_id, orderId: a.order_id }, loc)
@@ -613,6 +627,16 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   let value = null
   try {
     if (!validateMessagingState(state) || !finiteJson(input)) fail('Invalid messaging state or fixture input.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    if (program.profile === SECURITY_PROFILE) security = createSecuritySession({ sandbox, input: input.securityObservability, entry: program.entry, mode: program.mode,
+      handle, info, fail, getState: () => current, setState: next => { current = next },
+      notify: (eventId, orderId, loc) => effects('notifications', eventId, { eventId, orderId }, loc),
+      invocation: () => {
+        if (!activeDelivery || !program.host) return null
+        const endpoint = parseEventGridFunctionEndpoint(activeDelivery.endpoint)
+        const handler = program.handlers.find(item => item.kind === 'eventgrid' && item.functionName.toLowerCase() === endpoint?.functionName.toLowerCase())
+        return { eventId: activeDelivery.event.id, orderId: activeDelivery.event.data?.order_id,
+          linkage: { kind: 'eventgrid', appId: program.host.appId, functionId: handler.functionId, deliveryId: activeDelivery.id, eventRecordId: activeDelivery.eventRecordId, attempt: activeDelivery.attempts + 1 } }
+      } })
     for (const key of ['messages', 'events']) if (Array.isArray(input[key]) && input[key].length > 50) fail('Fixture messages/events exceed 50 records.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
     if (input.handlerStatus && Object.keys(input.handlerStatus).length > 50) fail('Handler fixture exceeds 50 outcomes.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
     const httpStatus = status => Number.isSafeInteger(status) && status >= 100 && status <= 599

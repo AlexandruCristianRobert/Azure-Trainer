@@ -1,4 +1,5 @@
 import { parser } from '@lezer/python'
+import { SECURITY_PROFILE, SECURITY_SIGNATURES, SECURITY_EXPORTS, SECURITY_HELPERS, SECURITY_INITIALIZERS, securityMemberType } from '../security/sdk.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const blocked = new Set(['__proto__', 'constructor', 'prototype'])
@@ -53,12 +54,17 @@ export const SDK_EXPORTS = Object.freeze({
   json: ['dumps', 'loads'],
   training_runtime: ['perform_order_work', 'record_processed', 'was_processed', 'record_notification', 'handler_status', 'deliver_events'],
 })
-export function bindArguments(names, required, args, kwargs, loc) {
+export function messagingSdkContract(profile) {
+  return profile === SECURITY_PROFILE ? { signatures: { ...SDK_SIGNATURES, ...SECURITY_SIGNATURES },
+    exports: { ...SDK_EXPORTS, ...SECURITY_EXPORTS, training_runtime: [...SDK_EXPORTS.training_runtime, ...SECURITY_HELPERS] } }
+    : { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS }
+}
+export function bindArguments(names, required, args, kwargs, loc, positionalLimit = names?.length) {
   if (names === null) {
     if (Object.keys(kwargs).length) throw messagingError('MESSAGING_UNSUPPORTED', 'Keyword arguments are not supported for print.', loc)
     return args
   }
-  if (args.length > names.length) throw messagingError('MESSAGING_UNSUPPORTED', 'Too many positional arguments.', loc)
+  if (args.length > positionalLimit) throw messagingError('MESSAGING_UNSUPPORTED', 'Too many positional arguments or keyword-only argument supplied positionally.', loc)
   const bound = Object.create(null)
   args.forEach((value, index) => { bound[names[index]] = value })
   for (const [key, value] of Object.entries(kwargs)) {
@@ -80,8 +86,9 @@ const mergeTypes = values => {
   return values.every(value => JSON.stringify(value ?? data) === JSON.stringify(first)) ? first : data
 }
 
-export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {} } = {}) {
-  const program = { entry, mode, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [] }
+export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {}, profile = 'messaging-v1' } = {}) {
+  const { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS } = messagingSdkContract(profile)
+  const program = { entry, mode, profile, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [] }
   const modules = new Map(), definitions = new Map(), analyzing = new Map()
   let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false, registrationSequence = 0
   const unsupported = (message, loc = location) => { throw messagingError('MESSAGING_UNSUPPORTED', message, loc) }
@@ -264,6 +271,8 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         if (object.type === 'event' && ['id', 'data', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
         if (object.type === 'functionevent' && ['id', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
         if (object.type === 'functionmessage' && ['message_id', 'delivery_count', 'application_properties'].includes(node.name)) return data
+        const securityType = profile === SECURITY_PROFILE && securityMemberType(object.type, node.name)
+        if (securityType) return typed(securityType)
         const name = `${object.type}.${node.name}`
         if (own(SDK_SIGNATURES, name)) return { ...callable(name), ...(object.type === 'functionapp' ? { registrationId: object.registrationId } : {}) }
         unsupported(`Unsupported member '${node.name}' on ${object.type}.`, node.loc); break
@@ -271,12 +280,12 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       case 'call': {
         const target = infer(node.callee, env, path), args = node.args.map(arg => infer(arg, env, path))
         const kwargs = Object.fromEntries(Object.entries(node.kwargs).map(([key, value]) => [key, infer(value, env, path)]))
-        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'FunctionApp', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len'].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
+        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'FunctionApp', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len', ...(profile === SECURITY_PROFILE ? SECURITY_INITIALIZERS : [])].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
         if (target.type === 'function') return analyzeFunction(target.id, args, kwargs, node.loc)
         if (target.type !== 'callable' || !own(SDK_SIGNATURES, target.name)) unsupported('Only resolved local functions and supported SDK calls are callable.', node.loc)
         if (target.name.startsWith('functionapp.')) unsupported('Functions decorator factories are supported only as registration metadata.', node.loc)
-        const [names, required, returns] = SDK_SIGNATURES[target.name]
-        const bound = bindArguments(names, required, args, kwargs, node.loc)
+        const [names, required, returns, positionalLimit] = SDK_SIGNATURES[target.name]
+        const bound = bindArguments(names, required, args, kwargs, node.loc, positionalLimit)
         if (target.name === 'FunctionApp') return { type: 'functionapp', registrationId: ++registrationSequence }
         if (target.name === 'deliver_events') {
           if (bound.handler?.type !== 'function') unsupported('deliver_events requires an actual local handler function.', node.loc)

@@ -14,6 +14,8 @@ import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/o
 import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDataStageState } from './data-capstone/stages.js'
 import { dataProtectedRefs } from './data-capstone/ownership.js'
 import { emptyMessagingState, validateMessagingState } from '../messaging/state.js'
+import { emptySecurityObservabilityState } from '../security/state.js'
+import { validSecurityLabContext } from '../security/evidence.js'
 import { validateMessagingExercise } from '../messaging/shell.js'
 import { validMessagingEvidence, validMessagingExecutionReceipts } from '../messaging/evidence.js'
 
@@ -233,7 +235,9 @@ export function validateBehavioralRun(run, lab = null) {
       if (candidate !== run) { run.runtime = candidate.runtime; run.nextSequence = candidate.nextSequence }
     }
     if (lab.capabilities?.messaging === true && (!validateMessagingState(run.runtime.messaging)
-      || !validMessagingExecutionReceipts(run.runtime.messaging))) {
+      || !validMessagingExecutionReceipts(run.runtime.messaging)
+      || (lab.capabilities?.securityObservability === true) !== (run.runtime.messaging.securityObservability !== undefined)
+      || lab.capabilities?.securityObservability === true && !validSecurityLabContext(run.runtime.messaging, lab.messagingInput?.securityObservability))) {
       fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')
     }
     if (lab.capabilities?.messaging === true && !evidenceRecords.every(record => validMessagingEvidence(record, run, lab))) {
@@ -323,7 +327,8 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     runtime: { simTimeMs: 0, deploymentsByApp: {}, replicasByApp: {}, activeScenario: null, scheduledEvents: [],
       ...(isDataCapstone(lab) ? { dataCapstone: { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } } } : {}),
       ...(lab.capabilities?.kubernetes === true ? { kubernetes: emptyKubernetesRuntime() } : {}),
-      ...(lab.capabilities?.messaging === true ? { messaging: emptyMessagingState() } : {}),
+      ...(lab.capabilities?.messaging === true ? { messaging: { ...emptyMessagingState(),
+        ...(lab.capabilities?.securityObservability === true ? { securityObservability: emptySecurityObservabilityState() } : {}) } } : {}),
       ...(lab.capabilities?.bicepDeployment === true ? { bicep: emptyBicepProvenance({
         trackIncident: lab.capabilities?.bicepIdentityFault === true }) } : {}) },
     evidence: { experimentsById: {}, currentEvidenceByTask: {}, milestoneRecords: [],

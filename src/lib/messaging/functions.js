@@ -5,8 +5,7 @@ import { SUBSCRIPTION_ID, isSandboxShape } from '../sandbox/model.js'
 import { getFunctionApp, getStorageAccount } from '../sandbox/functions.js'
 import { getQueue } from '../sandbox/ops.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
-import { MESSAGING_RUNTIME_FILES } from '../../data/templates/messaging-python/runtime.js'
-import { messagingExecutionEnvelope } from './execute.js'
+import { messagingExecutionEnvelope, messagingProjectOptions } from './execute.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const lower = value => value.toLowerCase()
@@ -39,7 +38,8 @@ export function runMessagingFunctions(run, lab) {
     const settings = readConfig('local.settings.json')
     if (settings.IsEncrypted !== false || !plainObject(settings.Values) || settings.Values.FUNCTIONS_WORKER_RUNTIME !== 'python'
       || settings.Values.AzureWebJobsStorage !== 'UseDevelopmentStorage=true') fail('Use the Python worker and simulated UseDevelopmentStorage=true storage setting.', 'local.settings.json')
-    const parsed = parseMessagingProject(files, { entry, mode: 'functions', fixedFiles: MESSAGING_RUNTIME_FILES })
+    const options = messagingProjectOptions(run, lab)
+    const parsed = parseMessagingProject(files, { entry, mode: 'functions', ...options })
     if (parsed.diagnostics.length) return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })
     const program = parsed.program, appId = appIdentity(app), bindings = []
     for (const handler of program.handlers) {
@@ -59,7 +59,7 @@ export function runMessagingFunctions(run, lab) {
       if (lower(endpoint.resourceGroup) !== lower(app.resourceGroup) || lower(endpoint.app) !== lower(app.name)) continue
       if (!program.handlers.some(handler => handler.kind === 'eventgrid' && lower(handler.functionName) === lower(endpoint.functionName))) fail('AzureFunction subscription target must name an actual registered Event Grid Function.', entry)
     }
-    const paths = [...new Set([...program.sourcePaths, ...Object.keys(MESSAGING_RUNTIME_FILES), 'host.json', 'local.settings.json'])].sort()
+    const paths = [...new Set([...program.sourcePaths, ...Object.keys(options.fixedFiles), 'host.json', 'local.settings.json'])].sort()
     const sources = Object.fromEntries(paths.map(path => [path, files[path]]))
     const sourceVersions = Object.fromEntries(paths.map(path => [path, run.project.fileVersions?.[path] ?? 0]))
     const previous = run.runtime.messaging.hosts[appId]
