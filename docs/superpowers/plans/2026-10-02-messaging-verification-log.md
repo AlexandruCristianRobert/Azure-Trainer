@@ -115,3 +115,14 @@ All seven test invocations used `npm test -- tests/messaging-functions.test.js`,
 | 2026-10-02 | Final GREEN | Test Files1 passed; Tests23 passed; test bodies73ms | 0 | 2.7209515 |
 
 Task5 measured test total: **18.0221011 seconds**; diagnostic **0.0875345 seconds**; combined **18.1096356 seconds**. Starting cumulative **96.6258755 seconds**; new cumulative known verification **114.7355111 seconds (1.912259 minutes)**. Initial missing-module RED is not behavioral evidence for each assertion; the later decorator-body/readback failures are explicit behavioral RED evidence. The existing broker increments deliveryCount before max-count deadlettering (three receives then count4); the fixture expectation was corrected without changing the broker. Only the owning Functions file ran. No full suite, AKS/Container Apps/legacy replay, cloud, browser, build or agents. Static diff/whitespace checks passed (Windows LF/CRLF notices only).
+
+### Task5 structured failure handoff follow-up
+
+Controller requested typed actual ValueError classification and physical receipt linkage so Task6 can distinguish intentionally failed deliveries without matching learner error wording/formatting. Same owning command and Stopwatch wrapper as above; no extra executable diagnostic.
+
+| Date | Stage | Actual relevant stdout | Exit | Elapsed seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Typed failure/linkage RED | Tests2 failed /23 passed (25); missing errorType/handlerFailure on actual SB and EG ValueErrors | 1 | 2.7493923 |
+| 2026-10-02 | Final typed failure/linkage GREEN | Test Files1 passed; Tests25 passed; test bodies80ms | 0 | 2.5997006 |
+
+Follow-up test total **5.3490929 seconds**. Task5 total tests **23.3711940 seconds**, diagnostic **0.0875345 seconds**, combined **23.4587285 seconds**. Starting follow-up cumulative **114.7355111 seconds**; new cumulative known verification **120.0846040 seconds (2.001410 minutes)**. Both typed classification/receipt tests observed missing-field behavioral RED before the narrow VM addition. Existing23 cases still pass. No grading/proof flags or persisted host-schema changes were added.

@@ -16,7 +16,11 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   let outputBytes = 0
   const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
   const maximumFrames = cap(limits.frames, 100), maximumValues = cap(limits.valueBytes, 128 * 1024)
-  const fail = (message, loc, code = 'MESSAGING_RUNTIME') => { throw messagingError(code, message, loc) }
+  const fail = (message, loc, code = 'MESSAGING_RUNTIME', details = {}) => {
+    const error = messagingError(code, message, loc)
+    Object.assign(error.diagnostic, details)
+    throw error
+  }
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
@@ -184,9 +188,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (!program.host || !Array.isArray(program.handlers) || !program.handlers.length) fail('A Functions host requires validated app/binding registration.', loc, 'MESSAGING_CONFIG')
     // Validate all reachable constructed dependencies before the first receive.
     for (const path of Object.keys(program.globals)) initialize(path)
-    const handlerFailure = error => {
+    const handlerFailure = (error, handler, receipt) => {
       if (error.diagnostic?.code !== 'MESSAGING_RUNTIME') throw error
-      diagnostics.push(error.diagnostic)
+      diagnostics.push({ ...error.diagnostic, handlerFailure: { kind: handler.kind, appId: program.host.appId, functionId: handler.functionId, functionName: handler.functionName, ...receipt } })
       if (diagnostics.length > maximumTraces) fail('Function failure output exceeds the bounded buffer.', loc, 'MESSAGING_LIMIT')
     }
     let attempts = 0
@@ -201,7 +205,10 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         try {
           invoke(binding.functionId, [handle('functionmessage', { record })], {}, program.functions[binding.functionId].loc)
           successful = true
-        } catch (error) { handlerFailure(error) }
+        } catch (error) {
+          const handler = program.handlers.find(handler => handler.functionId === binding.functionId)
+          handlerFailure(error, handler, { messageRecordId: record.id, messageId: record.messageId, entityId: record.entityId, receiverId, lockToken: record.lockToken, attempt: record.deliveryCount })
+        }
         broker({ kind: successful ? 'complete' : 'abandon', target: binding.target, receiverId, lockToken: record.lockToken }, loc)
         attempts++
       }
@@ -231,7 +238,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         try {
           invoke(handler.functionId, [handle('functionevent', { event: clone(record.event) })], {}, program.functions[handler.functionId].loc)
           successful = true
-        } catch (error) { handlerFailure(error) }
+        } catch (error) { handlerFailure(error, handler, { deliveryId: record.id, eventRecordId: record.eventRecordId, eventId: record.event.id, attempt: record.attempts + 1 }) }
         finally { activeDelivery = previousDelivery }
         eventGrid({ kind: 'deliver', deliveryId: record.id, status: successful ? 200 : 500 }, loc)
         attempts++
@@ -484,7 +491,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         case 'return': return { signal: RETURN, value }
         case 'raise': {
           if (info(value)?.type !== 'error') fail('Only ValueError may be raised.', statement.loc)
-          fail(`ValueError: ${info(value).message}`, statement.loc); break
+          fail(`ValueError: ${info(value).message}`, statement.loc, 'MESSAGING_RUNTIME', { errorType: 'ValueError' }); break
         }
         case 'for': {
           if (!Array.isArray(value)) fail('For requires a bounded list.', statement.loc)
