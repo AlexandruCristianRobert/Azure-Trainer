@@ -14,6 +14,8 @@ import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/o
 import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDataStageState } from './data-capstone/stages.js'
 import { dataProtectedRefs } from './data-capstone/ownership.js'
 import { emptyMessagingState, validateMessagingState } from '../messaging/state.js'
+import { validateMessagingExercise } from '../messaging/shell.js'
+import { validMessagingEvidence } from '../messaging/evidence.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -91,6 +93,7 @@ export function validateBehavioralLab(lab) {
     }
   }
   validateStageLab(lab)
+  if (!validateMessagingExercise(lab)) fail('INVALID_LAB', 'The messaging exercise must declare bounded commands and matching Task scenarios.')
   validateAksStageLab(lab)
   validateDataStageLab(lab)
   if (lab.initialProjectFiles !== undefined && !validStringMap(lab.initialProjectFiles)) {
@@ -231,6 +234,9 @@ export function validateBehavioralRun(run, lab = null) {
     }
     if (lab.capabilities?.messaging === true && !validateMessagingState(run.runtime.messaging)) {
       fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')
+    }
+    if (lab.capabilities?.messaging === true && !evidenceRecords.every(record => validMessagingEvidence(record, run, lab))) {
+      fail('INVALID_RUN', 'Messaging evidence measurements or receipt provenance are malformed.')
     }
     if (Array.isArray(lab.bicepTargets)) {
       const state = run.runtime.bicep

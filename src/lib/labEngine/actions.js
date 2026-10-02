@@ -37,6 +37,8 @@ import { cancelChangedProbeExperiments } from '../kubernetes/probe-experiments.j
 import { cancelChangedResourceExperiments } from '../kubernetes/resource-experiments.js'
 import { isDataCapstone, advanceDataStage, freezeDataCleanup, dataStageFrozenActionAllowed } from './data-capstone/stages.js'
 import { dataCommandAllowed, captureDataOwnership, dataOwnedDeletionEffect, dataProtectedRefs } from './data-capstone/ownership.js'
+import { applyMessagingAction } from '../messaging/actions.js'
+import { refreshMessagingDependencies } from '../messaging/evidence.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -119,8 +121,18 @@ export function applyCommandEffects(run, effects, lab) {
   let next = run
   const events = []
   const diagnostics = []
+  const lines = []
   for (const effect of effects) {
-    if (effect.type === 'aks-context') {
+    if (effect?.type === 'messaging-execution') {
+      if (!isJsonValue(effect) || Object.keys(effect).length !== 3
+        || Object.keys(effect).some(key => !['type', 'entry', 'mode'].includes(key))) fail('INVALID_EFFECT', 'Messaging execution accepts intent only.')
+      const result = applyMessagingAction(next, { type: 'messaging-run', entry: effect.entry, mode: effect.mode }, lab)
+      next = result.run
+      const errorStart = result.lines.length - result.diagnostics.length
+      lines.push(...result.lines.map((text, index) => ({ text, kind: index >= errorStart ? 'err' : 'out' })))
+      diagnostics.push(...result.diagnostics)
+      events.push(...result.portalEvents)
+    } else if (effect.type === 'aks-context') {
       if (lab?.capabilities?.kubernetes !== true || !isJsonValue(effect) || Object.keys(effect).some(key => !['type', 'name', 'clusterId', 'overwrite'].includes(key)) || typeof effect.name !== 'string' || typeof effect.clusterId !== 'string' || typeof effect.overwrite !== 'boolean') fail('INVALID_EFFECT', 'AKS context effect is malformed or unavailable in this Lab.')
       const cluster = next.sandbox.aksClusters?.find(item => item.id.toLowerCase() === effect.clusterId.toLowerCase())
       if (!cluster) fail('INVALID_EFFECT', 'AKS context references an unavailable cluster.')
@@ -256,7 +268,7 @@ export function applyCommandEffects(run, effects, lab) {
     } else fail('INVALID_EFFECT', `Unknown command effect '${effect.type}'.`)
   }
   if (ownedDeletion && !diagnostics.length) next = captureDataOwnership(run, next, ownedDeletion, lab)
-  return { run: next, events, diagnostics }
+  return { run: next, events, diagnostics, lines }
 }
 
 function commandAction(run, action, lab) {
@@ -285,7 +297,9 @@ function commandAction(run, action, lab) {
     next = { ...next, sandbox: { ...next.sandbox, containerApps: next.sandbox.containerApps.map(app =>
       app === current ? { ...app, incidentDrift: cloneJson(previous.incidentDrift) } : app) } }
   }
+  next = refreshMessagingDependencies(run, next, lab)
   const appliedEffects = applyCommandEffects(next, result.effects ?? [], lab)
+  result.lines.push(...appliedEffects.lines)
   next = appliedEffects.run
   if (lab.capabilities?.kubernetes === true && next.runtime.kubernetes) {
     const ids = new Set((next.sandbox.aksClusters ?? []).map(cluster => cluster.id.toLowerCase()))
@@ -770,6 +784,7 @@ export function applyRunAction(run, action, lab) {
   if (lab.capabilities?.kubernetesRollouts) result.run = refreshReleaseProofs(result.run, lab, { previous: run, restarted: action.type === 'command' && result.lines.some(line => /deployment(?:\.apps)?\/.+ restarted$/.test(line.text)) })
   if (lab.capabilities?.kubernetesRollouts && !result.diagnostics.length && ['command', 'save-file'].includes(action.type)) result.run = observeReleaseTimestamp(result.run, result.run.runtime.simTimeMs, lab)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
+  result.run = refreshMessagingDependencies(run, result.run, lab)
   result.run = finalizeAksVerification(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result

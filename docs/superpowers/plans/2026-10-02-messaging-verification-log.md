@@ -138,3 +138,23 @@ Sole scoped Important review finding: decorated classes were skipped without exp
 | 2026-10-02 | Decorated class GREEN | `npm test -- tests/messaging-functions.test.js` | Test Files1 passed; Tests27 passed; test bodies85ms | 0 | 2.6536924 |
 
 Fix round1 tests **5.3992412 seconds**. Starting cumulative including supplied diagnostic **120.1697265 seconds**; new cumulative known verification **125.5689677 seconds (2.092816 minutes)**. All invocations measured; no full suite/build/cloud/replay/browser/agents. The nonblocking two-FunctionApp-object observation remains outside this fix. Static git diff --check passed with Windows LF/CRLF notices only.
+
+## Task6: scoped commands, current behavior evidence and persistence
+
+All test invocations: `npm test -- tests/messaging-engine.test.js`. Complete invocation measured with PowerShell Stopwatch; command ends with `TASK6_DURATION_SECONDS=<seconds> EXIT=<code>`. Engine-local fixtures only, no production Lab imports.
+
+| Date | Stage | Actual relevant stdout | Exit | Seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial behavioral RED | Tests11 failed /12 passed (23); expected false to be true; no evidence/config generations/shell intent | 1 | 2.8717478 |
+| 2026-10-02 | First GREEN | Test Files1 passed; Tests23 passed; bodies82ms | 0 | 2.6871189 |
+| 2026-10-02 | Admission RED | Tests3 failed /28 passed (31); mismatched Functions entry and empty persisted measurements did not throw; no-op passed | 1 | 2.8007739 |
+| 2026-10-02 | Admission GREEN | Test Files1 passed; Tests31 passed; bodies162ms | 0 | 2.7657732 |
+| 2026-10-02 | Configuration/persistence RED | Tests3 failed /32 passed (35); custom filter properties erased; changed passed receipt admitted; EG fixture subscription ID mismatch | 1 | 2.8664362 |
+| 2026-10-02 | Configuration/persistence GREEN | Test Files1 passed; Tests35 passed; bodies169ms | 0 | 2.7808531 |
+| 2026-10-02 | Per-command effects RED | Tests1 failed /35 passed (36); got historical:9 plus o1:1, expected only o1:1 | 1 | 2.8537336 |
+| 2026-10-02 | Per-command effects GREEN | Test Files1 passed; Tests36 passed; bodies172ms | 0 | 2.7204325 |
+| 2026-10-02 | Output/history RED | Tests2 failed /35 passed (37); diagnostic err lines expected10 got0; evicted malformed trace admitted | 1 | 2.8158799 |
+| 2026-10-02 | Final GREEN | Test Files1 passed; Tests37 passed; bodies188ms; Vitest duration1.86s | 0 | 2.7595292 |
+| 2026-10-02 | Static whitespace diagnostic | `git diff --check`; Windows LF/CRLF notices only | 0 | 0.0461453 |
+
+Task6 test total **27.9222783 seconds**; executable diagnostic probes **0 seconds**; measured static whitespace diagnostic **0.0461453 seconds**. Starting cumulative **125.5689677 seconds**; new cumulative known verification **153.5373913 seconds (2.558957 minutes)**. No full suite, AKS/Container Apps/legacy replay, cloud, broad browser, builds, agents, publication or large probes. All37 final cases pass. Source/config change/revert freshness, saved versus unsaved draft, unrelated README/resource/no-op edits, JSON resume/reset, strict intent admission, current-command receipts/effect changes, actual WebHook retry/filter behavior and typed actual Functions invalid-receipt/sibling outcomes are covered. Raw final stdout and exact curriculum exercise/dependency/measurement API retained in task-6-report.md.

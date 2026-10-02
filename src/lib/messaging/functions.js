@@ -69,7 +69,7 @@ export function runMessagingFunctions(run, lab) {
     if (!validateMessagingState(state)) fail('Captured host source/revision metadata is invalid.', entry)
     program.host = { appId, bindings }
     const result = executeMessagingProgram({ program, state, sandbox: run.sandbox, input: lab.messagingInput ?? {} })
-    return messagingExecutionEnvelope(run, entry, result)
+    return messagingExecutionEnvelope(run, entry, result, paths)
   } catch (error) {
     const diagnostic = error.diagnostic ?? { code: 'MESSAGING_CONFIG', message: error.message, path: entry, line: 1, column: 1 }
     return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: [diagnostic] })
