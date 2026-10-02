@@ -13,33 +13,78 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap()
   let outputBytes = 0
   const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
-  const maximumFrames = cap(limits.frames, 100), maximumValues = 128 * 1024
+  const maximumFrames = cap(limits.frames, 100), maximumValues = cap(limits.valueBytes, 128 * 1024)
   const fail = (message, loc, code = 'MESSAGING_RUNTIME') => { throw messagingError(code, message, loc) }
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
   const callable = (name, owner) => handle('callable', { name, owner })
-  function jsonValue(value, loc, seen = new Set(), nesting = 0) {
+  function chargeBytes(budget, bytes, loc) {
+    budget.bytes += bytes
+    if (budget.bytes > maximumValues) fail(`Application data exceeds ${maximumValues} encoded bytes.`, loc, 'MESSAGING_LIMIT')
+  }
+  function chargeString(budget, value, loc) {
+    chargeBytes(budget, 2, loc) // JSON quotation marks
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index)
+      if (code === 34 || code === 92 || [8, 9, 10, 12, 13].includes(code)) chargeBytes(budget, 2, loc)
+      else if (code < 32) chargeBytes(budget, 6, loc)
+      else if (code < 128) chargeBytes(budget, 1, loc)
+      else if (code < 2048) chargeBytes(budget, 2, loc)
+      else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+        chargeBytes(budget, 4, loc); index++
+      } else chargeBytes(budget, code >= 0xd800 && code <= 0xdfff ? 6 : 3, loc)
+    }
+  }
+  function jsonValue(value, loc, seen = new Set(), nesting = 0, budget = { bytes: 0 }) {
     tick(loc)
     if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
-    if (value === null || typeof value === 'boolean' || typeof value === 'string' || Number.isSafeInteger(value)) return value
+    if (typeof value === 'string') { chargeString(budget, value, loc); return value }
+    if (value === null || typeof value === 'boolean' || Number.isSafeInteger(value)) {
+      chargeBytes(budget, String(value).length, loc)
+      return value
+    }
     if (!value || typeof value !== 'object' || seen.has(value)) fail('A finite JSON value is required.', loc)
     seen.add(value)
     const result = Array.isArray(value) ? [] : Object.create(null)
-    for (const [key, item] of Object.entries(value)) { safeKey(key, loc); result[key] = jsonValue(item, loc, seen, nesting + 1) }
+    chargeBytes(budget, 2, loc) // Braces or brackets
+    let first = true
+    for (const [key, item] of Object.entries(value)) {
+      safeKey(key, loc)
+      if (!first) chargeBytes(budget, 1, loc)
+      first = false
+      if (!Array.isArray(value)) { chargeString(budget, key, loc); chargeBytes(budget, 1, loc) }
+      result[key] = jsonValue(item, loc, seen, nesting + 1, budget)
+    }
     seen.delete(value)
     return result
   }
   function stringify(value, loc) {
-    const result = JSON.stringify(jsonValue(value, loc))
-    if (result.length > maximumValues) fail('Application data exceeds 128 KiB.', loc, 'MESSAGING_LIMIT')
-    return result
+    // jsonValue counts every expanded occurrence before materializing the JSON
+    // string, including repeated shared strings and UTF-8/escape overhead.
+    return JSON.stringify(jsonValue(value, loc))
   }
   function truth(value) {
     if (value === null || value === false || value === 0 || value === '') return false
     if (Array.isArray(value)) return value.length > 0
     if (value && typeof value === 'object' && !info(value)) return Object.keys(value).length > 0
+    return true
+  }
+  function equal(left, right, loc, nesting = 0) {
+    tick(loc)
+    if (nesting > 100) fail('Comparison nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
+    if (left === right) return true
+    if (info(left) || info(right)) return false
+    if (left === null || right === null || typeof left !== typeof right) return false
+    if (typeof left !== 'object') return false
+    if (Array.isArray(left) !== Array.isArray(right)) return false
+    const leftKeys = Object.keys(left), rightKeys = Object.keys(right)
+    if (leftKeys.length !== rightKeys.length) return false
+    for (const key of leftKeys) {
+      safeKey(key, loc)
+      if (!own(right, key) || !equal(left[key], right[key], loc, nesting + 1)) return false
+    }
     return true
   }
   function string(value, loc) {
@@ -247,13 +292,13 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
           return left + right
         }
         if (node.op === '==' || node.op === '!=') {
-          const equal = info(left) || info(right) ? left === right : stringify(left, node.loc) === stringify(right, node.loc)
-          return node.op === '==' ? equal : !equal
+          const same = equal(left, right, node.loc)
+          return node.op === '==' ? same : !same
         }
         if (node.op === 'is' || node.op === 'is not') return node.op === 'is' ? left === right : left !== right
         if (node.op === 'in' || node.op === 'not in') {
           let contains
-          if (Array.isArray(right)) contains = right.some(value => value === left)
+          if (Array.isArray(right)) contains = right.some(value => equal(value, left, node.loc))
           else if (typeof right === 'string' && typeof left === 'string') contains = right.includes(left)
           else if (right && typeof right === 'object' && !info(right)) contains = own(right, safeKey(left, node.loc))
           else fail('Membership requires a list, string or dictionary.', node.loc)

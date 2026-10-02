@@ -50,3 +50,20 @@ Every test invocation below used only the owning file. Diagnostics and all RED/e
 Task 3 npm/Vitest total: **14.3528880 seconds**. Task 3 diagnostic total: **0.1323637 seconds**. Task 3 combined: **14.4852517 seconds**.
 
 New cumulative known verification: **43.4856455 seconds (0.724761 minutes)**, starting from the previously recorded **29.0003938 seconds**. No full suite, AKS, Container Apps, legacy replay, cloud, browser or build checks ran. Static `git diff --check` passed; Windows line-ending notices are not test failures.
+
+## Task 3 fix round 1
+
+| Date | Stage | Command | Result | Elapsed seconds |
+| --- | --- | --- | --- | ---: |
+| 2026-10-02 | Task 3 review diagnostic | Inline Node reproduction (reviewer-supplied, not rerun) | Reproduced two preflight side-effect failures and dictionary equality; exit 0 | 0.1068365 |
+| 2026-10-02 | Fix preflight RED | `npm test -- tests/messaging-python.test.js` | 35 passed, 2 expected failures: implicit-return and changed recursive types allowed work; exit 1 | 1.5371081 |
+| 2026-10-02 | Fix preflight GREEN | `npm test -- tests/messaging-python.test.js` | 37/37 passed, exit 0 | 1.4621328 |
+| 2026-10-02 | Fix comparison RED | `npm test -- tests/messaging-python.test.js` | 38 passed, 2 failed: multiword not-in parser rejection and SDK-container equality error; exit 1 | 1.5133961 |
+| 2026-10-02 | Fix comparison isolated RED | `npm test -- tests/messaging-python.test.js` | 38 passed, 2 expected failures: wrong structural comparison values and SDK-container equality error; exit 1 | 1.6087173 |
+| 2026-10-02 | Fix comparison GREEN | `npm test -- tests/messaging-python.test.js` | 40/40 passed, exit 0 | 1.4808211 |
+| 2026-10-02 | Fix JSON-budget RED | `npm test -- tests/messaging-python.test.js` | 40 passed, 2 expected failures: small encoded-byte limits not enforced; exit 1 | 1.5125455 |
+| 2026-10-02 | Fix JSON-budget GREEN | `npm test -- tests/messaging-python.test.js` | 42/42 passed, exit 0 | 1.5081618 |
+| 2026-10-02 | Fix saved-source RED | `npm test -- tests/messaging-python.test.js` | 41 passed, actual createBehavioralRun execution failed parsing; exit 1 | 2.7703448 |
+| 2026-10-02 | Fix final covering GREEN | `npm test -- tests/messaging-python.test.js` | 42/42 passed, exit 0; test bodies 114ms; raw final stdout retained in task-3-report.md | 2.6898593 |
+
+Fix round 1 measured test total: **16.0830868 seconds**. Starting cumulative including the supplied review diagnostic: **43.5924820 seconds**. New cumulative known verification: **59.6755688 seconds (0.994593 minutes)**. No additional diagnostics, large-memory probe, full suite, build, cloud or browser checks. Only the owning test file ran. Static whitespace inspection passed with Windows line-ending notices only.

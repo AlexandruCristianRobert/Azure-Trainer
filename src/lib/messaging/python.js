@@ -70,7 +70,7 @@ const mergeTypes = values => {
 
 export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {} } = {}) {
   const program = { entry, mode, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [] }
-  const modules = new Map(), definitions = new Map(), analyzing = new Set()
+  const modules = new Map(), definitions = new Map(), analyzing = new Map()
   let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false
   const unsupported = (message, loc = location) => { throw messagingError('MESSAGING_UNSUPPORTED', message, loc) }
   const tick = loc => { if (++analysisSteps > 10000) throw messagingError('MESSAGING_LIMIT', 'Source analysis exceeds 10,000 steps.', loc) }
@@ -142,10 +142,10 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         return { kind: 'call', callee: lower(c[0]), args, kwargs, loc: at }
       }
       case 'BinaryExpression': {
-        if (c.length !== 3) unsupported('Chained comparisons are not supported.', at)
-        const op = text(c[1], path)
+        const op = c.slice(1, -1).map(n => text(n, path)).join(' ')
+        if (c.length !== 3 && !(c.length === 4 && ['not in', 'is not'].includes(op))) unsupported('Chained comparisons are not supported.', at)
         if (!['+', '==', '!=', '<', '<=', '>', '>=', 'and', 'or', 'in', 'not in', 'is', 'is not'].includes(op)) unsupported(`Operator '${op}' is not supported.`, at)
-        return { kind: 'binary', op, left: lower(c[0]), right: lower(c[2]), loc: at }
+        return { kind: 'binary', op, left: lower(c[0]), right: lower(c.at(-1)), loc: at }
       }
       case 'UnaryExpression': {
         const op = text(c[0], path); if (!['not', '-', '+'].includes(op)) unsupported(`Operator '${op}' is not supported.`, at)
@@ -267,22 +267,26 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
   }
   function analyzeStatements(body, env, path) {
     const returns = []
+    let fallsThrough = true
     for (const statement of body) {
       tick(statement.loc)
       if (statement.kind === 'pass') continue
       if (statement.kind === 'if') {
         // Validate every possible branch before any broker operations can run.
-        const branches = []
+        const branches = [], flows = []
         for (const branch of statement.branches) {
           infer(branch.test, env, path)
           const local = new Map(env), result = analyzeStatements(branch.body, local, path)
-          if (result) returns.push(result)
+          if (fallsThrough) returns.push(...result.returns)
+          flows.push(result.fallsThrough)
           branches.push(local)
         }
         const local = new Map(env), result = analyzeStatements(statement.otherwise, local, path)
-        if (result) returns.push(result)
+        if (fallsThrough) returns.push(...result.returns)
+        flows.push(result.fallsThrough)
         branches.push(local)
         for (const key of new Set(branches.flatMap(branch => [...branch.keys()]))) env.set(key, mergeTypes(branches.map(branch => branch.get(key))))
+        fallsThrough = fallsThrough && flows.some(Boolean)
         continue
       }
       const value = infer(statement.value, env, path)
@@ -302,12 +306,18 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         const before = new Map(env)
         env.set(statement.name, statement.kind === 'for' ? value.element ?? data : value)
         const result = analyzeStatements(statement.body, env, path)
-        if (result) returns.push(result)
+        if (fallsThrough) returns.push(...result.returns)
+        if (statement.kind === 'with') fallsThrough = fallsThrough && result.fallsThrough
         if (statement.kind === 'for') for (const key of env.keys()) env.set(key, mergeTypes([before.get(key), env.get(key)]))
-      } else if (statement.kind === 'return') returns.push(value)
-      else if (statement.kind === 'raise' && value.type !== 'error') unsupported('Only raise ValueError is supported.', statement.loc)
+      } else if (statement.kind === 'return') {
+        if (fallsThrough) returns.push(value)
+        fallsThrough = false
+      } else if (statement.kind === 'raise') {
+        if (value.type !== 'error') unsupported('Only raise ValueError is supported.', statement.loc)
+        fallsThrough = false
+      }
     }
-    return returns.length ? mergeTypes(returns) : null
+    return { returns, fallsThrough }
   }
   function analyzeFunction(id, args, kwargs, at) {
     const definition = definitions.get(id)
@@ -321,13 +331,17 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       program.functions[id] = { name: definition.name, path: definition.path, params: names, body: statements(c.find(n => n.name === 'Body'), definition.path), loc: loc(definition.node, definition.path) }
     }
     const fn = program.functions[id], bound = bindArguments(fn.params, fn.params.length, args, kwargs, at)
-    if (analyzing.has(id)) return data
+    const argumentTypes = JSON.stringify(bound)
+    if (analyzing.has(id)) {
+      if (analyzing.get(id) !== argumentTypes) unsupported('Recursive calls must preserve their argument types.', at)
+      return data
+    }
     if (analyzing.size >= 100) throw messagingError('MESSAGING_LIMIT', 'Local call analysis exceeds 100 frames.', at)
-    analyzing.add(id)
+    analyzing.set(id, argumentTypes)
     const env = new Map(modules.get(fn.path)); Object.entries(bound).forEach(([key, value]) => env.set(key, value))
     const result = analyzeStatements(fn.body, env, fn.path)
     analyzing.delete(id)
-    return result ?? data
+    return mergeTypes([...result.returns, ...(result.fallsThrough ? [data] : [])])
   }
   const loading = new Set()
   function simpleAnnotation(node, path) {

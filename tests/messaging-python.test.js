@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { parseMessagingProject } from '../src/lib/messaging/python.js'
 import { executeMessagingProgram } from '../src/lib/messaging/vm.js'
 import { executeMessagingEntry } from '../src/lib/messaging/execute.js'
+import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { SERVICEBUS_STARTER_FILES, SERVICEBUS_SOLUTION_FILES } from '../src/data/templates/messaging-python/servicebus.js'
 import { MESSAGING_RUNTIME_FILES } from '../src/data/templates/messaging-python/runtime.js'
 import { emptyMessagingState, validateMessagingState } from '../src/lib/messaging/state.js'
@@ -148,14 +149,17 @@ def main():
   })
 
   it('orchestrates scripts once without grading and leaves the run untouched on parse failure', () => {
-    const original = { project: { files: { ...SERVICEBUS_SOLUTION_FILES } }, runtime: { messaging: emptyMessagingState() }, sandbox: fixture() }
-    const result = executeMessagingEntry(original, {}, 'producer.py')
+    const lab = { id: 'messaging-source-fixture', engineVersion: 2, contentVersion: 1, tasks: [], capabilities: { messaging: true }, manifestId: 'messaging-python-v1', initialProjectFiles: SERVICEBUS_SOLUTION_FILES, resourceSeed: fixture }
+    const original = createBehavioralRun(lab, { attemptId: 'script-fixture' })
+    original.project.draftFiles['producer.py'] = 'def main():\n    open("unsaved")\n'
+    const result = executeMessagingEntry(original, lab, 'producer.py')
     expect(result.diagnostics).toEqual([])
     expect(messages(result.run.runtime.messaging)).toHaveLength(1)
     expect(result.portalEvents).toEqual([])
     expect(messages(original.runtime.messaging)).toHaveLength(0)
-    const broken = { ...original, project: { files: { ...original.project.files, 'producer.py': producer() + '    open("x")\n' } } }
-    expect(executeMessagingEntry(broken, {}, 'producer.py').run).toBe(broken)
+    expect(result.run.project).toBe(original.project)
+    const broken = { ...original, project: { ...original.project, savedFiles: { ...original.project.savedFiles, 'producer.py': producer() + '    open("x")\n' } } }
+    expect(executeMessagingEntry(broken, lab, 'producer.py').run).toBe(broken)
   })
 
   it('preflights uncertain branch receivers before any send', () => {
@@ -362,5 +366,58 @@ def main():
     const state = emptyMessagingState(), result = run(producer() + suffix, { state })
     expect(result.diagnostics[0].code).toBe('MESSAGING_UNSUPPORTED')
     expect(result.state).toBe(state)
+  })
+
+  it.each([
+    'def make():\n    if False:\n        return b"data"\ndef main():\n    perform_order_work({"id":"o1"})\n    make().decode()\n',
+    'def use(target, depth):\n    if depth == 0:\n        target.decode()\n    else:\n        use({}, 0)\ndef main():\n    perform_order_work({"id":"o1"})\n    use(b"data", 1)\n',
+  ])('rejects implicit-return and changed recursive receiver types before work: %s', body => {
+    const state = emptyMessagingState()
+    const result = run('from training_runtime import perform_order_work\n' + body, { state })
+    expect(result.diagnostics[0]).toMatchObject({ code: 'MESSAGING_UNSUPPORTED', path: 'producer.py' })
+    expect(result.state).toBe(state)
+    expect(result.state.effects).toEqual({})
+  })
+
+  it('preserves typed values from total conditional returns and final fallthrough returns', () => {
+    const result = run('def first(flag):\n    if flag:\n        return b"one"\n    else:\n        return b"two"\ndef second(flag):\n    if flag:\n        return b"three"\n    return b"four"\ndef main():\n    return [first(False).decode(), second(False).decode()]\n')
+    expect(result.diagnostics).toEqual([])
+    expect(result.value).toEqual(['two', 'four'])
+  })
+
+  it('compares dictionary contents without insertion order and uses structural list membership', () => {
+    const result = run(`def main():
+    left = {"id": "o1", "region": "EU"}
+    right = {"region": "EU", "id": "o1"}
+    return [left == right, left != right, right in [left], [1, {"a": 2}] in [[1, {"a": 2}]], [2, 1] not in [[1, 2]], [1, 2] == [2, 1]]
+`)
+    expect(result.diagnostics).toEqual([])
+    expect(result.value).toEqual([true, false, true, true, true, false])
+  })
+
+  it('preserves SDK handle identity inside structural container comparisons', () => {
+    const result = run('from azure.servicebus import ServiceBusMessage\ndef main():\n    first = ServiceBusMessage("x")\n    second = ServiceBusMessage("x")\n    return [[first] == [first], [first] == [second], first in [first], first in [second]]\n')
+    expect(result.diagnostics).toEqual([])
+    expect(result.value).toEqual([true, false, true, false])
+  })
+
+  it('charges structural comparisons to the shared step budget', () => {
+    const result = run('def main():\n    left = [1]\n    right = [1]\n    for item in [1,2,3,4,5,6,7,8,9,10]:\n        left = [left,left]\n        right = [right,right]\n    return left == right\n', { limits: { steps: 500 } })
+    expect(result.diagnostics[0]).toMatchObject({ code: 'MESSAGING_LIMIT', path: 'producer.py', line: 7 })
+  })
+
+  it('rejects expanded JSON by encoded bytes under a small limit before allocation', () => {
+    const result = run('import json\ndef main():\n    value = ["abcdefghijklmnop"]\n    for item in [1,2,3]:\n        value = [value,value]\n    return json.dumps(value)\n', { limits: { valueBytes: 64 } })
+    expect(result.diagnostics[0]).toMatchObject({ code: 'MESSAGING_LIMIT', path: 'producer.py', line: 6 })
+    expect(result.diagnostics[0].message).toContain('encoded bytes')
+  })
+
+  it('accounts for UTF-8, JSON escapes and container punctuation in the JSON byte limit', () => {
+    for (const expression of ['["éé", "éé"]', '["\\n\\n", "\\n\\n"]', '{"a": [1,2,3]}']) {
+      expect(run(`import json\ndef main():\n    return json.dumps(${expression})\n`, { limits: { valueBytes: 12 } }).diagnostics[0]?.code).toBe('MESSAGING_LIMIT')
+    }
+    const accepted = run('import json\ndef main():\n    print(json.dumps({"a": [1,2]}))\n', { limits: { valueBytes: 12 } })
+    expect(accepted.diagnostics).toEqual([])
+    expect(accepted.output).toEqual(['{"a":[1,2]}'])
   })
 })
