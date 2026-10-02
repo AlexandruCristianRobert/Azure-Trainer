@@ -31,10 +31,40 @@ export function emptyMessagingState() {
   return { version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {} }
 }
 
+function validHostRecords(hosts, timeMs) {
+  if (Object.keys(hosts).length > 16) return false
+  const portable = path => path === 'local.settings.json' || typeof path === 'string' && /^(?:[A-Za-z_][A-Za-z0-9_]*\/)*[A-Za-z_][A-Za-z0-9_]*\.(?:py|json|txt)$/.test(path)
+  for (const [key, host] of Object.entries(hosts)) {
+    if (!plainObject(host) || Object.keys(host).some(field => !['appId', 'entry', 'generation', 'status', 'startedAtMs', 'sources', 'sourceVersions', 'handlers'].includes(field))
+      || host.appId !== key || key !== key.toLowerCase() || !key.startsWith(`/subscriptions/${SUBSCRIPTION_ID}/`.toLowerCase())
+      || !/^\/subscriptions\/[^/]+\/resourcegroups\/[^/]+\/providers\/microsoft\.web\/sites\/[A-Za-z0-9-]+$/.test(key)
+      || !portable(host.entry) || !host.entry.endsWith('.py') || !counter(host.generation) || host.generation < 1 || host.status !== 'stopped'
+      || !counter(host.startedAtMs) || host.startedAtMs > timeMs || !plainObject(host.sources) || !plainObject(host.sourceVersions)
+      || !own(host.sources, host.entry) || !own(host.sources, 'host.json') || !own(host.sources, 'local.settings.json')
+      || Object.keys(host.sources).length > 20 || Object.keys(host.sourceVersions).length !== Object.keys(host.sources).length
+      || Object.entries(host.sources).some(([path, source]) => !portable(path) || typeof source !== 'string' || new TextEncoder().encode(source).length > 128 * 1024 || !own(host.sourceVersions, path) || !counter(host.sourceVersions[path]))
+      || !Array.isArray(host.handlers) || host.handlers.length < 1 || host.handlers.length > 50) return false
+    const names = new Set(), identities = new Set()
+    for (const handler of host.handlers) {
+      if (!plainObject(handler) || !['servicebus', 'eventgrid'].includes(handler.kind)
+        || Object.keys(handler).some(field => !['kind', 'functionName', 'argName', 'functionId', 'path', 'queueName', 'connection'].includes(field))
+        || !string(handler.functionName) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(handler.functionName)
+        || !string(handler.argName) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(handler.argName)
+        || !portable(handler.path) || !handler.path.endsWith('.py') || !own(host.sources, handler.path)
+        || typeof handler.functionId !== 'string' || !handler.functionId.startsWith(`${handler.path}:`) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(handler.functionId.slice(handler.path.length + 1))
+        || names.has(handler.functionName.toLowerCase()) || identities.has(handler.functionId)
+        || (handler.kind === 'servicebus' ? !string(handler.queueName) || !string(handler.connection) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(handler.connection) : handler.queueName !== undefined || handler.connection !== undefined)) return false
+      names.add(handler.functionName.toLowerCase()); identities.add(handler.functionId)
+    }
+  }
+  return true
+}
+
 export function validateMessagingState(state) {
   if (!finiteJson(state) || !plainObject(state) || state.version !== 1 || !counter(state.nextId) || state.nextId < 1
     || !counter(state.timeMs) || !plainObject(state.entities) || !Array.isArray(state.deliveries)
     || state.deliveries.length > 500 || !plainObject(state.effects) || !plainObject(state.hosts)) return false
+  if (!validHostRecords(state.hosts, state.timeMs)) return false
   let maximumId = 0
   const allocated = new Set()
   const id = (value, unique = false, eventGrid = false) => {

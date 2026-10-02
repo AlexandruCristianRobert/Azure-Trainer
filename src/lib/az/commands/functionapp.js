@@ -5,8 +5,8 @@ import { presentAppSettings, presentCors, presentFunctionApp } from '../function
 const NAME = ARG.name('Name of the Function App.')
 const STORAGE_ACCOUNT = { name: '--storage-account', aliases: [], required: true, kind: 'string', dest: 'storageAccount', help: 'Name of the storage account used by the Function App.' }
 const FLEX_LOCATION = { name: '--flexconsumption-location', aliases: [], required: true, kind: 'string', dest: 'flexconsumptionLocation', help: 'Location for the Flex Consumption Function App.' }
-const RUNTIME = { name: '--runtime', aliases: [], required: true, kind: 'string', choices: ['node'], dest: 'runtime', help: 'Function runtime.' }
-const RUNTIME_VERSION = { name: '--runtime-version', aliases: [], required: true, kind: 'string', choices: ['22'], dest: 'runtimeVersion', help: 'Function runtime version.' }
+const RUNTIME = { name: '--runtime', aliases: [], required: true, kind: 'string', choices: ['node', 'python'], dest: 'runtime', help: 'Function runtime.' }
+const RUNTIME_VERSION = { name: '--runtime-version', aliases: [], required: true, kind: 'string', choices: ['22', '3.12'], dest: 'runtimeVersion', help: 'Function runtime version.' }
 const FUNCTIONS_VERSION = { name: '--functions-version', aliases: [], required: false, kind: 'string', choices: ['4'], dest: 'functionsVersion', help: 'Azure Functions version.', defaultValue: '4' }
 const OS_TYPE = { name: '--os-type', aliases: [], required: false, kind: 'string', choices: ['Linux'], dest: 'osType', help: 'Operating system for Flex Consumption.', defaultValue: 'Linux' }
 const SETTINGS = { name: '--settings', aliases: [], required: true, kind: 'raw', dest: 'settings', help: 'One or more custom KEY=VALUE application settings.' }

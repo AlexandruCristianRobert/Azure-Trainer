@@ -98,3 +98,20 @@ Task 4 measured total: **31.1271017 seconds**. Starting cumulative: **59.6755688
 | 2026-10-02 | Terminal persistence GREEN | `npm test -- tests/messaging-eventgrid.test.js` | Test Files1 passed; Tests15 passed; test bodies58ms | 0 | 2.8344453 |
 
 Fix round1 measured test total: **5.7184606 seconds**. Starting cumulative including supplied review diagnostic: **90.9074149 seconds**. New cumulative known verification: **96.6258755 seconds (1.610431 minutes)**. Every executable invocation this round measured above; only the owning Event Grid test file ran. No agents, broad suites, build, browser, cloud, replay or further executable diagnostics. Static git diff/whitespace checks are not test invocations. Deferred filtered-integration fixture Minor was not included in this fix scope.
+
+## Task 5 Python Functions host
+
+All seven test invocations used `npm test -- tests/messaging-functions.test.js`, measured with PowerShell Stopwatch around the complete command; every RED/rerun is included. One measured in-memory Lezer AST diagnostic inspected v2 decorated definitions and member annotations (no application execution).
+
+| Date | Stage | Actual relevant stdout | Exit | Elapsed seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Lezer decorator/annotation diagnostic | DecoratedStatement/Decorator/FunctionDefinition; ParamList TypeDef MemberExpression; DIAG_EXIT=0 | 0 | 0.0875345 |
+| 2026-10-02 | Initial RED | Missing src/lib/messaging/functions.js; Test Files1 failed; no tests collected | 1 | 1.2856873 |
+| 2026-10-02 | Initial covering run | Tests8 failed /14 passed (22); captured host source/revision metadata rejected local.settings.json | 1 | 2.8322532 |
+| 2026-10-02 | Source schema correction | Tests1 failed /21 passed (22); broker DLQ deliveryCount4 versus fixture expected3 | 1 | 2.8022886 |
+| 2026-10-02 | Decorator-body preflight RED | Tests1 failed /22 passed (23); unsupported decorator factory executed after workByOrder/processed effects | 1 | 2.7978885 |
+| 2026-10-02 | Decorator-body preflight GREEN | Tests23 passed; test bodies79ms | 0 | 2.7951125 |
+| 2026-10-02 | Python ARM readback RED | Tests1 failed /22 passed (23); Python CLI creation readback incorrectly returned node/22 | 1 | 2.7879195 |
+| 2026-10-02 | Final GREEN | Test Files1 passed; Tests23 passed; test bodies73ms | 0 | 2.7209515 |
+
+Task5 measured test total: **18.0221011 seconds**; diagnostic **0.0875345 seconds**; combined **18.1096356 seconds**. Starting cumulative **96.6258755 seconds**; new cumulative known verification **114.7355111 seconds (1.912259 minutes)**. Initial missing-module RED is not behavioral evidence for each assertion; the later decorator-body/readback failures are explicit behavioral RED evidence. The existing broker increments deliveryCount before max-count deadlettering (three receives then count4); the fixture expectation was corrected without changing the broker. Only the owning Functions file ran. No full suite, AKS/Container Apps/legacy replay, cloud, browser, build or agents. Static diff/whitespace checks passed (Windows LF/CRLF notices only).

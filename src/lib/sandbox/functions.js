@@ -141,8 +141,7 @@ export function listFunctionApps(sb, resourceGroup = null) {
 export function createFunctionApp(sb, { resourceGroup, name, storageAccount, flexconsumptionLocation, runtime, runtimeVersion, functionsVersion = '4', osType = 'Linux', tags = null }) {
   const group = getResourceGroup(sb, resourceGroup)
   requireFunctionAppName(name)
-  if (runtime !== 'node') throw new AzError('InvalidArgumentValue', `Only Node.js runtime is supported in the Sandbox; received '${runtime}'.`, { kind: 'cli' })
-  if (runtimeVersion !== '22') throw new AzError('InvalidArgumentValue', `Only Node.js runtime version 22 is supported in the Sandbox; received '${runtimeVersion}'.`, { kind: 'cli' })
+  if (!((runtime === 'node' && runtimeVersion === '22') || (runtime === 'python' && runtimeVersion === '3.12'))) throw new AzError('InvalidArgumentValue', 'Supported runtime/version pairs are node/22 and python/3.12.', { kind: 'cli' })
   if (functionsVersion !== '4') throw new AzError('InvalidArgumentValue', `Only Functions version 4 is supported in the Sandbox; received '${functionsVersion}'.`, { kind: 'cli' })
   if (osType !== 'Linux') throw new AzError('InvalidArgumentValue', `Only Linux is supported for Flex Consumption in the Sandbox; received '${osType}'.`, { kind: 'cli' })
   const location = resolveLocation(flexconsumptionLocation, group, 'Microsoft.Web/sites')
@@ -158,7 +157,7 @@ export function createFunctionApp(sb, { resourceGroup, name, storageAccount, fle
   if (app) {
     if (tags !== null) app.tags = tags
   } else {
-    app = { name, resourceGroup: group.name, location, storageAccount: account.name, storageResourceGroup: account.resourceGroup, hostingPlan: 'FlexConsumption', os: 'Linux', runtime: 'node', runtimeVersion: '22', functionsVersion: '4', httpsOnly: true, appSettings: {}, cors: { allowedOrigins: [], supportCredentials: false }, tags, createdAt: nowIso() }
+    app = { name, resourceGroup: group.name, location, storageAccount: account.name, storageResourceGroup: account.resourceGroup, hostingPlan: 'FlexConsumption', os: 'Linux', runtime, runtimeVersion, functionsVersion: '4', httpsOnly: true, appSettings: {}, cors: { allowedOrigins: [], supportCredentials: false }, tags, createdAt: nowIso() }
     next.functionApps.push(app)
   }
   return { sandbox: next, resource: app }

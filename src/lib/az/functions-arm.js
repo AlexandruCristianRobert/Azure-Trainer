@@ -16,7 +16,7 @@ export function presentFunctionApp(app) {
   return {
     id: appId(app), name: app.name, resourceGroup: app.resourceGroup, location: app.location,
     type: 'Microsoft.Web/sites', kind: 'functionapp,linux', reserved: true, httpsOnly: true,
-    defaultHostName: `${app.name}.azurewebsites.net`, functionAppConfig: { runtime: { name: 'node', version: '22' } },
+    defaultHostName: `${app.name}.azurewebsites.net`, functionAppConfig: { runtime: { name: app.runtime, version: app.runtimeVersion } },
     tags: app.tags ?? {}, state: 'Running',
   }
 }

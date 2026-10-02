@@ -13,6 +13,10 @@ export function executeMessagingEntry(run, lab, entry, mode = 'script', internal
   const parsed = parseMessagingProject(run.project.savedFiles, { entry, mode, fixedFiles: MESSAGING_RUNTIME_FILES })
   if (parsed.diagnostics.length) return { run, lines: parsed.diagnostics.map(d => `${d.path}:${d.line}:${d.column} ${d.code}: ${d.message}`), portalEvents: [], diagnostics: parsed.diagnostics }
   const result = executeMessagingProgram({ program: parsed.program, state: run.runtime.messaging, sandbox: run.sandbox, input: { ...(lab.messagingInput ?? {}), ...internalInput } })
+  return messagingExecutionEnvelope(run, entry, result)
+}
+
+export function messagingExecutionEnvelope(run, entry, result) {
   const next = result.state === run.runtime.messaging ? run : { ...run, runtime: { ...run.runtime, messaging: result.state } }
   const lines = [...result.output, ...result.trace.map(record => `${record.kind}: ${record.messageId ?? record.entityId ?? record.deliveryId ?? record.eventRecordId ?? ''}${record.timing ? ' (logical simulator ticks)' : ''}`)]
   lines.push(...result.diagnostics.map(d => `${d.path}:${d.line}:${d.column} ${d.code}: ${d.message}`))

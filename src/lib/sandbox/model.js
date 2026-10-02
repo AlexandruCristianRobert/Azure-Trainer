@@ -362,8 +362,9 @@ function validFunctionApp(app) {
   return object(app) && typeof app.name === 'string' && FUNCTION_APP_NAME_RE.test(app.name)
     && typeof app.resourceGroup === 'string' && typeof app.location === 'string' && normalizeLocation(app.location) === app.location
     && typeof app.storageAccount === 'string' && typeof app.storageResourceGroup === 'string'
-    && app.hostingPlan === 'FlexConsumption' && app.os === 'Linux' && app.runtime === 'node'
-    && app.runtimeVersion === '22' && app.functionsVersion === '4' && app.httpsOnly === true
+    && app.hostingPlan === 'FlexConsumption' && app.os === 'Linux'
+    && ((app.runtime === 'node' && app.runtimeVersion === '22') || (app.runtime === 'python' && app.runtimeVersion === '3.12'))
+    && app.functionsVersion === '4' && app.httpsOnly === true
     && validSettings(app.appSettings) && object(app.cors) && Array.isArray(app.cors.allowedOrigins)
     && app.cors.allowedOrigins.every(validOrigin) && new Set(app.cors.allowedOrigins).size === app.cors.allowedOrigins.length
     && !(app.cors.allowedOrigins.includes('*') && app.cors.allowedOrigins.length > 1)

@@ -21,6 +21,12 @@ export const SDK_SIGNATURES = Object.freeze({
   EventGridEvent: [['subject', 'event_type', 'data', 'data_version', 'id'], 4, 'event'],
   'publisher.send': [['events'], 1, 'data'],
   deliver_events: [['handler'], 1, 'data'],
+  FunctionApp: [[], 0, 'functionapp'],
+  'functionmessage.get_body': [[], 0, 'bytes'],
+  'functionevent.get_json': [[], 0, 'data'],
+  'functionapp.function_name': [['name'], 1, 'data'],
+  'functionapp.service_bus_queue_trigger': [['arg_name', 'queue_name', 'connection'], 3, 'data'],
+  'functionapp.event_grid_trigger': [['arg_name'], 1, 'data'],
   'bus.get_queue_sender': [['queue_name'], 1, 'sender'],
   'bus.get_topic_sender': [['topic_name'], 1, 'sender'],
   'bus.get_queue_receiver': [['queue_name', 'sub_queue', 'session_id', 'max_wait_time'], 1, 'receiver'],
@@ -43,6 +49,7 @@ export const SDK_EXPORTS = Object.freeze({
   'azure.identity': ['DefaultAzureCredential'],
   'azure.servicebus': ['ServiceBusClient', 'ServiceBusMessage', 'ServiceBusSubQueue'],
   'azure.eventgrid': ['EventGridPublisherClient', 'EventGridEvent'],
+  'azure.functions': ['FunctionApp', 'ServiceBusMessage', 'EventGridEvent'],
   json: ['dumps', 'loads'],
   training_runtime: ['perform_order_work', 'record_processed', 'was_processed', 'record_notification', 'handler_status', 'deliver_events'],
 })
@@ -74,7 +81,7 @@ const mergeTypes = values => {
 }
 
 export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {} } = {}) {
-  const program = { entry, mode, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [] }
+  const program = { entry, mode, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [] }
   const modules = new Map(), definitions = new Map(), analyzing = new Map()
   let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false
   const unsupported = (message, loc = location) => { throw messagingError('MESSAGING_UNSUPPORTED', message, loc) }
@@ -216,6 +223,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       if (item.module === 'training_runtime' && !program.sourcePaths.includes('training_runtime.py')) program.sourcePaths.push('training_runtime.py')
       if (!item.name) return external(item.module.startsWith(`${item.alias}.`) ? item.alias : item.module)
       if (!SDK_EXPORTS[item.module].includes(item.name)) unsupported(`Unsupported import '${item.name}'.`, item.loc)
+      if (item.module === 'azure.functions' && item.name !== 'FunctionApp') return typed(item.name === 'ServiceBusMessage' ? 'functionmessageType' : 'functioneventType')
       if (item.name === 'ServiceBusSubQueue') return typed('subqueue')
       return callable(item.module === 'json' ? `json.${item.name}` : item.name)
     }
@@ -229,7 +237,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
   function infer(node, env, path) {
     tick(node.loc)
     switch (node.kind) {
-      case 'literal': return data
+      case 'literal': return { type: 'data', constant: node.value }
       case 'bytes': return typed('bytes')
       case 'name': {
         if (env.has(node.name)) return env.get(node.name)
@@ -254,6 +262,8 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         if (object.type === 'subqueue' && node.name === 'DEAD_LETTER') return data
         if (object.type === 'receipt' && ['body', 'message_id', 'session_id', 'application_properties', 'delivery_count', 'dead_letter_reason', 'dead_letter_error_description'].includes(node.name)) return node.name === 'body' ? typed('bytes') : data
         if (object.type === 'event' && ['id', 'data', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
+        if (object.type === 'functionevent' && ['id', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
+        if (object.type === 'functionmessage' && ['message_id', 'delivery_count', 'application_properties'].includes(node.name)) return data
         const name = `${object.type}.${node.name}`
         if (own(SDK_SIGNATURES, name)) return callable(name)
         unsupported(`Unsupported member '${node.name}' on ${object.type}.`, node.loc); break
@@ -261,9 +271,10 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       case 'call': {
         const target = infer(node.callee, env, path), args = node.args.map(arg => infer(arg, env, path))
         const kwargs = Object.fromEntries(Object.entries(node.kwargs).map(([key, value]) => [key, infer(value, env, path)]))
-        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len'].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
+        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'FunctionApp', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len'].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
         if (target.type === 'function') return analyzeFunction(target.id, args, kwargs, node.loc)
         if (target.type !== 'callable' || !own(SDK_SIGNATURES, target.name)) unsupported('Only resolved local functions and supported SDK calls are callable.', node.loc)
+        if (target.name.startsWith('functionapp.')) unsupported('Functions decorator factories are supported only as registration metadata.', node.loc)
         const [names, required, returns] = SDK_SIGNATURES[target.name]
         const bound = bindArguments(names, required, args, kwargs, node.loc)
         if (target.name === 'deliver_events') {
@@ -335,13 +346,23 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       const c = children(definition.node)
       if (c.some(n => n.name === 'async')) unsupported('Async functions are not supported.', loc(definition.node, definition.path))
       const paramsNode = c.find(n => n.name === 'ParamList'), params = children(paramsNode).filter(n => !['(', ')', ',', 'TypeDef'].includes(n.name))
-      for (const annotation of [...c, ...children(paramsNode)].filter(n => n.name === 'TypeDef')) simpleAnnotation(annotation, definition.path)
+      const annotations = Object.create(null)
+      for (const annotation of c.filter(n => n.name === 'TypeDef')) simpleAnnotation(annotation, definition.path)
+      const paramParts = children(paramsNode)
+      for (let index = 0; index < paramParts.length; index++) if (paramParts[index].name === 'TypeDef') {
+        const annotation = paramParts[index], parts = children(annotation).filter(n => n.name !== ':')
+        if (mode === 'functions') {
+          if (parts.length !== 1 || !['VariableName', 'MemberExpression'].includes(parts[0].name)) unsupported('Functions annotations must resolve supported type names.', loc(annotation, definition.path))
+          const lowered = expr(parts[0], definition.path)
+          annotations[text(paramParts[index - 1], definition.path)] = { expression: lowered, type: infer(lowered, modules.get(definition.path), definition.path).type, loc: loc(annotation, definition.path) }
+        } else simpleAnnotation(annotation, definition.path)
+      }
       if (params.some(n => n.name !== 'VariableName')) unsupported('Only simple named parameters are supported.', loc(paramsNode, definition.path))
       const names = params.map(n => safeKey(text(n, definition.path), loc(n, definition.path)))
-      program.functions[id] = { name: definition.name, path: definition.path, params: names, body: statements(c.find(n => n.name === 'Body'), definition.path), loc: loc(definition.node, definition.path) }
+      program.functions[id] = { name: definition.name, path: definition.path, params: names, annotations, decorators: definition.decorators ?? [], body: statements(c.find(n => n.name === 'Body'), definition.path), loc: loc(definition.node, definition.path) }
     }
     const fn = program.functions[id], bound = bindArguments(fn.params, fn.params.length, args, kwargs, at)
-    const argumentTypes = JSON.stringify(bound)
+    const argumentTypes = JSON.stringify(bound, (key, value) => key === 'constant' ? undefined : value)
     if (analyzing.has(id)) {
       if (analyzing.get(id) !== argumentTypes) unsupported('Recursive calls must preserve their argument types.', at)
       return data
@@ -359,6 +380,59 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     if (parts.length !== 1 || !['VariableName', 'None'].includes(parts[0].name)) unsupported('Only simple type-name annotations are supported.', loc(node, path))
     safeKey(text(parts[0], path), loc(parts[0], path))
   }
+  function lowerDecorator(node, path) {
+    const parts = children(node), at = loc(node, path), argumentList = parts.find(n => n.name === 'ArgList')
+    if (!argumentList || parts[1]?.name !== 'VariableName') unsupported('Only explicit Functions v2 decorators are supported.', at)
+    let callee = expr(parts[1], path)
+    for (let i = 2; parts[i] !== argumentList; i += 2) {
+      if (parts[i]?.name !== '.' || parts[i + 1]?.name !== 'VariableName') unsupported('Unsupported decorator target.', at)
+      callee = { kind: 'attribute', object: callee, name: safeKey(text(parts[i + 1], path), at), loc: at }
+    }
+    const arguments_ = children(argumentList).filter(n => !['(', ')', ','].includes(n.name)), kwargs = Object.create(null)
+    for (let i = 0; i < arguments_.length; i += 3) {
+      if (arguments_[i]?.name !== 'VariableName' || arguments_[i + 1]?.name !== 'AssignOp' || !arguments_[i + 2]) unsupported('Functions decorators require explicit keyword bindings.', at)
+      const key = safeKey(text(arguments_[i], path), at)
+      if (own(kwargs, key)) unsupported('Repeated decorator argument.', at)
+      kwargs[key] = expr(arguments_[i + 2], path)
+    }
+    return { kind: 'call', callee, args: [], kwargs, loc: at }
+  }
+  function registerHandlers() {
+    const names = new Set()
+    for (const [id, definition] of definitions) {
+      if (!definition.decorators?.length) continue
+      const env = modules.get(definition.path), binding = { functionName: definition.name, functionId: id, path: definition.path }
+      let trigger = false, named = false
+      for (const decorator of definition.decorators) {
+        const target = infer(decorator.callee, env, definition.path)
+        if (target.type !== 'callable' || !['functionapp.function_name', 'functionapp.service_bus_queue_trigger', 'functionapp.event_grid_trigger'].includes(target.name)) unsupported('Only supported Functions v2 decorators are allowed.', decorator.loc)
+        const [parameters, required] = SDK_SIGNATURES[target.name]
+        const values = Object.fromEntries(Object.entries(decorator.kwargs).map(([key, value]) => {
+          const result = infer(value, env, definition.path)
+          if (result.type !== 'data' || typeof result.constant !== 'string' || !result.constant) unsupported('Decorator bindings require resolved nonempty string constants.', value.loc)
+          return [key, result.constant]
+        }))
+        const args = bindArguments(parameters, required, [], values, decorator.loc)
+        if (target.name === 'functionapp.function_name') {
+          if (named) unsupported('Repeated function_name decorator.', decorator.loc)
+          named = true; binding.functionName = args.name
+        } else {
+          if (trigger) unsupported('A Function requires exactly one trigger.', decorator.loc)
+          trigger = true; binding.kind = target.name === 'functionapp.event_grid_trigger' ? 'eventgrid' : 'servicebus'
+          binding.argName = args.arg_name
+          if (binding.kind === 'servicebus') { binding.queueName = args.queue_name; binding.connection = args.connection }
+        }
+      }
+      if (!trigger || !/^[A-Za-z][A-Za-z0-9_]*$/.test(binding.functionName) || names.has(binding.functionName.toLowerCase())) unsupported('Missing trigger or duplicate/invalid Function registration.', loc(definition.node, definition.path))
+      names.add(binding.functionName.toLowerCase())
+      analyzeFunction(id, [typed(binding.kind === 'servicebus' ? 'functionmessage' : 'functionevent')], {}, loc(definition.node, definition.path))
+      const fn = program.functions[id]
+      if (fn.params.length !== 1 || fn.params[0] !== binding.argName || fn.annotations[binding.argName]?.type !== `${binding.kind === 'servicebus' ? 'functionmessage' : 'functionevent'}Type`) unsupported('Trigger argument and supported Functions annotation must match the handler parameter.', fn.loc)
+      if (program.handlers.length >= 50) throw messagingError('MESSAGING_LIMIT', 'A host supports at most 50 registered handlers.', fn.loc)
+      program.handlers.push(binding)
+    }
+    if (!program.handlers.length) unsupported('The Functions entry must register a supported v2 trigger.')
+  }
   function loadModule(path) {
     if (loading.has(path)) unsupported('Circular local imports are unsupported.', { path, line: 1, column: 1 })
     if (modules.has(path)) return modules.get(path)
@@ -371,14 +445,17 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     loading.add(path)
     const env = new Map(); modules.set(path, env); program.sourcePaths.push(path)
     program.imports[path] = []; program.globals[path] = []
-    for (const node of children(root)) {
-      if (node.name === 'FunctionDefinition') {
+    for (const top of children(root)) {
+      const node = top.name === 'DecoratedStatement' ? children(top).find(n => n.name === 'FunctionDefinition') : top
+      if (node?.name === 'FunctionDefinition') {
+        if (top.name === 'DecoratedStatement' && mode !== 'functions') unsupported('Decorators require Functions host mode.', loc(top, path))
         const nameNode = children(node).find(n => n.name === 'VariableName'), name = safeKey(text(nameNode, path), loc(nameNode, path)), id = `${path}:${name}`
-        definitions.set(id, { name, node, path }); env.set(name, { type: 'function', id })
+        if (definitions.has(id)) unsupported('Duplicate function definition.', loc(node, path))
+        definitions.set(id, { name, node, path, decorators: top.name === 'DecoratedStatement' ? children(top).filter(n => n.name === 'Decorator').map(n => lowerDecorator(n, path)) : [] }); env.set(name, { type: 'function', id })
       }
     }
     for (const node of children(root)) {
-      if (node.name === 'FunctionDefinition') continue
+      if (['FunctionDefinition', 'DecoratedStatement'].includes(node.name)) continue
       if (node.name === 'ImportStatement') {
         for (const item of imports(node, path)) { env.set(item.alias, importedType(item)); program.imports[path].push(item) }
       } else {
@@ -393,9 +470,11 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     return env
   }
   try {
-    if (!['script', 'eventgrid-handler'].includes(mode)) unsupported(`Mode '${mode}' is not supported by the messaging adapter.`)
+    if (!['script', 'eventgrid-handler', 'functions'].includes(mode)) unsupported(`Mode '${mode}' is not supported by the messaging adapter.`)
     for (const [path, expected] of Object.entries(fixedFiles)) if (!own(files, path) || files[path] !== expected) throw messagingError('MESSAGING_CONFIG', 'Protected scaffold content was changed or removed.', { path, line: 1, column: 1 })
-    const env = loadModule(entry), main = env.get(mode === 'eventgrid-handler' ? 'handle_event' : 'main')
+    const env = loadModule(entry)
+    if (mode === 'functions') { registerHandlers(); return { program, diagnostics: [] } }
+    const main = env.get(mode === 'eventgrid-handler' ? 'handle_event' : 'main')
     if (main?.type !== 'function') unsupported(`The entry must define ${mode === 'eventgrid-handler' ? 'handle_event(event)' : 'main()'}.`)
     analyzeFunction(main.id, mode === 'eventgrid-handler' ? [typed('event')] : [], {}, { path: entry, line: 1, column: 1 })
     program.main = main.id

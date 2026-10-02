@@ -2,6 +2,7 @@ import { applyServiceBusOperation } from './servicebus.js'
 import { applyEventGridOperation, getEventGridDelivery, validateEventGridWebhookRegistration } from './eventgrid.js'
 import { validateMessagingState, finiteJson } from './state.js'
 import { SDK_SIGNATURES, SDK_EXPORTS, bindArguments, messagingError, safeKey } from './python.js'
+import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const clone = value => JSON.parse(JSON.stringify(value))
@@ -126,6 +127,14 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       if (name === 'body') return handle('bytes', { value: object.record.body })
       if (own(metadata, name)) return clone(object.record[metadata[name]])
     }
+    if (object.type === 'functionmessage') {
+      const metadata = { message_id: 'messageId', delivery_count: 'deliveryCount', application_properties: 'properties' }
+      if (own(metadata, name)) return jsonValue(object.record[metadata[name]], loc)
+    }
+    if (object.type === 'functionevent') {
+      const metadata = { id: 'id', subject: 'subject', event_type: 'eventType', data_version: 'dataVersion' }
+      if (own(metadata, name)) return jsonValue(object.event[metadata[name]], loc)
+    }
     if (object.type === 'event') {
       const metadata = { id: 'id', data: 'data', subject: 'subject', event_type: 'eventType', data_version: 'dataVersion' }
       if (own(metadata, name)) return jsonValue(object.event[metadata[name]], loc)
@@ -171,6 +180,64 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     } catch (error) { current = before; trace.length = traceCount; throw error }
     finally { activeDelivery = previousDelivery }
   }
+  function hostFunctions(loc) {
+    if (!program.host || !Array.isArray(program.handlers) || !program.handlers.length) fail('A Functions host requires validated app/binding registration.', loc, 'MESSAGING_CONFIG')
+    // Validate all reachable constructed dependencies before the first receive.
+    for (const path of Object.keys(program.globals)) initialize(path)
+    const handlerFailure = error => {
+      if (error.diagnostic?.code !== 'MESSAGING_RUNTIME') throw error
+      diagnostics.push(error.diagnostic)
+      if (diagnostics.length > maximumTraces) fail('Function failure output exceeds the bounded buffer.', loc, 'MESSAGING_LIMIT')
+    }
+    let attempts = 0
+    for (const binding of program.host.bindings) {
+      const receiverId = `functions-${current.nextId}-${++receiverSequence}`
+      while (true) {
+        tick(loc)
+        const records = broker({ kind: 'receive', target: binding.target, receiverId, count: 1 }, loc)
+        if (!records.length) break
+        const record = records[0]
+        let successful = false
+        try {
+          invoke(binding.functionId, [handle('functionmessage', { record })], {}, program.functions[binding.functionId].loc)
+          successful = true
+        } catch (error) { handlerFailure(error) }
+        broker({ kind: successful ? 'complete' : 'abandon', target: binding.target, receiverId, lockToken: record.lockToken }, loc)
+        attempts++
+      }
+    }
+    eventGrid({ kind: 'advance', milliseconds: 0 }, loc)
+    while (true) {
+      tick(loc)
+      const pending = (current.eventGrid?.deliveries ?? []).filter(record => ['pending', 'retrying'].includes(record.status) && record.endpointType === 'AzureFunction'
+        && record.endpoint.slice(0, record.endpoint.toLowerCase().lastIndexOf('/functions/')).toLowerCase() === program.host.appId)
+      if (!pending.length) return attempts
+      const due = pending.filter(record => record.nextAttemptAtMs <= current.timeMs)
+      if (!due.length) {
+        const nextTime = Math.min(...pending.map(record => Math.min(record.nextAttemptAtMs, record.expiresAtMs)))
+        eventGrid({ kind: 'advance', milliseconds: nextTime - current.timeMs }, loc)
+        continue
+      }
+      for (const selected of due) {
+        let record
+        try { record = getEventGridDelivery(current, sandbox, selected.id) }
+        catch (error) { fail(error.message, loc, error.messagingCode ?? 'MESSAGING_CONFIG') }
+        const endpoint = parseEventGridFunctionEndpoint(record.endpoint)
+        const handler = program.handlers.find(handler => handler.kind === 'eventgrid' && handler.functionName.toLowerCase() === endpoint?.functionName.toLowerCase())
+        if (!handler) fail('Delivery requires the actual registered AzureFunction target.', loc, 'MESSAGING_CONFIG')
+        const previousDelivery = activeDelivery
+        activeDelivery = record
+        let successful = false
+        try {
+          invoke(handler.functionId, [handle('functionevent', { event: clone(record.event) })], {}, program.functions[handler.functionId].loc)
+          successful = true
+        } catch (error) { handlerFailure(error) }
+        finally { activeDelivery = previousDelivery }
+        eventGrid({ kind: 'deliver', deliveryId: record.id, status: successful ? 200 : 500 }, loc)
+        attempts++
+      }
+    }
+  }
   function namespace(endpoint, loc) {
     if (typeof endpoint !== 'string') fail('Supply a Service Bus fully qualified namespace.', loc, 'MESSAGING_CONFIG')
     const matches = (sandbox?.namespaces ?? []).filter(ns => `${ns.name}.servicebus.windows.net`.toLowerCase() === endpoint.toLowerCase())
@@ -205,6 +272,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const { name, owner } = functionInfo, [names, required] = SDK_SIGNATURES[name]
     const a = bindArguments(names, required, args, kwargs, loc)
     if (name === 'DefaultAzureCredential') return handle('credential')
+    if (name === 'FunctionApp') return handle('functionapp')
+    if (name === 'functionmessage.get_body') return handle('bytes', { value: info(owner).record.body })
+    if (name === 'functionevent.get_json') return jsonValue(info(owner).event.data, loc)
     if (name === 'EventGridPublisherClient') {
       if (info(a.credential)?.type !== 'credential') fail('Use the simulated DefaultAzureCredential identity.', loc, 'MESSAGING_CONFIG')
       const topics = (sandbox.eventGridTopics ?? []).filter(topic => `https://${topic.name}.${topic.location}-1.eventgrid.azure.net/api/events`.toLowerCase() === String(a.endpoint).toLowerCase())
@@ -362,6 +432,10 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         if (node.op === 'or') return truth(left) ? left : evaluate(node.right, env)
         const right = evaluate(node.right, env)
         if (node.op === '+') {
+          if (typeof left === 'string' && typeof right === 'string') {
+            const budget = { bytes: 0 }; chargeString(budget, left, node.loc); chargeString(budget, right, node.loc)
+            return left + right
+          }
           if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(left + right)) fail('Addition requires safe integers.', node.loc)
           return left + right
         }
@@ -444,6 +518,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (own(SDK_EXPORTS, item.module)) {
       if (!item.name) return handle('module', { module: item.module.startsWith(`${item.alias}.`) ? item.alias : item.module })
       if (!SDK_EXPORTS[item.module].includes(item.name)) fail('Unsupported import.', item.loc, 'MESSAGING_UNSUPPORTED')
+      if (item.module === 'azure.functions' && item.name !== 'FunctionApp') return handle(item.name === 'ServiceBusMessage' ? 'functionmessageType' : 'functioneventType')
       if (item.name === 'ServiceBusSubQueue') return handle('subqueue')
       return callable(item.module === 'json' ? `json.${item.name}` : item.name)
     }
@@ -467,7 +542,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (input.handlerStatus !== undefined && (!input.handlerStatus || typeof input.handlerStatus !== 'object' || Array.isArray(input.handlerStatus)
       || Object.values(input.handlerStatus).some(status => Array.isArray(status) ? status.length < 1 || status.length > 30 || !status.every(httpStatus) : !httpStatus(status)))) fail('Handler fixture outcomes must be integer HTTP statuses or 1-30 status sequences.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
     if (input.eventGridHandlers !== undefined && !validateEventGridWebhookRegistration(sandbox, input.eventGridHandlers)) fail('Training webhook registrations must resolve actual WebHook subscriptions and bounded source paths.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
-    value = program.mode === 'eventgrid-handler'
+    value = program.mode === 'functions' ? hostFunctions({ path: program.entry, line: 1, column: 1 }) : program.mode === 'eventgrid-handler'
       ? deliverEvent(input.deliveryId, program.main, { path: program.entry, line: 1, column: 1 })
       : invoke(program.main, [], {}, { path: program.entry, line: 1, column: 1 })
     // The public result is JSON-only; receipt/client closures never escape.
