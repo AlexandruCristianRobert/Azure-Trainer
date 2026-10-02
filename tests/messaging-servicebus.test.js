@@ -206,7 +206,7 @@ describe('bounded Service Bus lifecycle', () => {
     expect(validateBehavioralRun(legacy, base)).toBe(legacy)
     const lab = { ...base, capabilities: { messaging: true } }
     const run = createBehavioralRun(lab, { attemptId: 'messaging' })
-    expect(run.runtime.messaging).toEqual({ version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {} })
+    expect(run.runtime.messaging).toEqual({ version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {}, executionReceipts: [] })
     run.runtime.messaging.nextId = -1
     expect(() => validateBehavioralRun(run, lab)).toThrow(/messaging/i)
     delete run.runtime.messaging
@@ -256,7 +256,7 @@ describe('bounded Service Bus lifecycle', () => {
     expect(state.deliveries).toHaveLength(500)
     expect(state.deliveries[0].id).toBe('trace-6')
     expect(validateMessagingState(JSON.parse(JSON.stringify(state)))).toBe(true)
-    expect(original).toEqual({ version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {} })
+    expect(original).toEqual({ version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {}, executionReceipts: [] })
   })
 
   it('rejects active or expired persisted messages in the deadletter subqueue', () => {

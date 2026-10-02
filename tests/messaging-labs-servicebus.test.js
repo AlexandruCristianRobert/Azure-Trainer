@@ -103,7 +103,7 @@ def main():
   })
   it('appends the independent simulated labs to the catalog in journey order', () => {
     expect(SERVICEBUS_FOUNDATION_LABS.map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
-    expect(LABS.slice(-3).map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
+    expect(LABS.filter(lab => SERVICEBUS_FOUNDATION_LABS.includes(lab)).map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
   })
 })
 

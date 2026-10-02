@@ -11,7 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:messaging": "vitest run tests/messaging-rationale.test.js tests/messaging-servicebus.test.js tests/messaging-python.test.js tests/messaging-eventgrid.test.js tests/messaging-functions.test.js tests/messaging-engine.test.js tests/messaging-labs-servicebus.test.js tests/messaging-labs-eventgrid.test.js tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js tests/messaging-catalog.test.js"
   },
   "dependencies": {
     "@lezer/python": "1.1.19",

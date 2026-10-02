@@ -32,6 +32,8 @@ jobs:
         run: npm ci
       - name: Run focused Data checks
         run: npm test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js
+      - name: Run focused Messaging checks
+        run: npm run test:messaging
       - name: Build for project Pages path
         run: npm run build -- --base=/Azure-Trainer/
       - name: Configure Pages

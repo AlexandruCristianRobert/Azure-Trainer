@@ -325,3 +325,24 @@ Base dd5524f. Supplied reviewer read-only probe **0.2894908 seconds**, already r
 | 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0411016 |
 
 Two test invocations **5.5457470 seconds**, static **0.0411016 seconds**, combined **5.5868486 seconds**. New cumulative **300.6326850 seconds (5.01054475 minutes)** including the supplied review probe. No executable diagnostic beyond supplied review; no Capstone rerun. Full raw GREEN/fix rationale appended to ignored task-10-report.md. Task11 aggregate/legacy checks and controller static resolution of unchanged binding/configuration constants remain separately owned.
+
+### Task 11: aggregate catalog and focused release checks
+
+Starting cumulative **300.6326850 seconds**. Catalog RED confirmed only orders 1–3 registered. Integrated all twelve exactly once, retained legacy exports and focused Data CI command, added the exact eleven-file Messaging script and minimal existing Home title/description. First aggregate found two stale strict empty-state literals in the Service Bus owning test, omitting reviewed Task6 `executionReceipts: []`. Aligned only those expected literals, preserving the strict oracle; no shared API/runtime rewrite. Ran the owning file before the one final aggregate. No agents, merge, push, publication, full suite, AKS/Container Apps, cloud or broad browser checks.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Catalog RED | npm test -- tests/messaging-catalog.test.js | 3 failed as expected: order/count/navigation stop after foundation3 | 1 | 3.2214364 |
+| 2026-10-02 | First aggregate | npm run test:messaging | 206 passed /2 failed; stale strict empty-state expectations, Service Bus owning file only | 1 | 3.8723491 |
+| 2026-10-02 | Owning fixture GREEN | npm test -- tests/messaging-servicebus.test.js | 20 passed; strict empty state includes actual empty journal | 0 | 3.2111420 |
+| 2026-10-02 | Final aggregate GREEN | npm run test:messaging | 11 files /208 tests passed, no warnings | 0 | 4.0858762 |
+| 2026-10-02 | Retained Data integration | npm test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js | 2 files /21 tests passed, no warnings | 0 | 3.8597308 |
+| 2026-10-02 | Pages-path production build | npm run build -- --base=/Azure-Trainer/ | 600 modules; success, index chunk 2748.36kB/gzip749.38kB; Vite >500kB warning | 0 | 5.9780497 |
+| 2026-10-02 | Pages CI | configured focused Data + Messaging + build | NOT RUN; pending integration/publication direction | — | NOT RUN |
+| 2026-10-02 | Deployment | GitHub Pages upload/deploy | NOT RUN; no push/merge/publication | — | NOT RUN |
+
+Five test invocations **18.2505345 seconds** plus one build **5.9780497 seconds** = **24.2285842 seconds** before the final static whitespace check. No executable diagnostic probes beyond the listed runs; ordinary source/skill/report/diff/status reads (including failed path lookups) were inspection, not test/runtime probes. Full fresh stdout and the twelve-Lab status checklist are in ignored `task-11-report.md`. Controller whole-branch review is separately owned.
+
+Final `git diff --check`: exit 0, **0.0430921 seconds**, no whitespace errors, existing Windows LF/CRLF notices only. Task11 combined **24.2716763 seconds**; new cumulative **324.9043613 seconds (5.41507269 minutes)**. CI/deployment remain **NOT RUN**, with no invented duration. Local branch readiness is verified; whole-branch review/integration/publication remain separately pending.
+
+After explicitly staging the ten scoped files (including new docs/catalog test), `git diff --cached --check` also exited 0 with no output, **0.0341313 seconds**. Two static checks total **0.0772234 seconds**. Final Task11 combined **24.3058076 seconds**, final cumulative **324.9384926 seconds (5.41564154 minutes)**. No additional test, build or runtime diagnostic.

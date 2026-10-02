@@ -2,7 +2,7 @@
 
 Date: 2026-10-02
 
-Status: written specification approved by the user on 2026-10-02; implementation planning authorized. This document is not an implementation plan and does not authorize product implementation or publication.
+Status: implemented and locally verified on branch `codex/messaging-orders` on 2026-10-02; not published. All twelve Labs are registered, the focused Messaging checks pass (208 tests), the retained focused Data checks pass (21 tests), and the production Pages-path build succeeds. The build reports its large-chunk warning. Controller-owned whole-branch review and the user's integration/publication decision remain pending; CI and deployment have not run. See [simulator contract](../../messaging-simulator.md) and [verification log](../plans/2026-10-02-messaging-verification-log.md). The original written specification was approved by the user on 2026-10-02, who subsequently authorized implementation through the selected subagent workflow. This status does not authorize merge, push or publication.
 
 ## Purpose and success criteria
 
@@ -100,7 +100,7 @@ Track cumulative test time per Lab publication, including reruns and CI. Aim com
 
 ## Acceptance and next gate
 
-The written design is ready for user review when it preserves all agreed scope and assistance decisions, distinguishes new runtime work from existing configuration-only capabilities, and defines truthful behavior/error/grading boundaries. After written-spec approval, use Superpowers writing-plans to produce the detailed implementation plan and its supported execution contract. Product implementation begins only after that plan is reviewed and an execution method is selected.
+The original design/planning gates were completed and the user selected subagent implementation. The twelve-Lab branch now has the focused local verification recorded above. The remaining gate is controller-owned whole-branch review followed by an explicit integration/publication decision. Local verification is not a live release; CI and deployment results and elapsed time must be recorded only when those checks actually run.
 
 ## Grounding
 
