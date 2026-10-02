@@ -10,8 +10,9 @@ const subscriptionsReady = ({ sandbox }) => {
   const eu = subscriptions.find(row => row.name === 'eu-orders'), all = subscriptions.find(row => row.name === 'all-orders')
   return ordersNamespace(sandbox)?.sku === 'Standard' && topic(sandbox)?.status === 'Active'
     && eu?.status === 'Active' && all?.status === 'Active'
-    && eu.rules.length === 1 && eu.rules[0].filterType === 'SqlFilter' && eu.rules[0].sqlExpression === "region = 'EU'"
-    && all.rules.length === 1 && all.rules[0].name === '$Default'
+    && eu.rules.length === 1 && eu.rules[0].name === 'eu' && eu.rules[0].filterType === 'SqlFilter' && eu.rules[0].sqlExpression === "region = 'EU'"
+    && all.rules.length === 1 && all.rules[0].name === '$Default' && all.rules[0].filterType === 'SqlFilter'
+    && typeof all.rules[0].sqlExpression === 'string' && /^1\s*=\s*1$/.test(all.rules[0].sqlExpression.trim())
 }
 const scope = '--resource-group rg-messaging --namespace-name sb-orders'
 const configure = messagingTask({ id: 'configure-order-subscriptions',

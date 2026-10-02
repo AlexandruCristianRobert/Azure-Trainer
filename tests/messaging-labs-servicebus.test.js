@@ -173,6 +173,24 @@ describe('advanced Service Bus curriculum', () => {
     expect(rows(run).every(row => row.status === 'completed')).toBe(true)
     expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
   })
+  it.each([
+    ['eu-orders', ['delete --name eu', "create --name '$Default' --filter-type SqlFilter --filter-sql-expression \"region = 'EU'\""], '$Default'],
+    ['all-orders', ["create --name '$Default' --filter-type SqlFilter --filter-sql-expression \"region = 'EU'\""], '$Default'],
+  ])('advanced topic configuration rejects incorrect %s default-rule semantics', (subscription, mutations, name) => {
+    const lab = labAt(1), configure = lab.tasks[0]
+    let run = createBehavioralRun(lab, { attemptId: `advanced-rule-${subscription}` })
+    const execute = line => {
+      const result = applyRunAction(run, { type: 'command', line }, lab)
+      expect(result.lines.filter(row => row.kind === 'err')).toEqual([])
+      run = result.run
+    }
+    for (const step of configure.solution.steps) execute(step.line)
+    expect(evaluateLab(lab, run).tasks[0].done).toBe(true)
+    for (const mutation of mutations) execute(`az servicebus topic subscription rule ${mutation} --resource-group rg-messaging --namespace-name sb-orders --topic-name order-work --subscription-name ${subscription}`)
+    const actual = run.sandbox.namespaces.find(row => row.name === 'sb-orders').topics.find(row => row.name === 'order-work').subscriptions.find(row => row.name === subscription)
+    expect(actual.rules.map(rule => [rule.name, rule.filterType, rule.sqlExpression])).toEqual([[name, 'SqlFilter', "region = 'EU'"]])
+    expect(evaluateLab(lab, run).tasks[0].done).toBe(false)
+  })
   it('advanced idempotency rejects work before the processed guard even though the marker is idempotent', () => {
     const lab = labAt(0)
     const source = lab.tasks.at(-1).solution.steps[0].content.replace('            if not was_processed(order["id"]):\n                perform_order_work(order)', '            perform_order_work(order)\n            if not was_processed(order["id"]):')

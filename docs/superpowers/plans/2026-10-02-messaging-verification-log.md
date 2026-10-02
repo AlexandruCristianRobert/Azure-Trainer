@@ -239,3 +239,15 @@ Controller-authorized command only: `npm test -- tests/messaging-labs-servicebus
 | 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; existing Git LF/CRLF notices only | 0 | 0.0427380 |
 
 Task8 tests **16.2497494 seconds**, static **0.0427380 seconds**, combined **16.2924874 seconds**. Final cumulative **221.7395856 seconds (3.69565976 minutes)**. Ordinary source/context/diff reads were not execution probes. Detailed RED and full final stdout live in ignored task-8-report.md. Catalog integration is explicitly Task11-owned; advanced Labs export is ready for that aggregation. Controller-deferred minor state.js malformed null-trace guard remains final-review work.
+
+### Task 8 fix round 1: require correct topic rule state
+
+Review performed no tests/probes: **0 seconds**. Starting cumulative **221.7395856 seconds**. Only topic configuration predicate, its advanced mutation cases, and this log changed. No runtime/causal/helper/catalog changes or broader checks.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Configuration RED | npm test -- tests/messaging-labs-servicebus.test.js -t advanced | Tests2 failed /8 passed /7 skipped; EU-filtered $Default and EU-only all-orders default incorrectly completed configure Task; bodies154ms; Vitest2.48s | 1 | 3.5959312 |
+| 2026-10-02 | Final GREEN | npm test -- tests/messaging-labs-servicebus.test.js -t advanced | Tests10 passed /7 skipped; bodies170ms; Vitest2.40s; stdout pristine | 0 | 3.3212687 |
+| 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; existing Git LF/CRLF notices only | 0 | 0.0487655 |
+
+Fix tests **6.9171999 seconds**, static **0.0487655 seconds**, combined **6.9659654 seconds**. Final cumulative **228.7055510 seconds (3.8117591833 minutes)**. Whole-invocation PowerShell Stopwatch measurements; full RED/GREEN stdout appended to ignored task-8-report.md. No agents/full/aggregate/foundation/AKS/Container Apps/legacy/cloud/browser/build/load/performance checks, merge/push/publication. Review CannotVerify items remain assigned to owning Tasks1/3/6 and later Tasks9–11; no cross-scope compatibility claim.
