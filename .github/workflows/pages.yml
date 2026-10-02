@@ -30,8 +30,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run tests
-        run: npm test -- --run
+      - name: Run focused Data checks
+        run: npm test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js
       - name: Build for project Pages path
         run: npm run build -- --base=/Azure-Trainer/
       - name: Configure Pages

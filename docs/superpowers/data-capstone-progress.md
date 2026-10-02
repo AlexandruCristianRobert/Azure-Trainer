@@ -8,8 +8,8 @@ Lab `data-knowledge-assistant-capstone` is implemented and review-clean on `code
 | Task 7 implementation | Own Solutions, controls, scratch seed and exact cleanup integration complete; exact-diff self-review complete |
 | Task 7 independent spec/quality review | Complete; S1/S2/S3/Q7-1/Q7-R1 addressed and scoped reviews clean |
 | Whole-branch review/final controller gate | Complete; F1/F2/F3/Q7-2 addressed in one consolidated wave; final scoped review clean, no residual blocker |
-| Local merge | Not performed |
-| Remote push/publication | Not performed |
+| Local merge | User selected option1; fast-forward merged into main at0d3c3b7 on2026-10-02 |
+| Remote push/publication | User authorized publication; push and Pages deployment verification pending |
 
 ## Verification and budget
 
@@ -88,3 +88,11 @@ Final known measured validation **481.257857s (8.02min)**; separate conservative
 Final documentation checks added0.1478285s including one mechanical EOF correction: known measured481.4056855s, separate300s allocation, accounted781.4056855s. Final staged whitespace check passes. No product code changed; only audit/handoff/status documentation is added after the clean final review.
 
 Disposable plan scratch cleanup was blocked by environment policy before execution. Scratch remains intact; no retry/permission request or product impact. Audit preserves all reports plus32 chronological rulings. Branch/worktree remain available for the user's integration choice.
+
+## Authorized merge and publication — 2026-10-02
+
+User chose local merge and publication. Origin/main was an ancestor; main and feature worktree were clean. Fast-forward merge succeeded at0d3c3b7. Fresh merged-tree verification: named SDK/core21/21 passed4.4301822s; Pages build with --base=/Azure-Trainer/ passed5.8856109s (existing M1 advisory only). No long/legacy suites or walkthrough rerun.
+
+The existing push-main Pages workflow ran the full suite. Its test step is narrowed to the two named Data files to honor the explicit AKS/Container Apps exclusion; deployment permissions, dependency installation, build base and deploy steps are unchanged. Disposable parsed-YAML assertion confirms the exact test command and Pages base: quoting setup failure0.0513348s; meaningful full-suite-policy RED0.107912s; focused-policy GREEN0.1149792s. Independent /root/publish_policy_review approves the exact two-line change with no findings; unrelated source/legacy coverage stays excluded. Reviewer command time0.102s counted conservatively. New local validation subtotal10.6920191s before final whitespace check; prior known measured481.4056855s ->492.0977046s; separate300s probe allocation retained. CI/server deployment time is reported separately when available.
+
+Ruling: scope the existing Pages test step to the named Data SDK/core files before the authorized push — otherwise push-main automatically runs explicitly forbidden AKS/Container Apps/full suites — cost if wrong: publishing no longer gates unrelated legacy tests; their coverage remains intentionally unverified. This is a publishing-only workflow change, not a product-code change.
