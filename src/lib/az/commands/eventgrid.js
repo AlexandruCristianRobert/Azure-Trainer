@@ -9,8 +9,13 @@ const TOPIC = { name: '--topic-name', aliases: [], required: true, kind: 'string
 const INPUT_SCHEMA = { name: '--input-schema', aliases: [], required: false, kind: 'string', choices: ['eventgridschema'], dest: 'inputSchema', help: 'Topic input schema. Only eventgridschema is supported.', defaultValue: 'eventgridschema' }
 const ENDPOINT = { name: '--endpoint', aliases: [], required: true, kind: 'string', dest: 'endpoint', help: 'HTTPS WebHook endpoint URL.' }
 const ENDPOINT_UPDATE = { ...ENDPOINT, required: false }
-const ENDPOINT_TYPE = { name: '--endpoint-type', aliases: [], required: false, kind: 'string', choices: ['webhook'], dest: 'endpointType', help: 'Event subscription endpoint type.', defaultValue: 'webhook' }
-const UPDATE_ENDPOINT_TYPE = { name: '--update-endpoint-type', aliases: [], required: false, kind: 'string', choices: ['webhook'], dest: 'endpointType', help: 'Event subscription endpoint type to update.' }
+const ENDPOINT_TYPE = { name: '--endpoint-type', aliases: [], required: false, kind: 'string', choices: ['webhook', 'azurefunction'], dest: 'endpointType', help: 'Event subscription endpoint type.', defaultValue: 'webhook' }
+const UPDATE_ENDPOINT_TYPE = { name: '--update-endpoint-type', aliases: [], required: false, kind: 'string', choices: ['webhook', 'azurefunction'], dest: 'endpointType', help: 'Event subscription endpoint type to update.' }
+const RECOVERY = [
+  { name: '--max-delivery-attempts', aliases: [], required: false, kind: 'int', dest: 'maxDeliveryAttempts', help: 'Maximum delivery attempts (1-30).' },
+  { name: '--event-ttl', aliases: [], required: false, kind: 'int', dest: 'eventTimeToLiveInMinutes', help: 'Event TTL in minutes (1-1440).' },
+  { name: '--deadletter-endpoint', aliases: [], required: false, kind: 'string', dest: 'deadLetterDestination', help: 'Prepared storage blob container ARM resource ID.' },
+]
 const INCLUDED_EVENT_TYPES = { name: '--included-event-types', aliases: [], required: false, kind: 'raw', dest: 'includedEventTypes', help: 'Space-separated event types. Omit values or use All for all event types.' }
 const SUBJECT_BEGINS_WITH = { name: '--subject-begins-with', aliases: [], required: false, kind: 'string', dest: 'subjectBeginsWith', allowEmpty: true, help: 'Literal subject prefix filter. Pass "" to clear it.' }
 const SUBJECT_ENDS_WITH = { name: '--subject-ends-with', aliases: [], required: false, kind: 'string', dest: 'subjectEndsWith', allowEmpty: true, help: 'Literal subject suffix filter. Pass "" to clear it.' }
@@ -31,24 +36,24 @@ function topicContext(sandbox, values) {
 const eventSubscriptionGroup = defineGroup(['eventgrid', 'topic', 'event-subscription'], 'Manage Event Grid topic event subscriptions.', {
   create: defineCommand(['eventgrid', 'topic', 'event-subscription', 'create'], 'Create an Event Grid event subscription.', {
     latencyMs: LATENCY.mutate,
-    args: [SUBSCRIPTION_NAME, ARG.resourceGroup, TOPIC, ENDPOINT, ENDPOINT_TYPE, INCLUDED_EVENT_TYPES, SUBJECT_BEGINS_WITH, SUBJECT_ENDS_WITH, SUBJECT_CASE_SENSITIVE],
+    args: [SUBSCRIPTION_NAME, ARG.resourceGroup, TOPIC, ENDPOINT, ENDPOINT_TYPE, INCLUDED_EVENT_TYPES, SUBJECT_BEGINS_WITH, SUBJECT_ENDS_WITH, SUBJECT_CASE_SENSITIVE, ...RECOVERY],
     run: ({ sandbox }, values) => {
       const topic = topicContext(sandbox, values)
       const existed = topic.eventSubscriptions.some((resource) => resource.name.toLowerCase() === values.name.toLowerCase())
       const { sandbox: next, resource, topic: storedTopic } = eventGrid.createEventGridSubscription(sandbox, {
         ...values,
-        endpointType: values.endpointType === undefined ? undefined : 'WebHook',
+        endpointType: values.endpointType === undefined ? undefined : values.endpointType === 'azurefunction' ? 'AzureFunction' : 'WebHook',
       })
       return { sandbox: next, output: presentEventGridSubscription(resource, storedTopic), events: [subscriptionEvent(existed ? 'updated' : 'created', storedTopic, resource)] }
     },
   }),
   update: defineCommand(['eventgrid', 'topic', 'event-subscription', 'update'], 'Update an Event Grid event subscription.', {
     latencyMs: LATENCY.mutate,
-    args: [SUBSCRIPTION_NAME, ARG.resourceGroup, TOPIC, ENDPOINT_UPDATE, UPDATE_ENDPOINT_TYPE, INCLUDED_EVENT_TYPES, SUBJECT_BEGINS_WITH, SUBJECT_ENDS_WITH],
+    args: [SUBSCRIPTION_NAME, ARG.resourceGroup, TOPIC, ENDPOINT_UPDATE, UPDATE_ENDPOINT_TYPE, INCLUDED_EVENT_TYPES, SUBJECT_BEGINS_WITH, SUBJECT_ENDS_WITH, ...RECOVERY],
     run: ({ sandbox }, values) => {
       const { sandbox: next, resource, topic } = eventGrid.updateEventGridSubscription(sandbox, {
         ...values,
-        endpointType: values.endpointType === undefined ? undefined : 'WebHook',
+        endpointType: values.endpointType === undefined ? undefined : values.endpointType === 'azurefunction' ? 'AzureFunction' : 'WebHook',
       })
       return { sandbox: next, output: presentEventGridSubscription(resource, topic), events: [subscriptionEvent('updated', topic, resource)] }
     },

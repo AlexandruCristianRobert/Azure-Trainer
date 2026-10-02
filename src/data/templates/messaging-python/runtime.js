@@ -27,5 +27,11 @@ def record_notification(event_id, order_id):
 
 def handler_status(order_id):
     return 200
+
+def deliver_events(handler):
+    """Trainer-only callback bridge. No webhook deployment or real SDK delivery API.
+    Drains registered deliveries/retries using logical ticks and the actual callable.
+    """
+    pass
 `,
 })

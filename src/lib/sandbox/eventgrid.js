@@ -1,8 +1,8 @@
-import { cloneSandbox, nowIso } from './model.js'
+import { cloneSandbox, nowIso, SUBSCRIPTION_ID } from './model.js'
 import { normalizeLocation } from './locations.js'
 import { AzError } from './errors.js'
 import { getResourceGroup } from './ops.js'
-import { isValidEventGridWebhookEndpoint } from './eventgrid-validation.js'
+import { isValidEventGridWebhookEndpoint, validRetryValue, resolveEventGridFunction, resolveEventGridDeadLetter } from './eventgrid-validation.js'
 
 const TOPIC_NAME_RE = /^(?=.{3,50}$)[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]$/
 const SUBSCRIPTION_NAME_RE = /^(?=.{3,64}$)[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]$/
@@ -45,15 +45,33 @@ function requireInputSchema(inputSchema) {
 }
 
 function requireEndpointType(endpointType) {
-  if (endpointType !== 'WebHook') {
-    throw new AzError('InvalidArgumentValue', `Only WebHook endpoint type is supported in the Sandbox; received '${endpointType}'.`, { kind: 'cli' })
+  if (!['WebHook', 'AzureFunction'].includes(endpointType)) {
+    throw new AzError('InvalidArgumentValue', `Supported endpoint types are WebHook and AzureFunction; received '${endpointType}'.`, { kind: 'cli' })
   }
 }
 
-function requireEndpoint(endpoint) {
-  if (!isValidEventGridWebhookEndpoint(endpoint)) {
+function requireEndpoint(endpoint, endpointType, sandbox) {
+  if (endpointType === 'AzureFunction') {
+    if (!resolveEventGridFunction(sandbox, endpoint, SUBSCRIPTION_ID)) throw new AzError('InvalidArgumentValue', 'AzureFunction endpoint must resolve to an existing Function App and a /functions/name ARM resource path.', { kind: 'cli' })
+  } else if (!isValidEventGridWebhookEndpoint(endpoint)) {
     throw new AzError('InvalidArgumentValue', `Webhook endpoint '${endpoint}' is invalid. Use an HTTPS URL without userinfo, query string or fragment.`, { kind: 'cli' })
   }
+}
+
+function recoveryFor(sandbox, values) {
+  const fields = {}
+  for (const [field, maximum] of [['maxDeliveryAttempts', 30], ['eventTimeToLiveInMinutes', 1440]]) {
+    if (values[field] === undefined) continue
+    if (!validRetryValue(values[field], maximum)) throw new AzError('InvalidArgumentValue', `${field} must be an integer between 1 and ${maximum}.`, { kind: 'cli' })
+    fields[field] = values[field]
+  }
+  if (values.deadLetterDestination !== undefined) {
+    const resolved = resolveEventGridDeadLetter(sandbox, values.deadLetterDestination, SUBSCRIPTION_ID)
+    if (!resolved) throw new AzError('InvalidArgumentValue', 'Dead-letter destination must resolve to an existing prepared storage account/container ARM identity.', { kind: 'cli' })
+    const account = sandbox.storageAccounts.find(account => same(account.name, resolved.account) && same(account.resourceGroup, resolved.resourceGroup))
+    fields.deadLetterDestination = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${account.resourceGroup}/providers/Microsoft.Storage/storageAccounts/${account.name}/blobServices/default/containers/${resolved.container}`
+  }
+  return fields
 }
 
 function normalizeEventTypes(value) {
@@ -167,7 +185,8 @@ export function createEventGridSubscription(sandbox, { resourceGroup, topicName,
   requireName(name, SUBSCRIPTION_NAME_RE, 'subscription')
   const resolvedType = endpointType ?? 'WebHook'
   requireEndpointType(resolvedType)
-  requireEndpoint(endpoint)
+  requireEndpoint(endpoint, resolvedType, sandbox)
+  const recovery = recoveryFor(sandbox, values)
   const filter = filterFor(values, findSubscription(topic, name)?.filter ?? null)
   const next = cloneSandbox(sandbox)
   const storedTopic = findTopic(next, resourceGroup, topicName)
@@ -180,13 +199,15 @@ export function createEventGridSubscription(sandbox, { resourceGroup, topicName,
     subscription = { name, endpointType: resolvedType, endpoint, filter, createdAt: nowIso() }
     storedTopic.eventSubscriptions.push(subscription)
   }
+  Object.assign(subscription, recovery)
   return { sandbox: next, resource: subscription, topic: storedTopic }
 }
 
 export function updateEventGridSubscription(sandbox, { resourceGroup, topicName, name, endpoint, endpointType, ...values }) {
   const current = getEventGridSubscription(sandbox, resourceGroup, topicName, name)
   if (endpointType !== undefined) requireEndpointType(endpointType)
-  if (endpoint !== undefined) requireEndpoint(endpoint)
+  requireEndpoint(endpoint ?? current.endpoint, endpointType ?? current.endpointType, sandbox)
+  const recovery = recoveryFor(sandbox, values)
   const filter = filterFor(values, current.filter)
   const next = cloneSandbox(sandbox)
   const topic = findTopic(next, resourceGroup, topicName)
@@ -194,6 +215,7 @@ export function updateEventGridSubscription(sandbox, { resourceGroup, topicName,
   if (endpointType !== undefined) subscription.endpointType = endpointType
   if (endpoint !== undefined) subscription.endpoint = endpoint
   subscription.filter = filter
+  Object.assign(subscription, recovery)
   return { sandbox: next, resource: subscription, topic }
 }
 

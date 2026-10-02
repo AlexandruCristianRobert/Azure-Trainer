@@ -1,4 +1,5 @@
 import { SUBSCRIPTION_ID } from '../sandbox/model.js'
+import { parseEventGridDeadLetterDestination } from '../sandbox/eventgrid-validation.js'
 
 const subscription = `/subscriptions/${SUBSCRIPTION_ID}`
 
@@ -27,7 +28,9 @@ export function presentEventGridSubscription(resource, topic) {
     id: eventGridSubscriptionId(topic, resource),
     name: resource.name,
     properties: {
-      destination: { endpointType: 'WebHook', properties: { endpointUrl: resource.endpoint } },
+      destination: { endpointType: resource.endpointType, properties: resource.endpointType === 'AzureFunction' ? { resourceId: resource.endpoint } : { endpointUrl: resource.endpoint } },
+      ...(resource.maxDeliveryAttempts !== undefined || resource.eventTimeToLiveInMinutes !== undefined ? { retryPolicy: { maxDeliveryAttempts: resource.maxDeliveryAttempts ?? 30, eventTimeToLiveInMinutes: resource.eventTimeToLiveInMinutes ?? 1440 } } : {}),
+      ...(resource.deadLetterDestination === undefined ? {} : { deadLetterDestination: { endpointType: 'StorageBlob', properties: { resourceId: parseEventGridDeadLetterDestination(resource.deadLetterDestination).resourceId, blobContainerName: parseEventGridDeadLetterDestination(resource.deadLetterDestination).container } } }),
       filter: {
         includedEventTypes: resource.filter.includedEventTypes,
         isSubjectCaseSensitive: resource.filter.isSubjectCaseSensitive,

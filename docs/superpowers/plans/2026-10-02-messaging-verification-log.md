@@ -67,3 +67,24 @@ New cumulative known verification: **43.4856455 seconds (0.724761 minutes)**, st
 | 2026-10-02 | Fix final covering GREEN | `npm test -- tests/messaging-python.test.js` | 42/42 passed, exit 0; test bodies 114ms; raw final stdout retained in task-3-report.md | 2.6898593 |
 
 Fix round 1 measured test total: **16.0830868 seconds**. Starting cumulative including the supplied review diagnostic: **43.5924820 seconds**. New cumulative known verification: **59.6755688 seconds (0.994593 minutes)**. No additional diagnostics, large-memory probe, full suite, build, cloud or browser checks. Only the owning test file ran. Static whitespace inspection passed with Windows line-ending notices only.
+
+## Task 4 Event Grid
+
+Every invocation below ran only `npm test -- tests/messaging-eventgrid.test.js`, measured around the complete npm/Vitest invocation with PowerShell Stopwatch. No executable diagnostic, full suite, build, replay, browser, cloud, AKS or Container Apps check ran. Static reads/git inspections are not test invocations.
+
+| Date | Stage | Actual relevant output | Exit | Elapsed seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial RED | Missing messaging/eventgrid.js; Test Files 1 failed, Tests no tests | 1 | 1.2021490 |
+| 2026-10-02 | Initial covering run | 11 passed / 2 failed: fixture retained prior filter and expected wrong notification map | 1 | 2.7926960 |
+| 2026-10-02 | Fixture correction run | 12 passed / 1 failed: expected string instead of existing notification record | 1 | 2.6750011 |
+| 2026-10-02 | First GREEN | Test Files 1 passed, Tests 13 passed | 0 | 2.6001983 |
+| 2026-10-02 | Shared clock/persistence RED | 11 passed / 2 failed: EG advance left expired SB lock; forged nonretryable terminal accepted | 1 | 2.6422549 |
+| 2026-10-02 | Shared clock/persistence GREEN | Test Files 1 passed, Tests 13 passed | 0 | 2.6305835 |
+| 2026-10-02 | Null persisted delivery RED | 12 passed / 1 failed: TypeError reading null eventRecordId | 1 | 3.1071582 |
+| 2026-10-02 | Registration RED / null fix | 12 passed / 1 failed: unregistered actual endpoint accepted before publication | 1 | 2.7882386 |
+| 2026-10-02 | Registration GREEN | Test Files 1 passed, Tests 13 passed | 0 | 2.7269816 |
+| 2026-10-02 | Cumulative clients GREEN | Test Files 1 passed, Tests 13 passed; actual retained SB producer/worker completed | 0 | 2.6392808 |
+| 2026-10-02 | Status sequence / terminal drain RED | 12 passed / 1 failed: handler_status rejected trusted [503,200] sequence | 1 | 2.6688378 |
+| 2026-10-02 | Final terminal drain GREEN | Test Files 1 passed, Tests 13 passed; test bodies 55ms | 0 | 2.6537219 |
+
+Task 4 measured total: **31.1271017 seconds**. Starting cumulative: **59.6755688 seconds**. New cumulative known verification: **90.8026705 seconds (1.513378 minutes)**. All RED/reruns included; no unmeasured executable diagnostic or test invocation. Initial missing-module RED did not execute behavioral cases; later shared-clock/persistence/registration/sequence regressions are observed production behavior failures. Two intervening fixture errors are disclosed above. Focused-only verification follows the controller/user boundary over skill broad-suite guidance. Static `git diff --check` passed with Windows LF/CRLF notices only.

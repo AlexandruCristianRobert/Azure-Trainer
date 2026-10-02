@@ -1,5 +1,5 @@
 import { normalizeLocation } from './locations.js'
-import { isValidEventGridWebhookEndpoint } from './eventgrid-validation.js'
+import { isValidEventGridWebhookEndpoint, parseEventGridFunctionEndpoint, parseEventGridDeadLetterDestination, validRetryValue, validBlobContainer } from './eventgrid-validation.js'
 
 export const SUBSCRIPTION_ID = '7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37'
 export const SUBSCRIPTION_NAME = 'Sandbox'
@@ -308,7 +308,12 @@ function validEventGridFilter(filter) {
 function validEventGridSubscription(resource) {
   return object(resource)
     && typeof resource.name === 'string' && EVENT_GRID_SUBSCRIPTION_NAME_RE.test(resource.name)
-    && resource.endpointType === 'WebHook' && isValidEventGridWebhookEndpoint(resource.endpoint)
+    && (resource.endpointType === 'WebHook' ? isValidEventGridWebhookEndpoint(resource.endpoint) : resource.endpointType === 'AzureFunction' && !!parseEventGridFunctionEndpoint(resource.endpoint)
+      && parseEventGridFunctionEndpoint(resource.endpoint).subscriptionId.toLowerCase() === SUBSCRIPTION_ID.toLowerCase())
+    && (resource.maxDeliveryAttempts === undefined || validRetryValue(resource.maxDeliveryAttempts, 30))
+    && (resource.eventTimeToLiveInMinutes === undefined || validRetryValue(resource.eventTimeToLiveInMinutes, 1440))
+    && (resource.deadLetterDestination === undefined || !!parseEventGridDeadLetterDestination(resource.deadLetterDestination)
+      && parseEventGridDeadLetterDestination(resource.deadLetterDestination).subscriptionId.toLowerCase() === SUBSCRIPTION_ID.toLowerCase())
     && validEventGridFilter(resource.filter) && iso(resource.createdAt)
 }
 
@@ -349,6 +354,8 @@ function validStorageAccount(account) {
     && typeof account.resourceGroup === 'string' && typeof account.location === 'string' && normalizeLocation(account.location) === account.location
     && account.kind === 'StorageV2' && (account.sku === 'Standard_LRS' || account.sku === 'Standard_ZRS')
     && tagsOrNull(account.tags) && iso(account.createdAt)
+    && (account.blobContainers === undefined || Array.isArray(account.blobContainers) && account.blobContainers.length <= 50
+      && account.blobContainers.every(validBlobContainer) && new Set(account.blobContainers).size === account.blobContainers.length)
 }
 
 function validFunctionApp(app) {

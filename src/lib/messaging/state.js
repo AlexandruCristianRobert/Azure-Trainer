@@ -1,4 +1,5 @@
 import { SUBSCRIPTION_ID } from '../sandbox/model.js'
+import { isValidEventGridWebhookEndpoint, parseEventGridFunctionEndpoint, parseEventGridDeadLetterDestination, validRetryValue } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 export const plainObject = value => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -36,8 +37,9 @@ export function validateMessagingState(state) {
     || state.deliveries.length > 500 || !plainObject(state.effects) || !plainObject(state.hosts)) return false
   let maximumId = 0
   const allocated = new Set()
-  const id = (value, unique = false) => {
-    const match = /^(?:message|lock|trace)-([1-9]\d*)$/.exec(value)
+  const id = (value, unique = false, eventGrid = false) => {
+    if (typeof value !== 'string') return false
+    const match = (eventGrid ? /^(?:eg-event|eg-delivery|eg-trace)-([1-9]\d*)$/ : /^(?:message|lock|trace)-([1-9]\d*)$/).exec(value)
     if (!match || !Number.isSafeInteger(Number(match[1])) || (unique && allocated.has(value))) return false
     maximumId = Math.max(maximumId, Number(match[1]))
     if (unique) allocated.add(value)
@@ -100,6 +102,62 @@ export function validateMessagingState(state) {
       || (trace.sourceMessageId !== null && !id(trace.sourceMessageId))
       || (trace.messageRecordId !== null && !id(trace.messageRecordId))
       || (trace.lockToken !== null && !id(trace.lockToken))) return false
+  }
+  if (state.eventGrid !== undefined) {
+    const grid = state.eventGrid
+    const envelope = event => plainObject(event) && string(event.id) && typeof event.subject === 'string' && string(event.eventType) && string(event.dataVersion) && own(event, 'data')
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+    if (!plainObject(grid) || !Array.isArray(grid.events) || grid.events.length > 50 || !Array.isArray(grid.deliveries) || grid.deliveries.length > 50 || !Array.isArray(grid.traces) || grid.traces.length > 500) return false
+    for (const event of grid.events) if (!plainObject(event) || !/^eg-event-/.test(event.id) || !id(event.id, true, true) || !envelope(event.event)
+      || typeof event.topicId !== 'string' || !new RegExp(`^/subscriptions/${SUBSCRIPTION_ID}/resourcegroups/[^/]+/providers/microsoft\\.eventgrid/topics/[^/]+$`).test(event.topicId)
+      || !counter(event.publishedAtMs) || event.publishedAtMs > state.timeMs) return false
+    for (const delivery of grid.deliveries) {
+      if (!plainObject(delivery)) return false
+      const source = grid.events.find(event => event.id === delivery.eventRecordId)
+      if (!plainObject(delivery) || !/^eg-delivery-/.test(delivery.id) || !id(delivery.id, true, true) || !source || !envelope(delivery.event) || !same(delivery.event, source.event)
+        || typeof delivery.subscriptionId !== 'string' || !delivery.subscriptionId.startsWith(`${source.topicId}/eventsubscriptions/`) || !/\/eventsubscriptions\/[^/]+$/.test(delivery.subscriptionId) || delivery.subscriptionId !== delivery.subscriptionId.toLowerCase()
+        || (delivery.endpointType === 'WebHook' ? !isValidEventGridWebhookEndpoint(delivery.endpoint) : delivery.endpointType !== 'AzureFunction' || !parseEventGridFunctionEndpoint(delivery.endpoint)
+          || parseEventGridFunctionEndpoint(delivery.endpoint).subscriptionId.toLowerCase() !== SUBSCRIPTION_ID.toLowerCase())
+        || !validRetryValue(delivery.maxDeliveryAttempts, 30) || !counter(delivery.attempts) || delivery.attempts > delivery.maxDeliveryAttempts
+        || !counter(delivery.expiresAtMs) || delivery.expiresAtMs <= source.publishedAtMs || delivery.expiresAtMs > source.publishedAtMs + 1440 * 60000
+        || !['pending', 'retrying', 'delivered', 'deadlettered', 'dropped'].includes(delivery.status)
+        || !nullableString(delivery.reason)
+        || (delivery.deadLetterDestination !== null && (!parseEventGridDeadLetterDestination(delivery.deadLetterDestination) || parseEventGridDeadLetterDestination(delivery.deadLetterDestination).subscriptionId.toLowerCase() !== SUBSCRIPTION_ID.toLowerCase()))) return false
+      const pending = ['pending', 'retrying'].includes(delivery.status)
+      if (pending ? !counter(delivery.nextAttemptAtMs) || delivery.nextAttemptAtMs < source.publishedAtMs || delivery.reason !== null || delivery.deadLetter !== null : delivery.nextAttemptAtMs !== null) return false
+      if (delivery.status === 'pending' ? delivery.attempts !== 0 || delivery.lastStatus !== null : delivery.status === 'deadlettered' || delivery.status === 'dropped'
+        ? delivery.attempts === 0 && delivery.lastStatus !== null || delivery.attempts > 0 && (!Number.isSafeInteger(delivery.lastStatus) || delivery.lastStatus < 100 || delivery.lastStatus > 599)
+        : delivery.attempts === 0 || !Number.isSafeInteger(delivery.lastStatus) || delivery.lastStatus < 100 || delivery.lastStatus > 599) return false
+      if (delivery.status === 'pending' && delivery.nextAttemptAtMs !== source.publishedAtMs) return false
+      if (delivery.status === 'retrying' && (delivery.attempts >= delivery.maxDeliveryAttempts || delivery.lastStatus >= 200 && delivery.lastStatus < 300 || [400, 403, 413, ...(delivery.endpointType === 'WebHook' ? [401] : [])].includes(delivery.lastStatus))) return false
+      if (delivery.status === 'delivered' && (delivery.lastStatus < 200 || delivery.lastStatus >= 300 || delivery.reason !== null)) return false
+      if (delivery.status === 'deadlettered') {
+        const letter = delivery.deadLetter
+        if (!plainObject(letter) || letter.destination !== delivery.deadLetterDestination || !string(letter.destination) || !same(letter.event, delivery.event) || letter.reason !== delivery.reason
+          || letter.attempts !== delivery.attempts || !counter(letter.timeMs) || letter.timeMs > state.timeMs) return false
+      } else if (delivery.deadLetter !== null) return false
+      if (['deadlettered', 'dropped'].includes(delivery.status) && !['NonRetryableStatus', 'MaxDeliveryAttemptsExceeded', 'TimeToLiveExceeded', 'DeadLetterDestinationUnavailable'].includes(delivery.reason)) return false
+      if (delivery.reason === 'NonRetryableStatus' && (delivery.attempts === 0 || ![400, 403, 413, ...(delivery.endpointType === 'WebHook' ? [401] : [])].includes(delivery.lastStatus))) return false
+      if (delivery.reason === 'DeadLetterDestinationUnavailable' && (delivery.deadLetterDestination === null || delivery.status !== 'dropped')) return false
+      if (delivery.reason === 'MaxDeliveryAttemptsExceeded' && delivery.attempts !== delivery.maxDeliveryAttempts || delivery.reason === 'TimeToLiveExceeded' && delivery.expiresAtMs > state.timeMs) return false
+    }
+    for (const receipt of grid.traces) {
+      if (!plainObject(receipt) || !/^eg-trace-/.test(receipt.id) || !id(receipt.id, true, true) || !['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance'].includes(receipt.kind)
+      || !counter(receipt.timeMs) || receipt.timeMs > state.timeMs || receipt.timing !== 'logical-simulator-ticks'
+      || (receipt.eventRecordId !== null && !grid.events.some(event => event.id === receipt.eventRecordId))
+      || (receipt.deliveryId !== null && !grid.deliveries.some(delivery => delivery.id === receipt.deliveryId && delivery.eventRecordId === receipt.eventRecordId))
+      || (receipt.attempts !== null && (!counter(receipt.attempts) || receipt.attempts > 30)) || ![null, 'pending', 'retrying', 'delivered', 'deadlettered', 'dropped'].includes(receipt.status) || !nullableString(receipt.reason)) return false
+      if (['publish', 'advance'].includes(receipt.kind)) {
+        if (receipt.deliveryId !== null || receipt.attempts !== null || receipt.status !== null || receipt.reason !== null || (receipt.kind === 'publish' ? receipt.eventRecordId === null : receipt.eventRecordId !== null)) return false
+      } else {
+        const delivery = grid.deliveries.find(delivery => delivery.id === receipt.deliveryId)
+        if (!delivery || receipt.attempts === null || receipt.attempts > delivery.attempts) return false
+        if (receipt.kind === 'route' && (receipt.status !== 'pending' || receipt.attempts !== 0 || receipt.reason !== null)) return false
+        if (receipt.kind === 'retry' && (receipt.status !== 'retrying' || receipt.attempts < 1 || receipt.reason !== null)) return false
+        if (receipt.kind === 'delivered' && (receipt.status !== 'delivered' || receipt.attempts < 1 || receipt.reason !== null)) return false
+        if (['deadlettered', 'dropped'].includes(receipt.kind) && (receipt.status !== receipt.kind || !string(receipt.reason))) return false
+      }
+    }
   }
   return state.nextId > maximumId
 }

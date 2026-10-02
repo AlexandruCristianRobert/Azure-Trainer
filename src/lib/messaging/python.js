@@ -17,6 +17,10 @@ export const SDK_SIGNATURES = Object.freeze({
   DefaultAzureCredential: [[], 0, 'credential'],
   ServiceBusClient: [['fully_qualified_namespace', 'credential'], 2, 'bus'],
   ServiceBusMessage: [['body', 'message_id', 'session_id', 'application_properties'], 1, 'outgoing'],
+  EventGridPublisherClient: [['endpoint', 'credential'], 2, 'publisher'],
+  EventGridEvent: [['subject', 'event_type', 'data', 'data_version', 'id'], 4, 'event'],
+  'publisher.send': [['events'], 1, 'data'],
+  deliver_events: [['handler'], 1, 'data'],
   'bus.get_queue_sender': [['queue_name'], 1, 'sender'],
   'bus.get_topic_sender': [['topic_name'], 1, 'sender'],
   'bus.get_queue_receiver': [['queue_name', 'sub_queue', 'session_id', 'max_wait_time'], 1, 'receiver'],
@@ -38,8 +42,9 @@ export const SDK_SIGNATURES = Object.freeze({
 export const SDK_EXPORTS = Object.freeze({
   'azure.identity': ['DefaultAzureCredential'],
   'azure.servicebus': ['ServiceBusClient', 'ServiceBusMessage', 'ServiceBusSubQueue'],
+  'azure.eventgrid': ['EventGridPublisherClient', 'EventGridEvent'],
   json: ['dumps', 'loads'],
-  training_runtime: ['perform_order_work', 'record_processed', 'was_processed', 'record_notification', 'handler_status'],
+  training_runtime: ['perform_order_work', 'record_processed', 'was_processed', 'record_notification', 'handler_status', 'deliver_events'],
 })
 export function bindArguments(names, required, args, kwargs, loc) {
   if (names === null) {
@@ -248,6 +253,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         }
         if (object.type === 'subqueue' && node.name === 'DEAD_LETTER') return data
         if (object.type === 'receipt' && ['body', 'message_id', 'session_id', 'application_properties', 'delivery_count', 'dead_letter_reason', 'dead_letter_error_description'].includes(node.name)) return node.name === 'body' ? typed('bytes') : data
+        if (object.type === 'event' && ['id', 'data', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
         const name = `${object.type}.${node.name}`
         if (own(SDK_SIGNATURES, name)) return callable(name)
         unsupported(`Unsupported member '${node.name}' on ${object.type}.`, node.loc); break
@@ -255,11 +261,15 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       case 'call': {
         const target = infer(node.callee, env, path), args = node.args.map(arg => infer(arg, env, path))
         const kwargs = Object.fromEntries(Object.entries(node.kwargs).map(([key, value]) => [key, infer(value, env, path)]))
-        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len'].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
+        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len'].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
         if (target.type === 'function') return analyzeFunction(target.id, args, kwargs, node.loc)
         if (target.type !== 'callable' || !own(SDK_SIGNATURES, target.name)) unsupported('Only resolved local functions and supported SDK calls are callable.', node.loc)
         const [names, required, returns] = SDK_SIGNATURES[target.name]
-        bindArguments(names, required, args, kwargs, node.loc)
+        const bound = bindArguments(names, required, args, kwargs, node.loc)
+        if (target.name === 'deliver_events') {
+          if (bound.handler?.type !== 'function') unsupported('deliver_events requires an actual local handler function.', node.loc)
+          analyzeFunction(bound.handler.id, [typed('event')], {}, node.loc)
+        }
         return typed(returns)
       }
     }
@@ -383,11 +393,11 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     return env
   }
   try {
-    if (mode !== 'script') unsupported(`Mode '${mode}' is not supported by the script adapter.`)
+    if (!['script', 'eventgrid-handler'].includes(mode)) unsupported(`Mode '${mode}' is not supported by the messaging adapter.`)
     for (const [path, expected] of Object.entries(fixedFiles)) if (!own(files, path) || files[path] !== expected) throw messagingError('MESSAGING_CONFIG', 'Protected scaffold content was changed or removed.', { path, line: 1, column: 1 })
-    const env = loadModule(entry), main = env.get('main')
-    if (main?.type !== 'function') unsupported('The entry must define main().')
-    analyzeFunction(main.id, [], {}, { path: entry, line: 1, column: 1 })
+    const env = loadModule(entry), main = env.get(mode === 'eventgrid-handler' ? 'handle_event' : 'main')
+    if (main?.type !== 'function') unsupported(`The entry must define ${mode === 'eventgrid-handler' ? 'handle_event(event)' : 'main()'}.`)
+    analyzeFunction(main.id, mode === 'eventgrid-handler' ? [typed('event')] : [], {}, { path: entry, line: 1, column: 1 })
     program.main = main.id
     return { program, diagnostics: [] }
   } catch (error) {

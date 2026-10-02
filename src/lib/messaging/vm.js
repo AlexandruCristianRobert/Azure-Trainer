@@ -1,4 +1,5 @@
 import { applyServiceBusOperation } from './servicebus.js'
+import { applyEventGridOperation, getEventGridDelivery, validateEventGridWebhookRegistration } from './eventgrid.js'
 import { validateMessagingState, finiteJson } from './state.js'
 import { SDK_SIGNATURES, SDK_EXPORTS, bindArguments, messagingError, safeKey } from './python.js'
 
@@ -9,7 +10,7 @@ const cap = (value, fallback) => Number.isSafeInteger(value) && value > 0 ? Math
 
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
 export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
-  let current = state, steps = 0, depth = 0, receiverSequence = 0
+  let current = state, steps = 0, depth = 0, receiverSequence = 0, eventSequence = 0, draining = false, activeDelivery = null
   const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap()
   let outputBytes = 0
   const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
@@ -125,6 +126,10 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       if (name === 'body') return handle('bytes', { value: object.record.body })
       if (own(metadata, name)) return clone(object.record[metadata[name]])
     }
+    if (object.type === 'event') {
+      const metadata = { id: 'id', data: 'data', subject: 'subject', event_type: 'eventType', data_version: 'dataVersion' }
+      if (own(metadata, name)) return jsonValue(object.event[metadata[name]], loc)
+    }
     const method = `${object.type}.${name}`
     if (own(SDK_SIGNATURES, method)) return callable(method, value)
     fail(`Unsupported member '${name}' on ${object.type}.`, loc, 'MESSAGING_UNSUPPORTED')
@@ -140,6 +145,31 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     current = result.state
     trace.push(...result.trace)
     return result.value
+  }
+  function eventGrid(operation, loc) {
+    tick(loc)
+    const result = applyEventGridOperation(current, sandbox, operation)
+    if (result.diagnostics.length) throw messagingError(result.diagnostics[0].code, result.diagnostics[0].message, loc)
+    if (trace.length + result.trace.length > maximumTraces) fail(`Execution exceeds ${maximumTraces} trace records.`, loc, 'MESSAGING_LIMIT')
+    current = result.state; trace.push(...result.trace)
+    return result.value
+  }
+  function deliverEvent(deliveryId, fnId, loc) {
+    tick(loc)
+    let record
+    try { record = getEventGridDelivery(current, sandbox, deliveryId) }
+    catch (error) { fail(error.message, loc, error.messagingCode ?? 'MESSAGING_CONFIG') }
+    const fn = program.functions[fnId]
+    if (record.endpointType !== 'WebHook' || !own(input.eventGridHandlers ?? {}, record.endpoint) || input.eventGridHandlers[record.endpoint] !== fn?.path)
+      fail('This endpoint/source is not registered as an allowlisted training webhook handler.', loc, 'MESSAGING_CONFIG')
+    const before = current, traceCount = trace.length, previousDelivery = activeDelivery
+    activeDelivery = record
+    try {
+      const status = invoke(fnId, [handle('event', { event: clone(record.event) })], {}, loc)
+      eventGrid({ kind: 'deliver', deliveryId, status }, loc)
+      return status
+    } catch (error) { current = before; trace.length = traceCount; throw error }
+    finally { activeDelivery = previousDelivery }
   }
   function namespace(endpoint, loc) {
     if (typeof endpoint !== 'string') fail('Supply a Service Bus fully qualified namespace.', loc, 'MESSAGING_CONFIG')
@@ -175,6 +205,48 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const { name, owner } = functionInfo, [names, required] = SDK_SIGNATURES[name]
     const a = bindArguments(names, required, args, kwargs, loc)
     if (name === 'DefaultAzureCredential') return handle('credential')
+    if (name === 'EventGridPublisherClient') {
+      if (info(a.credential)?.type !== 'credential') fail('Use the simulated DefaultAzureCredential identity.', loc, 'MESSAGING_CONFIG')
+      const topics = (sandbox.eventGridTopics ?? []).filter(topic => `https://${topic.name}.${topic.location}-1.eventgrid.azure.net/api/events`.toLowerCase() === String(a.endpoint).toLowerCase())
+      if (typeof a.endpoint !== 'string' || topics.length !== 1) fail('The Event Grid endpoint must resolve to exactly one supplied topic.', loc, 'MESSAGING_CONFIG')
+      return handle('publisher', { target: { resourceGroup: topics[0].resourceGroup, topic: topics[0].name } })
+    }
+    if (name === 'EventGridEvent') {
+      const event = jsonValue({ id: a.id ?? `python-event-${current.nextId}-${++eventSequence}`, subject: a.subject, eventType: a.event_type, data: a.data, dataVersion: a.data_version }, loc)
+      if (typeof event.id !== 'string' || !event.id || typeof event.subject !== 'string' || typeof event.eventType !== 'string' || !event.eventType || typeof event.dataVersion !== 'string' || !event.dataVersion) fail('EventGridEvent requires valid subject/type/data/version/id fields.', loc)
+      return handle('event', { event })
+    }
+    if (name === 'publisher.send') {
+      const publisher = usable(owner, loc), events = Array.isArray(a.events) ? a.events : [a.events]
+      if (events.length > 50) fail('Event Grid batch exceeds 50 events.', loc, 'MESSAGING_LIMIT')
+      const envelopes = events.map(event => {
+        if (info(event)?.type !== 'event') fail('publisher.send requires EventGridEvent values.', loc)
+        return jsonValue(info(event).event, loc)
+      })
+      eventGrid({ kind: 'publish', target: publisher.target, events: envelopes }, loc)
+      return null
+    }
+    if (name === 'deliver_events') {
+      const callback = info(a.handler)
+      if (callback?.type !== 'function') fail('deliver_events requires an actual local handler callable.', loc)
+      if (draining) fail('Nested delivery drains are not supported.', loc, 'MESSAGING_UNSUPPORTED')
+      draining = true
+      try {
+        eventGrid({ kind: 'advance', milliseconds: 0 }, loc)
+        let attempts = 0
+        while (true) {
+          tick(loc)
+          const pending = (current.eventGrid?.deliveries ?? []).filter(record => ['pending', 'retrying'].includes(record.status) && record.endpointType === 'WebHook'
+            && own(input.eventGridHandlers ?? {}, record.endpoint) && input.eventGridHandlers[record.endpoint] === program.functions[callback.id]?.path)
+          if (!pending.length) return attempts
+          const due = pending.filter(record => record.nextAttemptAtMs <= current.timeMs)
+          if (!due.length) {
+            const nextTime = Math.min(...pending.map(record => Math.min(record.nextAttemptAtMs, record.expiresAtMs)))
+            eventGrid({ kind: 'advance', milliseconds: nextTime - current.timeMs }, loc)
+          } else for (const record of due) { deliverEvent(record.id, callback.id, loc); attempts++ }
+        }
+      } finally { draining = false }
+    }
     if (name === 'ServiceBusClient') {
       if (info(a.credential)?.type !== 'credential') fail('Use the simulated DefaultAzureCredential identity.', loc, 'MESSAGING_CONFIG')
       return handle('bus', { target: namespace(a.fully_qualified_namespace, loc), closed: false })
@@ -247,7 +319,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     }
     if (name === 'handler_status') {
       safeKey(a.order_id, loc)
-      return input.handlerStatus && own(input.handlerStatus, a.order_id) ? input.handlerStatus[a.order_id] : 200
+      const outcome = input.handlerStatus && own(input.handlerStatus, a.order_id) ? input.handlerStatus[a.order_id] : 200
+      if (!Array.isArray(outcome)) return outcome
+      return outcome[Math.min(activeDelivery?.attempts ?? 0, outcome.length - 1)]
     }
     if (name === 'record_notification') {
       if (typeof a.order_id !== 'string' || !a.order_id) fail('Notification order_id must be a nonempty string.', loc)
@@ -389,9 +463,13 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (!validateMessagingState(state) || !finiteJson(input)) fail('Invalid messaging state or fixture input.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
     for (const key of ['messages', 'events']) if (Array.isArray(input[key]) && input[key].length > 50) fail('Fixture messages/events exceed 50 records.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
     if (input.handlerStatus && Object.keys(input.handlerStatus).length > 50) fail('Handler fixture exceeds 50 outcomes.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_LIMIT')
+    const httpStatus = status => Number.isSafeInteger(status) && status >= 100 && status <= 599
     if (input.handlerStatus !== undefined && (!input.handlerStatus || typeof input.handlerStatus !== 'object' || Array.isArray(input.handlerStatus)
-      || Object.values(input.handlerStatus).some(status => !Number.isSafeInteger(status) || status < 100 || status > 599))) fail('Handler fixture outcomes must be integer HTTP statuses.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
-    value = invoke(program.main, [], {}, { path: program.entry, line: 1, column: 1 })
+      || Object.values(input.handlerStatus).some(status => Array.isArray(status) ? status.length < 1 || status.length > 30 || !status.every(httpStatus) : !httpStatus(status)))) fail('Handler fixture outcomes must be integer HTTP statuses or 1-30 status sequences.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    if (input.eventGridHandlers !== undefined && !validateEventGridWebhookRegistration(sandbox, input.eventGridHandlers)) fail('Training webhook registrations must resolve actual WebHook subscriptions and bounded source paths.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    value = program.mode === 'eventgrid-handler'
+      ? deliverEvent(input.deliveryId, program.main, { path: program.entry, line: 1, column: 1 })
+      : invoke(program.main, [], {}, { path: program.entry, line: 1, column: 1 })
     // The public result is JSON-only; receipt/client closures never escape.
     value = jsonValue(value, { path: program.entry, line: 1, column: 1 })
   } catch (error) {
