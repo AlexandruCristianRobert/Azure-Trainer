@@ -30,6 +30,53 @@ function run(source, { state = emptyMessagingState(), sandbox = fixture(), extra
 }
 
 describe('source-driven bounded messaging Python', () => {
+  it('makes bodytext scalar helper and SDK string consumers equivalent to literal arguments', () => {
+    const sent = run(`from clients import bus
+from azure.servicebus import ServiceBusMessage
+def main():
+    with bus.get_queue_sender(queue_name="orders") as sender:
+        sender.send_messages([
+            ServiceBusMessage("o1", message_id="order"),
+            ServiceBusMessage("orders", message_id="queue"),
+            ServiceBusMessage("sb-orders.servicebus.windows.net", message_id="namespace"),
+            ServiceBusMessage("utf-8", message_id="encoding"),
+            ServiceBusMessage("deadletter", message_id="subqueue")
+        ])
+`)
+    const result = run(`from clients import bus
+from azure.identity import DefaultAzureCredential
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from training_runtime import was_processed, handler_status, record_notification
+def main():
+    with bus.get_queue_receiver(queue_name="orders") as receiver:
+        text = {}
+        before = []
+        decoded = ""
+        for msg in receiver.receive_messages(max_message_count=5):
+            text[msg.message_id] = str(msg)
+            if msg.message_id == "subqueue":
+                before = [was_processed("o1"), was_processed(text["order"]), handler_status("o1"), handler_status(text["order"])]
+                record_notification("literal-event", "o1")
+                record_notification(text["order"], text["order"])
+                decoded = msg.body.decode(text["encoding"])
+                client = ServiceBusClient(text["namespace"], credential=DefaultAzureCredential())
+                with client.get_queue_sender(queue_name=text["queue"]) as sender:
+                    sender.send_messages(ServiceBusMessage(text["order"], message_id=text["order"], session_id=text["order"], application_properties={"order": text["order"]}))
+                receiver.dead_letter_message(msg, reason=text["order"], error_description=text["order"])
+                with client.get_queue_receiver(queue_name=text["queue"], sub_queue=text["subqueue"]) as dlq:
+                    for rejected in dlq.receive_messages():
+                        dlq.complete_message(rejected)
+        return [before, decoded]
+`, { state: sent.state, input: { handlerStatus: { o1: 202 } } })
+    expect(result.diagnostics).toEqual([])
+    expect(result.value).toEqual([[false, false, 202, 202], 'deadletter'])
+    expect(result.state.effects.notifications).toEqual({
+      'literal-event': { eventId: 'literal-event', orderId: 'o1' },
+      o1: { eventId: 'o1', orderId: 'o1' },
+    })
+    expect(messages(result.state).find(row => row.messageId === 'o1')).toMatchObject({ body: 'o1', sessionId: 'o1', properties: { order: 'o1' }, status: 'active' })
+    expect(messages(result.state).find(row => row.messageId === 'subqueue')).toMatchObject({ status: 'completed', subQueue: 'deadletter', deadLetterReason: 'o1', deadLetterDescription: 'o1' })
+  })
   it('preserves receipt bodytext string semantics and ordered actual lock provenance', () => {
     const sent = run(producer(`'{"id":"o1","quantity":2}'`))
     const result = run(`from clients import bus

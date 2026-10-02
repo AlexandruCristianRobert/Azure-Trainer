@@ -8,6 +8,22 @@ const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const clone = value => JSON.parse(JSON.stringify(value))
 const RETURN = Symbol('return')
 const cap = (value, fallback) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, fallback) : fallback
+const scalarStringArguments = Object.freeze({
+  ServiceBusClient: ['fully_qualified_namespace'],
+  ServiceBusMessage: ['body', 'message_id', 'session_id'],
+  EventGridPublisherClient: ['endpoint'],
+  EventGridEvent: ['subject', 'event_type', 'data_version', 'id'],
+  'bus.get_queue_sender': ['queue_name'],
+  'bus.get_topic_sender': ['topic_name'],
+  'bus.get_queue_receiver': ['queue_name', 'sub_queue', 'session_id'],
+  'bus.get_subscription_receiver': ['topic_name', 'subscription_name', 'sub_queue'],
+  'receiver.dead_letter_message': ['reason', 'error_description'],
+  'bytes.decode': ['encoding'],
+  was_processed: ['order_id'],
+  handler_status: ['order_id'],
+  record_notification: ['event_id', 'order_id'],
+  ValueError: ['message'],
+})
 
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
 export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
@@ -296,6 +312,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (functionInfo?.type !== 'callable' || !own(SDK_SIGNATURES, functionInfo.name)) fail('Unresolved callable.', loc, 'MESSAGING_UNSUPPORTED')
     const { name, owner } = functionInfo, [names, required] = SDK_SIGNATURES[name]
     const a = bindArguments(names, required, args, kwargs, loc)
+    // Only scalar consumers normalize. json.loads still sees the receive binding;
+    // dictionaries, SDK handles and numeric arguments retain their existing types.
+    for (const field of scalarStringArguments[name] ?? []) if (own(a, field)) a[field] = unbox(a[field])
     if (name === 'DefaultAzureCredential') return handle('credential')
     if (name === 'FunctionApp') return handle('functionapp')
     if (name === 'functionmessage.get_body') return handle('bytes', { value: info(owner).record.body, record: info(owner).record })

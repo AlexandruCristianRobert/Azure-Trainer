@@ -209,3 +209,18 @@ Controller approved the minimal upstream extension after the two reported regres
 | 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; only Windows LF/CRLF notices | 0 | 0.0430420 |
 
 Fix tests **14.5556436 seconds**, static **0.0430420 seconds**, combined **14.5986856 seconds**. Starting cumulative including supplied reviewer diagnostics **180.0123595 seconds**; final cumulative **194.6110451 seconds (3.2435174183 minutes)**. All invocations measured with whole PowerShell Stopwatch; raw final output and exact row shape/binding in task-7-report.md fix append. No additional executable probes, aggregate command, broad/full suite, Functions suite, AKS/Container Apps/legacy/cloud/browser/build/agents or publication. The owning Python file ran only once in full after narrow RED/GREEN, as expressly authorized; the controller owns later cross-task verification.
+
+### Task7 fix round2: transparent scalar string consumers
+
+The original causal finding is addressed. New Important finding: private receipt bodytext reached existing helper/SDK scalar validation as an object. Named scalar-string argument normalization restores their prior string semantics while json.loads/str retain private receive identity. No Lab predicate/flow, state schema, learner API, parser or measurement changes. Reviewer's Minor null-trace validation guard remains deferred per controller.
+
+| Date | Stage | Command | Actual relevant stdout | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Supplied review diagnostic, not rerun | reviewer Node literal/bodytext helper probe | literal was_processed false/no diagnostics; same receipt body MESSAGING_RUNTIME index must be string/integer | 0 | 0.1203895 |
+| 2026-10-02 | Initial fixture RED attempt | npm test -- tests/messaging-python.test.js -t bodytext | Tests1 failed /2 passed /42 skipped; unsupported post-loop receipt member body (fixture error, not behavior evidence) | 1 | 2.6269606 |
+| 2026-10-02 | Corrected scalar-consumer behavioral RED | npm test -- tests/messaging-python.test.js -t bodytext | Tests1 failed /2 passed /42 skipped; actual was_processed bodytext MESSAGING_RUNTIME index must be string/integer | 1 | 2.6937960 |
+| 2026-10-02 | Narrow GREEN | npm test -- tests/messaging-python.test.js -t bodytext | Tests3 passed /42 skipped; bodies34ms; Vitest1.72s | 0 | 2.6043387 |
+| 2026-10-02 | Single authorized owning final GREEN | npm test -- tests/messaging-python.test.js | Tests45 passed; bodies138ms; Vitest1.84s | 0 | 2.7513501 |
+| 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; LF/CRLF notices only | 0 | 0.0392182 |
+
+Fix round2 tests **10.6764454 seconds**, static **0.0392182 seconds**, combined **10.7156636 seconds**. Starting cumulative including supplied reviewer probe **194.7314346 seconds**; final cumulative **205.4470982 seconds (3.4241183033 minutes)**. All invocations measured using whole-invocation PowerShell Stopwatch; no repeated review probe, Lab rerun or additional coverage. Only VM, owning Python test and this log changed; report retains full TDD/final stdout. No broad/aggregate/full suite/Functions/AKS/Container Apps/legacy/cloud/browser/build/agents/merge/push/publication.
