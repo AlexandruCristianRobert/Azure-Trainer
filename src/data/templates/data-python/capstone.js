@@ -83,7 +83,7 @@ export const DATA_CAPSTONE_SOLUTION_FUNCTIONS = Object.freeze({
   find_similar_questions: `def find_similar_questions(question, product, version, language):
     # The shared Cosmos cosine score is similarity: >= 0.95 is distance <= 0.05.
     # https://learn.microsoft.com/en-us/cosmos-db/query/vectordistance
-    return qa_history.query_items(query="SELECT TOP 3 c.id, c.question, c.answer, c.sources, c.product, c.version, c.language, VectorDistance(c.embedding, @embedding) AS score FROM c WHERE c.product = @product AND c.version = @version AND c.language = @language AND VectorDistance(c.embedding, @embedding) >= 0.95 ORDER BY VectorDistance(c.embedding, @embedding)", parameters=[{"name": "@product", "value": product}, {"name": "@version", "value": version}, {"name": "@language", "value": language}, {"name": "@embedding", "value": embed(question)}], partition_key=product)
+    return list(qa_history.query_items(query="SELECT TOP 3 c.id, c.question, c.answer, c.sources, c.product, c.version, c.language, VectorDistance(c.embedding, @embedding) AS score FROM c WHERE c.product = @product AND c.version = @version AND c.language = @language AND VectorDistance(c.embedding, @embedding) >= 0.95 ORDER BY VectorDistance(c.embedding, @embedding)", parameters=[{"name": "@product", "value": product}, {"name": "@version", "value": version}, {"name": "@language", "value": language}, {"name": "@embedding", "value": embed(question)}], partition_key=product))
 `,
   submit_feedback: `def submit_feedback(event_id, product, positive):
     event_type = "negative-feedback"

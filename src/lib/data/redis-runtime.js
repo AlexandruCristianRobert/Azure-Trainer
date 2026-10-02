@@ -2,7 +2,7 @@ import { getRedisCluster } from '../sandbox/redis.js'
 import { executeRedis } from './redis-store.js'
 import { executeRedisSearch, float32Blob } from './redis-search.js'
 import { redisEmbed, redisSourceAnswer } from '../../data/fixtures/data/redis.js'
-import { capstoneEmbed } from '../../data/fixtures/data/capstone.js'
+import { capstoneEmbed, capstoneNormalize } from '../../data/fixtures/data/capstone.js'
 import { dataTargetFor } from './targets.js'
 
 const MAX_TRACE = 256
@@ -169,7 +169,8 @@ export function evalRedisHelper(name, args, ctx, fail, argFlow = []) {
     case 'response_key':
     case 'semantic_key': {
       if (!args.every(value => typeof value === 'string') || args[0].length > 8192) return unsupported(fail, 'Redis key helper arguments')
-      return `${name === 'response_key' ? 'ka:answer' : 'ka:sem'}:${args[1]}:${args[2]}:${args[3]}:${sha256(normalize(args[0]))}`
+      const normalized = ctx.appSpec.data.composite?.helperProfile === 'capstone' ? capstoneNormalize(args[0]) : normalize(args[0])
+      return `${name === 'response_key' ? 'ka:answer' : 'ka:sem'}:${args[1]}:${args[2]}:${args[3]}:${sha256(normalized)}`
     }
     case 'encode_answer': {
       const result = binary(JSON.stringify(snapshot(args[0], fail)))

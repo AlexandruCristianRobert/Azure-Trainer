@@ -1,4 +1,4 @@
-import { CAPSTONE_QUESTIONS, CAPSTONE_NO_MATCH, capstoneNormalize } from '../../fixtures/data/capstone.js'
+import { CAPSTONE_QUESTIONS, CAPSTONE_NO_MATCH, CAPSTONE_WHITESPACE_PATTERN, capstoneNormalize } from '../../fixtures/data/capstone.js'
 
 export const CAPSTONE_HELPER_ARITIES = Object.freeze({ response_key: [4], semantic_key: [4], encode_answer: [1], decode_answer: [1], pack_embedding: [1], decode_search: [1], embed: [1, 2], training_answer: [2] })
 const vectors = Object.fromEntries(CAPSTONE_QUESTIONS.map(q => [capstoneNormalize(q.text), q.vector]))
@@ -6,12 +6,14 @@ const vectors = Object.fromEntries(CAPSTONE_QUESTIONS.map(q => [capstoneNormaliz
 // No fixture answer/ID map is available to the application.
 export const CAPSTONE_HELPER_FILES = Object.freeze({ 'training_runtime.py': `import hashlib
 import json
+import re
 import struct
 
 _VECTORS = ${JSON.stringify(vectors)}
+_WHITESPACE = re.compile(r"${CAPSTONE_WHITESPACE_PATTERN}")
 
 def _normalize(question):
-    return " ".join(question.strip().lower().split())
+    return _WHITESPACE.sub(" ", question).strip(" ").lower()
 
 def response_key(question, product, version, language):
     digest = hashlib.sha256(_normalize(question).encode("utf-8")).hexdigest()

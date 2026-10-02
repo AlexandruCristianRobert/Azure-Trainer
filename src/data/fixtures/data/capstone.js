@@ -7,7 +7,11 @@ const freeze = value => {
   for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child)
   return Object.freeze(value)
 }
-export const capstoneNormalize = text => String(text).trim().toLowerCase().replace(/\s+/g, ' ')
+// Finite ECMAScript whitespace rule, also emitted into the protected Python
+// helper. NEL/U+001C..U+001F remain text; BOM is collapsed as whitespace.
+export const CAPSTONE_WHITESPACE_PATTERN = '[\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+'
+const whitespace = new RegExp(CAPSTONE_WHITESPACE_PATTERN, 'g')
+export const capstoneNormalize = text => String(text).replace(whitespace, ' ').replace(/^ | $/g, '').toLowerCase()
 export const CAPSTONE_NO_MATCH = "I couldn't find that in the documentation."
 const corpus = clone(CORPUS)
 // The PG-only lab's deliberate foreign-scope decoy is a Support hours row.
