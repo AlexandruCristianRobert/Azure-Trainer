@@ -127,7 +127,14 @@ export function parseDataApp(files, manifest = {}) {
       const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
       const collision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, protectedNames, ctx.text))
       if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
-      const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', 'psycopg', 'psycopg.connect', 'psycopg_pool', 'psycopg_pool.ConnectionPool'] : [])].includes(binding)).map(([name]) => name))
+      const trustedConstructors = ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', 'psycopg', 'psycopg.connect', 'psycopg_pool', 'psycopg_pool.ConnectionPool', 'pgvector.psycopg.register_vector', 'psycopg.types.json.Jsonb'] : [])]
+      const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => trustedConstructors.includes(binding)).map(([name]) => name))
+      if (composite) findNode(ctx.tree.topNode, node => {
+        if (node.name === 'ImportStatement') for (const [name, binding] of redisImportEntries(node, ctx.text)) {
+          if (trustedConstructors.includes(binding)) constructorNames.add(name)
+        }
+        return false
+      })
       const constructorCollision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, constructorNames, ctx.text))
       if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
       findNode(ctx.tree.topNode, node => {
@@ -444,6 +451,13 @@ function lastContinuationReceiver(node, text, manifest) {
 const BUILTINS = new Set(['list', 'len', 'str'])
 const PG_CONSTRUCTORS = { 'psycopg.connect': 'postgres.module.connect', 'connect': 'postgres.module.connect', 'ConnectionPool': 'postgres.pool.ConnectionPool', 'psycopg_pool.ConnectionPool': 'postgres.pool.ConnectionPool', 'register_vector': 'postgres.register_vector', 'pgvector.psycopg.register_vector': 'postgres.register_vector', 'Jsonb': 'postgres.Jsonb', 'psycopg.types.json.Jsonb': 'postgres.Jsonb' }
 
+function pgConstructorKey(calleeName, ctx) {
+  if (!ctx.composite) return PG_CONSTRUCTORS[calleeName]
+  const [name, ...members] = calleeName.split('.')
+  const imported = ctx.importBindings[name]
+  return imported ? PG_CONSTRUCTORS[[imported, ...members].join('.')] : undefined
+}
+
 function functionReceiverType(name, ctx) {
   const found = ctx.locate?.(name)
   if (!found) return undefined
@@ -470,7 +484,7 @@ function lowerCall(node, ctx) {
   const args = argumentsOfWithText(kids(node).find((c) => c.name === 'ArgList'), text)
   const constructorKey = (ctx.redis && ctx.redisConstructors[raw(callee, text)])
     || (ctx.composite && ctx.importBindings[raw(callee, text)] === 'azure.cosmos.CosmosClient' && 'cosmos.CosmosClient')
-    || (ctx.pg && PG_CONSTRUCTORS[raw(callee, text)])
+    || (ctx.pg && pgConstructorKey(raw(callee, text), ctx))
   // Local connect helpers take priority over the imported psycopg constructor.
   if (constructorKey && !(callee.name === 'VariableName' && ctx.locate?.(raw(callee, text)))) {
     const entry = SDK_CALLS[constructorKey]

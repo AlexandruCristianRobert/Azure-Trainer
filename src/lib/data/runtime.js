@@ -21,7 +21,8 @@ import { SUPPORT_V3_CORPUS, SUPPORT_V3_ALL_QUESTIONS } from '../../data/fixtures
 import { executePg } from './pg-engine.js'
 import { evalRedisCall, evalRedisHelper, newRedisEvidence, redisText, redisSnapshot } from './redis-runtime.js'
 import { dataTargetFor, compositeTargetMatches } from './targets.js'
-import { parsePgSql } from './pg-sql.js'
+import { parsePgSql, bindParams } from './pg-sql.js'
+import { evaluatePgExpression } from './pg-plan.js'
 
 const MAX_DEPTH = 8
 const round2 = (n) => Math.round(n * 100) / 100
@@ -463,16 +464,21 @@ function evalPgCall(expr, values, locals, ctx) {
       return value
     }
     const adapted = named ? Object.fromEntries(Object.entries(params).map(([key, value]) => [key, adapt(value)])) : params.map(adapt)
-    const localStatements = parsePgSql(values.query).statements?.filter(stmt => stmt.kind === 'set' && stmt.local) ?? []
-    for (const stmt of localStatements) {
-      conn.localSettings ??= {}
-      if (!Object.hasOwn(conn.localSettings, stmt.name)) conn.localSettings[stmt.name] = conn.session.settings[stmt.name]
-    }
+    const statements = parsePgSql(values.query).statements ?? []
+    const settingsBeforeStatement = { ...conn.session.settings }
     const executed = executePg(ctx.sandboxBox.value, { ...conn.ref, sql: values.query, params: adapted, session: conn.session, nowMs: ctx.nowMs })
     ctx.sandboxBox.value = executed.sandbox; conn.session = executed.session
     const cursor = target.pgKind === 'cursor' ? target : { pgKind: 'cursor', connection: conn, rowFactory: conn.rowFactory, closed: false }
     cursor.rows = []; cursor.position = 0
-    for (const result of executed.results) {
+    for (const [index, result] of executed.results.entries()) {
+      if (result.kind === 'set' && !result.error) {
+        const stmt = bindParams(statements[index], adapted)
+        conn.localSettings ??= {}
+        if (stmt.local) {
+          if (!Object.hasOwn(conn.localSettings, stmt.name)) conn.localSettings[stmt.name] = settingsBeforeStatement[stmt.name]
+        } else delete conn.localSettings[stmt.name]
+        settingsBeforeStatement[stmt.name] = String(evaluatePgExpression(stmt.value, { row: {}, relations: {} }))
+      }
       if (result.error?.code === 'SyntaxError') result.error = { ...result.error, message: `syntax error: ${result.error.message}` }
       const rowValues = result.kind === 'explain' ? (result.plan?.text ?? []).map(line => [line]) : result.rowValues ?? []
       const rows = cursor.rowFactory === 'dict_row'

@@ -86,6 +86,19 @@ describe('parseDataApp', () => {
     expect(origin.status, JSON.stringify(origin.error)).toBe(200)
     expect(origin.redis.returnProvenance).toEqual({ kind: 'postgres', callIndex: 1 })
     expect(origin.value).toEqual({ id: 1, body: 'one source row' })
+    for (const settingCalls of [
+      '        conn.execute("SET hnsw.iterative_scan = relaxed_order; SET LOCAL hnsw.iterative_scan = strict_order")',
+      '        conn.execute("SET hnsw.iterative_scan = relaxed_order")\n        conn.execute("SET LOCAL hnsw.iterative_scan = strict_order")',
+      '        conn.execute("SET LOCAL hnsw.iterative_scan = strict_order; SET hnsw.iterative_scan = relaxed_order")',
+      '        conn.execute("SET LOCAL hnsw.iterative_scan = strict_order")\n        conn.execute("SET hnsw.iterative_scan = relaxed_order")',
+    ]) {
+      const probeApp = mixedFiles['app.py'] + `\nfrom clients import pool\ndef settings_probe():\n    with pool.connection() as conn:\n${settingCalls}\n    return pool.session.settings\n`
+      const probe = parseDataApp({ ...mixedFiles, 'app.py': probeApp }, { ...mixedManifest, editZones: [...mixedManifest.editZones, 'settings_probe'] })
+      expect(probe.diagnostics).toEqual([])
+      const observed = runDataFunction({ appSpec: probe.appSpec, sandbox, dataTarget: mixedTarget, functionName: 'settings_probe', nowMs: 0 })
+      expect(observed.status, JSON.stringify(observed.error)).toBe(200)
+      expect.soft(observed.value, settingCalls).toEqual({ 'hnsw.iterative_scan': 'relaxed_order' })
+    }
   })
   it('does not certify an equal literal as a cache return or grant composite authority to a single-service manifest', () => {
     const parsed = parseDataApp(mixedFiles, mixedManifest)
@@ -105,6 +118,15 @@ describe('parseDataApp', () => {
     const aliased = parseDataApp({ ...mixedFiles, 'clients.py': aliasedCosmos }, mixedManifest)
     expect(aliased.diagnostics).toEqual([])
     expect(aliased.appSpec.data.client.consistency).toBe('Eventual')
+    for (const poolImport of [
+      'from unrelated import ConnectionPool',
+      'from psycopg_pool import ConnectionPool\nfrom unrelated import ConnectionPool',
+      'from unrelated import ConnectionPool\nfrom psycopg_pool import ConnectionPool',
+    ]) {
+      const foreign = parseDataApp({ ...mixedFiles, 'clients.py': mixedFiles['clients.py'].replace('from psycopg_pool import ConnectionPool', poolImport) }, mixedManifest)
+      expect.soft(foreign.diagnostics.some(d => d.code === 'DATA_UNSUPPORTED'), poolImport).toBe(true)
+      expect.soft(foreign.appSpec === null, poolImport).toBe(true)
+    }
   })
   it('executes a parameterized Redis semantic hit from real binary vectors and protected decoders', () => {
     const target = REDIS_TARGET
