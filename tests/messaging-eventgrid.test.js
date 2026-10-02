@@ -13,6 +13,9 @@ import { SERVICEBUS_STARTER_FILES, SERVICEBUS_SOLUTION_FILES } from '../src/data
 import { MESSAGING_RUNTIME_FILES } from '../src/data/templates/messaging-python/runtime.js'
 import { runLine } from '../src/lib/az/shell.js'
 import { eventgridFilteredSubscriptionLab } from '../src/data/labs/eventgrid-filtered-subscription.lab.js'
+import { EVENTGRID_LABS } from '../src/data/labs/messaging-journey/index.js'
+import { createBehavioralRun } from '../src/lib/labEngine/run.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
 
 const root = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-messaging/providers`
 const destination = `${root}/Microsoft.Storage/storageAccounts/stmessagingorders/blobServices/default/containers/event-deadletters`
@@ -35,6 +38,29 @@ const out = result => result.lines.filter(line => line.kind === 'out').map(line 
 const err = result => result.lines.filter(line => line.kind === 'err').map(line => line.text).join('\n')
 
 describe('bounded Event Grid publication and delivery', () => {
+  it('causal event receipts reject journal-only publication base-field and callback timing tampering after retained trace eviction', () => {
+    for (const lab of [EVENTGRID_LABS[0], EVENTGRID_LABS[1]]) {
+      let run = createBehavioralRun(lab, { attemptId: `strict-event-journal-${lab.id}` })
+      for (const task of lab.tasks) for (const step of task.solution.steps) {
+        const result = applyRunAction(run, step.kind === 'file'
+          ? { type: 'save-file', path: step.path, text: step.content } : { type: 'command', line: step.line }, lab)
+        expect(result.diagnostics ?? []).toEqual([])
+        run = result.run
+      }
+      const actual = JSON.parse(JSON.stringify(run.runtime.messaging))
+      actual.eventGrid.traces = []
+      expect(validateMessagingState(actual)).toBe(true)
+      const changes = lab.journeyOrder === 7
+        ? [{ attempts: 99 }, { deliveryId: 'nonexistent' }, { status: 'delivered' }, { reason: 'fabricated' }, { timing: 'real-Azure-time' }]
+        : [{ timing: 'real-Azure-time' }]
+      for (const change of changes) {
+        const forged = JSON.parse(JSON.stringify(actual))
+        const kind = lab.journeyOrder === 7 ? 'publish' : 'notification'
+        Object.assign(forged.executionReceipts.at(-1).measurements.trace.find(row => row.kind === kind), change)
+        expect(validateMessagingState(forged), `${kind} ${JSON.stringify(change)}`).toBe(false)
+      }
+    }
+  })
   it('causal event receipts expose actual publication without a subscriber', () => {
     const { sandbox } = fixture()
     sandbox.eventGridTopics[0].eventSubscriptions = []

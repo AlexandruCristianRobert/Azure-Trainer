@@ -88,8 +88,15 @@ export function exactEvent(actual, expected) {
 
 export function publishedEvents(measurement, expected) {
   const rows = measurement.trace.filter(row => row.kind === 'publish')
-  return rows.length === expected.length && rows.every((row, index) => row.topicId === EVENT_TOPIC_ID
-    && exactEvent(row.event, expected[index]) && !!row.eventRecordId)
+  if (rows.length !== expected.length) return false
+  const remaining = [...expected]
+  return rows.every(row => {
+    if (row.topicId !== EVENT_TOPIC_ID || !row.eventRecordId) return false
+    const index = remaining.findIndex(event => exactEvent(row.event, event))
+    if (index < 0) return false
+    remaining.splice(index, 1)
+    return true
+  })
 }
 
 export function notifiedDelivery(measurement, row, expected) {

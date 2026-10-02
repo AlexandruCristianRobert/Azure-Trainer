@@ -54,6 +54,21 @@ describe('Event Grid curriculum', () => {
     expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
     expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.every(task => task.done)).toBe(true)
   })
+  it('the same exact event facts may be published in another order', () => {
+    const lab = labAt(1)
+    const original = lab.tasks[2].solution.steps[0].content
+    const run = replayMessagingSolution(lab, { 'events.py': original.replace('publisher.send([e_eu, e_us, e_other])', 'publisher.send([e_other, e_us, e_eu])') })
+    expect(run.runtime.messaging.eventGrid.events.map(row => row.event.id)).toEqual(['e-other', 'e-us', 'e-eu'])
+    expect(run.runtime.messaging.eventGrid.deliveries.map(row => [row.event.id, row.status])).toEqual([['e-eu', 'delivered']])
+    expect(run.runtime.messaging.effects.notifications).toEqual({ 'e-eu': { eventId: 'e-eu', orderId: 'o1' } })
+    expect(evaluateLab(lab, run).tasks.every(task => task.done)).toBe(true)
+  })
+  it.each(['e_eu, e_us', 'e_eu, e_us, e_us', 'e_eu, e_us, e_other, e_other'])('exact fact matching rejects missing duplicate or extra publication: %s', batch => {
+    const lab = labAt(1), original = lab.tasks[2].solution.steps[0].content
+    const run = replayMessagingSolution(lab, { 'events.py': original.replace('publisher.send([e_eu, e_us, e_other])', `publisher.send([${batch}])`) })
+    expect(run.runtime.messaging.eventGrid.deliveries.map(row => row.event.id)).toEqual(['e-eu'])
+    expect(evaluateLab(lab, run).tasks.slice(-2).map(task => task.done)).toEqual([false, false])
+  })
   it('logical retries recover one actual event and deadletter another to the prepared container', () => {
     const lab = labAt(2), run = replayMessagingSolution(lab)
     const rows = run.runtime.messaging.eventGrid.deliveries

@@ -284,3 +284,17 @@ Final self-review added safe Array.isArray checks to the new trace reader for ma
 | 2026-10-02 | Final static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0480413 |
 
 Task9 final total: fifteen npm invocations **40.3986314 seconds**, two static probes **0.0943764 seconds**, combined **40.4930078 seconds**. New cumulative **269.1985588 seconds (4.4866426467 minutes)**. No unmeasured executable probes.
+
+### Task 9 fix round 1: unordered exact facts and strict historical trace semantics
+
+Base a5f039f. Reviewer supplied read-only probe **0.3269391 seconds**, already run and not repeated; starting fix cumulative **269.5254979 seconds**. Read both Important findings verbatim plus receiving-code-review/systematic-debugging skills. Only helpers publishedEvents matching, shared Event Grid trace validator, two owning test files and this log changed. No engine suite/other owning/aggregate/full/cloud/browser/build/AKS/Container Apps/legacy checks, agents, merge/push/publication.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Reordered publication RED | npm test -- tests/messaging-labs-eventgrid.test.js | 1 failed /11 passed; reversed same fact batch delivered/notified only e-eu but grading false; bodies208ms | 1 | 2.8716233 |
+| 2026-10-02 | Journal-only semantics RED | npm test -- tests/messaging-eventgrid.test.js -t "causal event receipts" | 1 failed /2 passed /15 skipped; publish attempts99 admitted after retained trace eviction; bodies35ms | 1 | 2.6838574 |
+| 2026-10-02 | Final curriculum GREEN | npm test -- tests/messaging-labs-eventgrid.test.js | 12 passed; alternate order accepted, missing/duplicate/extra rejected; bodies207ms, pristine | 0 | 2.8566715 |
+| 2026-10-02 | Final journal semantics GREEN | npm test -- tests/messaging-eventgrid.test.js -t "causal event receipts" | 3 passed /15 skipped; all five publication fields and callback timing tampering rejected; bodies50ms, pristine | 0 | 2.6846222 |
+| 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0427300 |
+
+Four test invocations **11.0967744 seconds**, static **0.0427300 seconds**, combined **11.1395044 seconds**. New cumulative **280.6650023 seconds (4.6777500383 minutes)**. No unmeasured executable probes; ordinary diff/status/source reads are not probes. Full raw GREEN and fix rationale appended to ignored task-9-report.md. Actual Functions receipt conformance remains Task10; catalog/legacy focused integration remains Task11; previous deferred null-trace guard and filtered-source fixture remain controller final-review pointers.

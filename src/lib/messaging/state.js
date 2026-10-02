@@ -50,11 +50,13 @@ export function validOrderEffectTrace(trace, state) {
 
 /** Actual publication snapshots and callback-bound notification helper receipts. */
 export function validEventGridApplicationTrace(trace, state, inFlight = false) {
+  if (trace.timing !== 'logical-simulator-ticks') return false
   const base = 'attempts,deliveryId,eventRecordId,id,kind,reason,status,timeMs,timing'
   if (trace.kind === 'publish') {
     const source = Array.isArray(state.eventGrid?.events) && state.eventGrid.events.find(row => row?.id === trace.eventRecordId)
     return Object.keys(trace).sort().join(',') === `attempts,deliveryId,event,eventRecordId,id,kind,reason,status,timeMs,timing,topicId`
       && !!source && trace.topicId === source.topicId && trace.timeMs === source.publishedAtMs
+      && trace.deliveryId === null && trace.attempts === null && trace.status === null && trace.reason === null
       && JSON.stringify(trace.event) === JSON.stringify(source.event)
       && new TextEncoder().encode(JSON.stringify(trace.event)).length <= 128 * 1024
   }
