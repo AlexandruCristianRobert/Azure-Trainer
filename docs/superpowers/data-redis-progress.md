@@ -91,6 +91,15 @@ Final solefixwave51f9bf2..2ef54ef complete; /root/final_redis_rereview confirmsa
 Final acceptedtree2ef54ef: controllerfreshcore20/20 in2.5755982s, build554modules in5.2109946s; combined7.7865928s, commandsparallel, noerrors onlyexistingbundleadvisory. Gitdiffcheckpasses, authorCodex confirmed.
 All8tasks andfinalreview gates complete. Main untouched atc89dd02, Redisbranchunmerged/unpublished; userintegrationdirection pending. Namedbranchworktree willbepreserved. No lab exceeded30minutes ofverification; nofull/AKS/ACA/browser suites.
 Ownedplan scratchdirectory removed after23ledger Ruling lines were collected inchronologicalorder andpersisted indata-redis-rulings.md. Only generatedbriefs/probes/packages/mirrorledger were removed; committedreports/reviewdecisions/source remainrecoverable ingit. Featureworktree andall siblingworktrees preserved.
+
+## Local main integration — 2026-10-02
+
+User selected option1, localmerge only. Main was clean atc89dd02; gitpull--ff-only reported alreadyuptodate. Gitmerge--ff-only codex/data-redis advancedmain to05c3abb withoutconflicts. No remotechanges/push/PR/publish.
+
+Mergedtree verification: npm.cmd test -- tests/data-redis-store.test.js tests/data-redis-search.test.js tests/data-python-sdk.test.js passed3files/20cases, exit0,3.4013254s. npm.cmd run build passed554modules, exit0,6.0156463s (Vite5.15s); onlyexistingbundleadvisory. Commandsranconcurrently; conservativecombined9.4169717s. Noexcludedfull/AKS/ACA/browser/legacyLabtests. Documentation-onlyintegrationrecordneedsnorebuild.
+
+Cleanup targets onlymergedRedisworktree E:/Projects/Vue/Azure-Trainer/.superpowers/worktrees/data-redis andcodex/data-redis branch. Worktreeclean; ignoredfilesonlygenerateddist andVitestcache, reproducible. Committedsource/reports/rulingsremainreachableonmain. Otherworktreesuntouched.
+
 Ruling: certify whole-answer origin transport through supported codec/container/function flows, but do not certify independently field-reconstructed equivalent dictionaries as native returned answers — conservative origin identity prevents literals borrowing incidental native results — cost: equivalent field-by-field reconstructed answers may remain uncertifiable until provenance support is extended.
 Ruling: final fix wave may add Redis-only returned-value provenance through supported runtime/codec/function flows and extend complete-frame grading summaries to Guided/Troubleshooting, plus numeric-key normalization and handoff corrections — broad review reproduced canned-answer acceptance and valid noisy-code rejection, both binding proof defects — cost: narrow shared runtime/evidence changes with focused regressions, no general Python refactor or additional permanent cases.
 Ruling: accept final review's bounded Python/module-import exclusion — ADRs require nonexecuting declared scaffold recognition — cost: other Python forms remain explicitly unsupported.
