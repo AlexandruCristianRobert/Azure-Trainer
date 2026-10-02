@@ -20,7 +20,11 @@ import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
 import { canonicalize, recordVerification } from '../src/lib/labEngine/evidence.js'
 import { sourceTextHash } from '../src/lib/labEngine/sourceJournal.js'
-import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { applyRunAction, applyCommandEffects } from '../src/lib/labEngine/actions.js'
+import { createRegistry } from '../src/lib/sandbox/registry.js'
+import { createAksCluster, aksClusterId } from '../src/lib/sandbox/aks.js'
+import { emptyClusterState } from '../src/lib/kubernetes/state.js'
+import { runLine } from '../src/lib/az/shell.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { projectSourceHash, selectBuildFiles } from '../src/lib/project/build.js'
 
@@ -318,4 +322,117 @@ it('requires fresh current final evidence after deployed source and service drif
     stages: { ...afterProofSave.stages, cleanupCheckpoint: staleCheckpoint }, evidence: { ...afterProofSave.evidence,
       dataCleanupReceipt: { sequence: staleCheckpoint.sequence, attemptId: afterProofSave.attemptId, snapshot: canonicalize(staleCheckpoint) } } }
   expect(() => deserializeRun(JSON.stringify(reorderedFreeze), fixture.lab)).toThrow()
+})
+
+// Removing the primitive guard, accepting an existing create as ownership, or
+// accepting missing deletion receipts must break this actual-command case.
+it('cleans only receipt-backed creations while preserving supplied references and partial cleanup history', async () => {
+  const ownership = await import('../src/lib/labEngine/data-capstone/ownership.js').catch(() => ({}))
+  expect(ownership.captureDataOwnership).toBeTypeOf('function')
+  const fixture = capstoneCoreFixture(4)
+  const clusterId = aksClusterId('rg-assistant', 'aks-assistant')
+  const measured = (context, id) => context.evidence.experimentsById[context.evidence.currentEvidenceByTask[id]]?.measurements.status === 200
+  const lab = { ...fixture.lab, id: 'core-ownership', engineVersion: 2, contentVersion: 1,
+    capabilities: { dataCapstone: true, kubernetes: true, acrBuild: true }, manifestId: DATA_CAPSTONE_MANIFEST.id,
+    initialProjectFiles: DATA_CAPSTONE_SOLUTION_FILES,
+    dataRequestTarget: { clusterId, namespace: 'assistant', deploymentName: 'assistant-api', serviceName: 'assistant-api' },
+    dataWorkerTarget: { clusterId, namespace: 'assistant', deploymentName: 'feedback-worker' },
+    dataCleanup: { ready: ownership.dataOwnedCleanupReady, allowAction: ownership.dataFrozenActionAllowed },
+    stages: [{ id: 'core', taskIds: ['baseline'] }, { id: 'final', taskIds: ['recovered'] }],
+    tasks: ['baseline', 'recovered'].map(id => ({ id, verification: { scenarioId: id, scenarioVersion: 1 }, check: context => measured(context, id) })),
+    scenarios: Object.fromEntries(['baseline', 'recovered'].map((id, i) => [id, { ...coreScenario([{ action: 'inspect' }]), stageId: i ? 'final' : 'core', mode: 'inspect' }])),
+    seed(sandbox) {
+      sandbox = createResourceGroup(sandbox, { name: 'rg-assistant', location: 'eastus' }).sandbox
+      sandbox = createRegistry(sandbox, { resourceGroup: 'rg-assistant', name: 'acrassistant', sku: 'Basic' }).sandbox
+      sandbox = createAksCluster(sandbox, { resourceGroup: 'rg-assistant', name: 'aks-assistant', nodeCount: 2, enableManagedIdentity: true, generateSshKeys: true, attachAcr: 'acrassistant' }).sandbox
+      sandbox = createPostgresServer(sandbox, { resourceGroup: 'rg-assistant', name: 'pg-preexisting' }).sandbox
+      return sandbox
+    },
+    initializeSimulation(run) {
+      const cluster = emptyClusterState(clusterId)
+      cluster.resources['Namespace//assistant'] = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'assistant', uid: 'supplied-namespace', resourceVersion: '1' } }
+      const service = structuredClone(fixture.run.runtime.kubernetes.clusters[requestTarget.clusterId].resources['Service/assistant/api'])
+      service.apiVersion = 'v1'; service.metadata = { name: 'assistant-api', namespace: 'assistant', uid: 'supplied-service', resourceVersion: '1' }
+      cluster.resources['Service/assistant/assistant-api'] = service
+      return { sandbox: run.sandbox, artifacts: run.artifacts, nextSequence: run.nextSequence,
+        runtime: { ...run.runtime, kubernetes: { ...run.runtime.kubernetes, clusters: { [clusterId]: cluster } } } }
+    } }
+  let run = createBehavioralRun(lab, { attemptId: 'ownership-attempt' })
+  const command = line => {
+    const out = applyRunAction(run, { type: 'command', line }, lab)
+    expect(out.diagnostics).toEqual([]); expect(out.lines.some(item => item.kind === 'err'), JSON.stringify(out.lines)).toBe(false)
+    run = out.run
+  }
+  for (const line of ['az group delete -n rg-assistant --yes', 'az postgres flexible-server delete -g rg-assistant -n pg-preexisting --yes',
+    'az aks delete -g rg-assistant -n aks-assistant --yes', 'az acr delete -g rg-assistant -n acrassistant --yes']) {
+    expect(applyRunAction(run, { type: 'command', line }, lab).run).toEqual(run)
+  }
+  command('az postgres flexible-server create -g rg-assistant -n pg-preexisting')
+  expect(ownership.dataCleanupInventory(run, lab).owned).toEqual([])
+  command('az group create -n rg-data-capstone -l eastus')
+  const before = run
+  const create = 'az postgres flexible-server create -g rg-data-capstone -n pg-assistant --tier GeneralPurpose'
+  const supported = runLine(run.sandbox, create, { run, lab })
+  command(create)
+  const createdPgId = '/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourcegroups/rg-data-capstone/providers/microsoft.dbforpostgresql/flexibleservers/pg-assistant'
+  expect(ownership.dataCleanupInventory(run, lab).owned.filter(row => row.type !== 'Microsoft.Resources/resourceGroups').map(row => row.resourceId)).toEqual([createdPgId])
+  expect(ownership.captureDataOwnership(before, { ...before, sandbox: supported.sandbox }, { ...supported, command: create }, lab).stages.data.creationReceipts.at(-1).resourceId).toBe(createdPgId)
+  const count = run.stages.data.creationReceipts.length
+  command(create); command('az postgres flexible-server show -g rg-data-capstone -n pg-assistant')
+  command('az postgres flexible-server update -g rg-data-capstone -n pg-assistant --storage-size 128')
+  expect(run.stages.data.creationReceipts).toHaveLength(count)
+  const failed = applyRunAction(run, { type: 'command', line: 'az postgres flexible-server create -g missing -n bad-server' }, lab).run
+  expect(failed.stages.data.creationReceipts).toHaveLength(count)
+  command('az cosmosdb create -g rg-data-capstone -n cosmos-assistant')
+  command('az redisenterprise create -g rg-data-capstone -n redis-assistant --sku Balanced_B0 --access-keys-auth Enabled')
+  command('az aks get-credentials -g rg-assistant -n aks-assistant')
+  command('az acr build --registry acrassistant --image assistant:v1 .')
+  command('kubectl apply -f k8s/deployment.yaml'); command('kubectl apply -f k8s/worker.yaml')
+  for (const line of ['kubectl delete namespace assistant', 'kubectl delete service assistant-api -n assistant'])
+    expect(applyRunAction(run, { type: 'command', line }, lab).run).toEqual(run)
+  command('kubectl delete deployment feedback-worker -n assistant')
+  expect(run.stages.data.deletionReceipts.at(-1).purpose).toBe('maintenance')
+  command('kubectl apply -f k8s/worker.yaml')
+  run = stages.advanceDataStage(stagedVerify(run, lab, 'baseline'), lab).run
+  run = stages.freezeDataCleanup(stagedVerify(run, lab, 'recovered'), lab).run
+  expect(run.stages.cleanupCheckpoint).not.toBeNull()
+  expect(ownership.dataFrozenActionAllowed(run, { type: 'command', line: 'az group delete -n rg-assistant --yes' }, lab)).toBe(false)
+  const frozen = structuredClone(run)
+  const history = { artifacts: run.artifacts, evidence: run.evidence, files: run.project.savedFiles }
+  const foreignGroup = structuredClone(run)
+  foreignGroup.sandbox.containerRegistries.push({ ...foreignGroup.sandbox.containerRegistries[0], resourceGroup: 'rg-data-capstone', name: 'foreign',
+    id: '/subscriptions/7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37/resourceGroups/rg-data-capstone/providers/Microsoft.ContainerRegistry/registries/foreign' })
+  expect(ownership.dataFrozenActionAllowed(foreignGroup, { type: 'command', line: 'az group delete -n rg-data-capstone --yes' }, lab)).toBe(false)
+  const effect = runLine(run.sandbox, 'kubectl delete deployment assistant-api -n assistant', { run, lab }).effects
+  const mutated = structuredClone(effect); mutated[0].kubernetes.currentContext = null
+  expect(() => applyCommandEffects(run, mutated, lab)).toThrow()
+  const directDelete = applyCommandEffects(run, effect, lab).run
+  expect(directDelete.stages.data.deletionReceipts.at(-1).purpose).toBe('cleanup')
+  expect(directDelete.runtime.kubernetes.clusters[clusterId].resources['Deployment/assistant/assistant-api']).toBeUndefined()
+  command('kubectl delete deployment assistant-api -n assistant')
+  command('kubectl delete deployment feedback-worker -n assistant')
+  expect(run.runtime.dataCapstone.worker).toEqual({ lastBatch: [], artifactId: null })
+  const cascade = applyRunAction(run, { type: 'command', line: 'az group delete -n rg-data-capstone --yes' }, lab)
+  expect(cascade.diagnostics).toEqual([])
+  expect(stages.dataCleanupReady(cascade.run, lab)).toBe(true)
+  expect(cascade.run.stages.data.deletionReceipts.filter(row => row.purpose === 'cleanup')).toHaveLength(6)
+  command('az postgres flexible-server delete -g rg-data-capstone -n pg-assistant --yes')
+  expect(stages.dataCleanupReady(run, lab)).toBe(false)
+  expect(stages.advanceDataStage(run, lab).diagnostics.length).toBeGreaterThan(0)
+  run = deserializeRun(serializeRun(run, lab), lab)
+  const erased = structuredClone(run); erased.sandbox.cosmosAccounts = []; erased.sandbox.redisClusters = []; erased.sandbox.resourceGroups = erased.sandbox.resourceGroups.filter(item => item.name !== 'rg-data-capstone')
+  expect(stages.dataCleanupReady(erased, lab)).toBe(false)
+  command('az cosmosdb delete -g rg-data-capstone -n cosmos-assistant --yes')
+  command('az redisenterprise delete -g rg-data-capstone -n redis-assistant --yes')
+  command('az group delete -n rg-data-capstone --yes')
+  expect(stages.dataCleanupReady(run, lab)).toBe(true)
+  const recreated = structuredClone(run); recreated.sandbox.postgresServers.push(frozen.sandbox.postgresServers.find(item => item.name === 'pg-assistant'))
+  expect(stages.dataCleanupReady(recreated, lab)).toBe(false)
+  expect(() => deserializeRun(JSON.stringify(recreated), lab)).toThrow()
+  expect(run.artifacts).toEqual(history.artifacts); expect(run.project.savedFiles).toEqual(history.files)
+  expect(run.evidence.experimentsById).toEqual(history.evidence.experimentsById)
+  expect(run.stages.data.protectedRefs).toEqual(frozen.stages.data.protectedRefs)
+  expect(applyRunAction(run, { type: 'command', line: create }, lab).run).toEqual(run)
+  expect(deserializeRun(serializeRun(run, lab), lab).stages.data.deletionReceipts).toEqual(run.stages.data.deletionReceipts)
+  expect(stages.advanceDataStage(run, lab).diagnostics).toEqual([])
 })

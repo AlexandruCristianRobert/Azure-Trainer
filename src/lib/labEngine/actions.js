@@ -36,6 +36,7 @@ import { advanceConnectivityIncident } from '../kubernetes/connectivity-incident
 import { cancelChangedProbeExperiments } from '../kubernetes/probe-experiments.js'
 import { cancelChangedResourceExperiments } from '../kubernetes/resource-experiments.js'
 import { isDataCapstone, advanceDataStage, freezeDataCleanup, dataStageFrozenActionAllowed } from './data-capstone/stages.js'
+import { dataCommandAllowed, captureDataOwnership, dataOwnedDeletionEffect, dataProtectedRefs } from './data-capstone/ownership.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -104,8 +105,17 @@ function compiledFromRun(run, resourceGroup, parameterPath) {
 }
 
 export function applyCommandEffects(run, effects, lab) {
-  if (isDataCapstone(lab) && run.stages.cleanupCheckpoint && effects.length)
-    fail('DATA_CLEANUP_FROZEN', 'Frozen cleanup cannot accept command effects outside the exact ownership adapter.')
+  let ownedDeletion = null
+  if (isDataCapstone(lab) && effects.length) {
+    const kubeEffect = effects.find(effect => effect.type === 'kubernetes-state')
+    const candidate = kubeEffect ? { ...run, runtime: { ...run.runtime, kubernetes: kubeEffect.kubernetes } } : run
+    const currentRefs = dataProtectedRefs(candidate)
+    const removesInventory = dataProtectedRefs(run).some(ref => !currentRefs.some(row => row.resourceId === ref.resourceId))
+    if (run.stages.cleanupCheckpoint || removesInventory) {
+      ownedDeletion = dataOwnedDeletionEffect(run, effects, lab)
+      if (!ownedDeletion) fail('DATA_CLEANUP_FROZEN', 'Command effects require an exact receipt-owned Deployment deletion.')
+    }
+  }
   let next = run
   const events = []
   const diagnostics = []
@@ -245,11 +255,14 @@ export function applyCommandEffects(run, effects, lab) {
       }
     } else fail('INVALID_EFFECT', `Unknown command effect '${effect.type}'.`)
   }
+  if (ownedDeletion && !diagnostics.length) next = captureDataOwnership(run, next, ownedDeletion, lab)
   return { run: next, events, diagnostics }
 }
 
 function commandAction(run, action, lab) {
   if (typeof action.line !== 'string' || action.line.length > 4096) return actionError(run, 'A bounded command line is required.')
+  if (isDataCapstone(lab) && !dataCommandAllowed(run, action, lab))
+    return actionError(run, 'Delete only exact attempt-owned resources; supplied prerequisites are protected and service cleanup requires freeze.')
   const result = runLine(run.sandbox, action.line, { run, lab })
   if (!isJsonValue(result.sandbox) || !isJsonValue(result.lines) || !isJsonValue(result.events ?? [])) fail('INVALID_EFFECT', 'The command returned unsupported data.')
   if (isDataCapstone(lab) && run.stages.cleanupCheckpoint
@@ -358,6 +371,7 @@ function commandAction(run, action, lab) {
     if (ownership.diagnostics.length) return envelope(run, [], [], ownership.diagnostics)
     next = ownership.run
   }
+  if (isDataCapstone(lab)) next = captureDataOwnership(run, next, { ...result, command: action.line }, lab)
   next = appendOutput(next, result.clear ? [] : [{ kind: 'cmd', text: action.line }, ...result.lines], action.line, result.clear === true)
   return envelope(next, result.lines, [...(result.events ?? []), ...appliedEffects.events], diagnostics)
 }

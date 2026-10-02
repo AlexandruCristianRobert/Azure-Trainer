@@ -15,6 +15,7 @@ import { CAPSTONE_REVISION_2, capstoneCorpusRevision, capstoneExpectedAnswer } f
 import { dataStageFrozenActionAllowed } from '../labEngine/data-capstone/stages.js'
 import { fail } from '../labEngine/errors.js'
 import { startDataIncident, observeDataIncident, dataIncidentCacheFacts } from '../labEngine/data-capstone/incidents.js'
+import { dataCleanupInventory } from '../labEngine/data-capstone/ownership.js'
 
 const clone = value => structuredClone(value)
 const same = (a, b) => a !== undefined && b !== undefined && canonicalize(a) === canonicalize(b)
@@ -189,7 +190,7 @@ export function runCapstoneSteps(input, lab, scenario, primitives) {
       catch (error) { measurements.status = 400; measurements.error = { code: 'INVALID_DATA_ACTION', message: error.message } }
       continue
     }
-    if (step.action === 'inspect') { measurements.inventory = clone({ postgres: run.sandbox.postgresServers ?? [], cosmos: run.sandbox.cosmosAccounts ?? [], redis: run.sandbox.redisClusters ?? [] }); continue }
+    if (step.action === 'inspect') { measurements.inventory = dataCleanupInventory(run, lab); continue }
     if (step.action === 'incident-start') {
       const started = startDataIncident(run, lab, step.incidentId, primitives ? { ...primitives, corpusUpdate } : undefined)
       if (started.diagnostics.length) { measurements.status = 400; measurements.error = started.diagnostics[0] }

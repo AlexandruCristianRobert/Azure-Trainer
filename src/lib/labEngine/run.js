@@ -12,6 +12,7 @@ import { isAksCapstone, initializeAksStages, validateAksStageLab, validateAksCap
 import { createAksCapstoneSeed } from '../../data/labs/aks-journey/capstone-seed.js'
 import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/ownership.js'
 import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDataStageState } from './data-capstone/stages.js'
+import { dataProtectedRefs } from './data-capstone/ownership.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -338,6 +339,7 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     Object.assign(run, cloneJson(initialized))
   }
   if (isAksCapstone(lab)) run.stages.aks.protectedRefs = aksProtectedRefs()
+  if (isDataCapstone(lab)) run.stages.data.protectedRefs = dataProtectedRefs(run)
   return validateBehavioralRun(run, lab)
 }
 

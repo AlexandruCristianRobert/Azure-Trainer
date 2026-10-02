@@ -5,6 +5,7 @@ import { sourceTextHash, sourceVersionsAt, validateSourceJournal } from '../sour
 import { projectSourceHash, selectBuildFiles } from '../../project/build.js'
 import { getProjectManifest } from '../../project/manifests.js'
 import { tokenize } from '../../az/tokenize.js'
+import { validateDataOwnership } from './ownership.js'
 
 const same = (a, b) => canonicalize(a) === canonicalize(b)
 const hash = value => sourceTextHash(canonicalize(value))
@@ -183,6 +184,7 @@ export function validateDataStageState(run, lab) {
     || ['protectedRefs', 'creationReceipts', 'deletionReceipts'].some(key => !Array.isArray(state.data[key]) || state.data[key].length > 64)
     || state.sealedStages.length > lab.stages.length || state.activeStageId !== (lab.stages[state.sealedStages.length]?.id ?? null)
     || run.evidence.milestoneRecords.length !== state.sealedStages.length) fail('INVALID_RUN', 'Data stages are missing, reordered or unsupported.')
+  validateDataOwnership(run, lab)
   const records = Object.values(run.evidence.experimentsById)
   records.forEach(record => validateProof(run, lab, record))
   const manifest = getProjectManifest(run.project.manifestId)
@@ -224,7 +226,8 @@ export function validateDataStageState(run, lab) {
       || checkpoint.evidenceIds.some(id => !same(run.evidence.experimentsById[id].dataCapstoneProof.incidentStarts, incidentStarts(run)))
       || Object.keys(run.artifacts.buildsById).some(id => Number(id.slice(6)) >= checkpoint.sequence)
       || state.data.creationReceipts.some(receipt => receipt.sequence >= checkpoint.sequence)
-      || state.data.deletionReceipts.some(receipt => receipt.sequence <= checkpoint.sequence)) fail('INVALID_RUN', 'Data cleanup checkpoint is unlinked or source changed after freeze.')
+      || state.data.deletionReceipts.some(receipt => receipt.purpose === 'maintenance'
+        ? receipt.sequence >= checkpoint.sequence : receipt.sequence <= checkpoint.sequence)) fail('INVALID_RUN', 'Data cleanup checkpoint is unlinked or source changed after freeze.')
   } else if (run.evidence.dataCleanupReceipt !== undefined || state.sealedStages.length === lab.stages.length)
     fail('INVALID_RUN', 'Final Data seal requires a frozen recovery checkpoint.')
   if (run.completedAt !== null && state.sealedStages.length !== lab.stages.length) fail('INVALID_RUN', 'Data completion requires every ordered seal.')
