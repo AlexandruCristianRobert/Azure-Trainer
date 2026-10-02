@@ -1,13 +1,13 @@
 # Data Lab 13 delivery progress — 2026-10-02
 
-Lab `data-knowledge-assistant-capstone` is implemented on `codex/data-capstone`, based on `96e925ae02bfb58f0241ad068f2f9e5c6cb62217`. Catalog order 13 completes the existing Data journey. Seven checkpoints contain 15 measured outcomes. The UI reuses existing styles. Infrastructure, namespace and Service are supplied; learner data resources and API/worker Deployments start absent.
+Lab `data-knowledge-assistant-capstone` is implemented and review-clean on `codex/data-capstone`, based on `36d8cbc0bad235c4e4cba595d0b6768437eab697`; final product revision `bd3443a56f92831e14edce7b2d5cd32995f7ad6d`. Catalog order 13 completes the existing Data journey. Seven checkpoints contain 15 measured outcomes. The UI reuses existing styles. Infrastructure, namespace and Service are supplied; learner data resources and API/worker Deployments start absent.
 
 | Delivery boundary | Evidence/status |
 | --- | --- |
-| Tasks 1–6 implementation | Existing commits and task reports; controller review ledger remains authoritative |
+| Tasks 1–6 implementation | Complete; independent task reviews and scoped fixes clean |
 | Task 7 implementation | Own Solutions, controls, scratch seed and exact cleanup integration complete; exact-diff self-review complete |
-| Task 7 independent spec/quality review | Scoped re-review confirms S1/S2/S3/Q7-1 addressed; Q7-R1 implemented in fix round 2; Q7-2 implemented in final wave; final scoped re-review pending |
-| Whole-branch review/final controller gate | Whole-branch review found F1/F2/F3 and Q7-2; consolidated fixes implemented, final scoped re-review/controller gate pending; no approval claimed |
+| Task 7 independent spec/quality review | Complete; S1/S2/S3/Q7-1/Q7-R1 addressed and scoped reviews clean |
+| Whole-branch review/final controller gate | Complete; F1/F2/F3/Q7-2 addressed in one consolidated wave; final scoped review clean, no residual blocker |
 | Local merge | Not performed |
 | Remote push/publication | Not performed |
 
@@ -46,7 +46,7 @@ Controller-authorized narrow integration decisions: add the missing protected fo
 
 Self-review fixes: compact actual row/function dependencies to consistency hashes; durable lease dependency uses id/continuation rather than incidental no-op item metadata; API pool/config must agree with saved source; unknown zero embeddings skip semantic search/storage and still produce real PG no-match/history; duplicate precedes restart; PostgreSQL corpus grading normalizes stored timestamps; protected inventory includes AKS-generated infrastructure/default namespaces. Repair/final evidence remains current and fresh; historical mode is trusted Lab definition metadata and does not relax original record hashes/source journals/incident receipt validation.
 
-This delivery has no cloud/network validation, browser suite, real timers, installation, broad/full suite, AKS/Container Apps/legacy capstone or Data replay suite. Cosmos continuation/lease and concurrency estimates remain teaching approximations. Policy JSON files are supplied in the project; the supported simulated Cosmos CLI uses their complete inline JSON in the runnable Solutions. Whole-branch independent review and the user's integration direction remain outstanding.
+This delivery has no cloud/network validation, browser suite, real timers, installation, broad/full suite, AKS/Container Apps/legacy capstone or Data replay suite. Cosmos continuation/lease and concurrency estimates remain teaching approximations. Policy JSON files are supplied in the project; the supported simulated Cosmos CLI uses their complete inline JSON in the runnable Solutions. Reviews are complete; only the user's integration direction remains outstanding.
 
 ## Task 7 fix round 1
 
@@ -78,3 +78,11 @@ One ignored `final-controls.mjs` uses detached retained snapshots, real parsed l
 | `npm.cmd test -- tests/data-capstone-core.test.js`, authorized fixture-only exception | **6/6 pass**, corrected existing fixture payloads; assertions/case count unchanged | 11.0822236 |
 
 Final-wave validation subtotal before staged whitespace check: **47.1410246s**. Supplied measured prior **434.0306137s** gives measured **481.1716383s**. The final reviewer probe has unknown duration; controller separately allocates **300s conservatively**, not measured time or an upper bound. Accounted subtotal is **781.1716383s (13.02min)** before staged whitespace check. Final exact timing/commit and full RED/GREEN output are in the ignored `final-fix-report.md`. Only the six-case core file was rerun after the fixture correction; no second SDK/21-case run or build is claimed. No walkthrough replay, browser/cloud/network/legacy/full suite, installation, merge, push or PR occurred. Final scoped review remains pending.
+
+## Final controller gate
+
+Final scoped review approves F1/F2/F3/Q7-2 with no new blocking issue or out-of-scope observation. It confirms validated frozen proof survives legitimate cleanup. Reviewer added zero validation seconds. Latest production checks: SDK15 passed, corrected core6 passed, UI build passed; eleven final controls passed. The earlier accepted full walkthrough/build remains historical at39f7ab5 and was not replayed after grading fixes.
+
+Final known measured validation **481.257857s (8.02min)**; separate conservative unknown-probe allocation300s; accounted **781.257857s (13.02min)** before final documentation whitespace check. M1 existing bundle advisory remains deferred. No merge/push/publication. [Complete preserved audit, reports and chronological rulings](data-capstone-implementation-audit.md) supersedes earlier pending status entries and references to disposable ignored reports.
+
+Final documentation checks added0.1478285s including one mechanical EOF correction: known measured481.4056855s, separate300s allocation, accounted781.4056855s. Final staged whitespace check passes. No product code changed; only audit/handoff/status documentation is added after the clean final review.

@@ -1,6 +1,6 @@
 # Data learning journey: curriculum discussion
 
-Status: curriculum and design decisions settled on 2026-10-01 (the remaining branches were decided on the learner's delegation). Labs 1–12 are implemented on main. Lab 13 is implemented on `codex/data-capstone`, with its own bounded local validation complete; independent Task 7 and whole-branch reviews/controller gate and integration remain pending. No capstone merge, push or publication is claimed. See [capstone delivery progress](../data-capstone-progress.md).
+Status: curriculum and design decisions settled on 2026-10-01 (the remaining branches were decided on the learner's delegation). Labs 1–12 are implemented on main. Lab 13 is implemented and review-clean on `codex/data-capstone`, with bounded local validation and all task/whole-branch/scoped reviews complete; only integration remains pending. No capstone merge, push or publication is claimed. See [capstone delivery progress](../data-capstone-progress.md) and [preserved audit/rulings](../data-capstone-implementation-audit.md).
 
 ## Confirmed intent and scope
 
