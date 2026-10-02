@@ -258,4 +258,33 @@ describe('bounded Service Bus lifecycle', () => {
     expect(validateMessagingState(JSON.parse(JSON.stringify(state)))).toBe(true)
     expect(original).toEqual({ version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {} })
   })
+
+  it('rejects active or expired persisted messages in the deadletter subqueue', () => {
+    const fixture = brokerFixture()
+    const sent = send(emptyMessagingState(), fixture)
+    for (const status of ['active', 'expired']) {
+      const malformed = structuredClone(sent.state)
+      Object.assign(entity(malformed).messages[0], { status, subQueue: 'deadletter' })
+      expect(validateMessagingState(malformed)).toBe(false)
+      expectFailure(receive(malformed, fixture), malformed, 'MESSAGING_CONFIG')
+      expectFailure(receive(malformed, fixture, { subQueue: 'deadletter' }), malformed, 'MESSAGING_CONFIG')
+    }
+    const first = receive(sent.state, fixture)
+    const rejected = settle(first.state, fixture, first.value[0], 'deadletter')
+    const locked = receive(rejected.state, fixture, { subQueue: 'deadletter' })
+    expect(validateMessagingState(locked.state)).toBe(true)
+    expect(validateMessagingState(settle(locked.state, fixture, locked.value[0]).state)).toBe(true)
+  })
+
+  it('rejects a sparse dedup array whose custom property disguises a missing index', () => {
+    const fixture = brokerFixture()
+    const sent = send(emptyMessagingState(), fixture)
+    const sparse = emptyMessagingState()
+    sparse.entities = structuredClone(sent.state.entities)
+    sparse.nextId = sent.state.nextId
+    entity(sparse).dedup = new Array(1)
+    entity(sparse).dedup.extra = { messageId: 'm', acceptedAtMs: 0, expiresAtMs: 1000 }
+    expect(validateMessagingState(sparse)).toBe(false)
+    expectFailure(receive(sparse, fixture), sparse, 'MESSAGING_CONFIG')
+  })
 })

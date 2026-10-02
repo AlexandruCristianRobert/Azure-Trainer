@@ -15,8 +15,9 @@ export function finiteJson(value, ancestors = new Set()) {
   if (Array.isArray(value)) {
     if (Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1) return false
   } else if (!plainObject(value)) return false
-  ancestors.add(value)
   const keys = Reflect.ownKeys(value).filter(key => !(Array.isArray(value) && key === 'length'))
+  if (Array.isArray(value) && keys.some((key, index) => key !== String(index))) return false
+  ancestors.add(value)
   const valid = keys.every(key => {
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     return typeof key === 'string' && descriptor.enumerable && own(descriptor, 'value') && finiteJson(descriptor.value, ancestors)
@@ -80,6 +81,7 @@ export function validateMessagingState(state) {
           || message.lockedUntilMs !== lock.lockedUntilMs || message.lockedUntilMs <= state.timeMs) return false
       } else if (message.lockToken !== null || message.receiverId !== null || message.lockedUntilMs !== null) return false
       if (message.lockHistory.slice(0, message.status === 'locked' ? -1 : undefined).some(lock => lock.settlement === null)) return false
+      if (['active', 'expired'].includes(message.status) && message.subQueue !== 'active') return false
       if (message.status === 'deadletter' && (message.subQueue !== 'deadletter' || !string(message.deadLetterReason))) return false
     }
     for (const lease of Object.values(entity.sessions)) {

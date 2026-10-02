@@ -15,11 +15,16 @@ Only owning focused checks are authorized. Full, AKS, Container Apps, legacy rep
 | 2026-10-02 | Task 2 self-review regression RED | `npm test -- tests/messaging-servicebus.test.js` | 16 passed, 2 expected failures: ReceiveDisabled send-copy gate and persisted identity validation, exit 1 | 3.169849 |
 | 2026-10-02 | Task 2 status-gate correction | `npm test -- tests/messaging-servicebus.test.js` | 17 passed, persisted identity validation remains expected RED, exit 1 | 3.140021 |
 | 2026-10-02 | Task 2 final GREEN | `npm test -- tests/messaging-servicebus.test.js` | 18/18 passed, exit 0 | 3.095085 |
+| 2026-10-02 | Task 2 review diagnostic | Inline `node --input-type=module` (exact command/output in task-2-review.md) | Reproduced malformed status and sparse dedup acceptance, exit 0; supplied tool wall time, not rerun | 0.0744888 |
+| 2026-10-02 | Task 2 fix round 1 RED | `npm test -- tests/messaging-servicebus.test.js` | 18 passed, 2 expected malformed-persistence failures (`expected true to be false`), exit 1 | 3.139284 |
+| 2026-10-02 | Task 2 fix round 1 GREEN | `npm test -- tests/messaging-servicebus.test.js` | 20/20 passed, exit 0 | 3.112894 |
 
 Task 1 test total, including RED and rerun: **4.698050 seconds**.
 
 Task 2 test total, including initial RED and all reruns: **14.318056 seconds**.
 
-Cumulative known testing, including the controller baseline: **22.673727 seconds** (0.377895 minutes).
+Task 2 fix round 1 test total: **6.252178 seconds**. Total Task 2 npm/Vitest invocation time including fixes: **20.570234 seconds**, plus the supplied review diagnostic **0.0744888 seconds**.
+
+Cumulative known verification, including the controller baseline and supplied review diagnostic: **29.0003938 seconds** (0.483340 minutes).
 
 Task 1 also passed `git diff --check`. Git emitted Windows LF-to-CRLF conversion notices; there were no whitespace errors. This is not a test invocation and is excluded from the test-time total.
