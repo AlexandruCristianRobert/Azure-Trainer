@@ -81,7 +81,7 @@ export function parseDataApp(files, manifest = {}) {
     for (const n of kids(tree.topNode).filter((x) => x.name === 'AssignStatement')) {
       const p = parts(n).filter(c => c.name !== 'TypeDef'); if (p.length === 2 && p[0].name === 'VariableName') { const v = scalar(p[1], text); if (v !== undefined) topConstants[raw(p[0], text)] = v }
     }
-    return [path, { text, tree, topConstants, ...(redis ? redisImports(tree, text) : {}) }]
+    return [path, { text, tree, topConstants, ...(redis ? redisImports(tree, text, composite) : {}) }]
   }))
 
   // Captured client constants and pool constructors are immutable build data.
@@ -130,7 +130,7 @@ export function parseDataApp(files, manifest = {}) {
       const trustedConstructors = ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', 'psycopg', 'psycopg.connect', 'psycopg_pool', 'psycopg_pool.ConnectionPool', 'pgvector.psycopg.register_vector', 'psycopg.types.json.Jsonb'] : [])]
       const constructorNames = new Set(Object.entries(ctx.importBindings).filter(([, binding]) => trustedConstructors.includes(binding)).map(([name]) => name))
       if (composite) findNode(ctx.tree.topNode, node => {
-        if (node.name === 'ImportStatement') for (const [name, binding] of redisImportEntries(node, ctx.text)) {
+        if (node.name === 'ImportStatement') for (const [name, binding] of redisImportEntries(node, ctx.text, composite)) {
           if (trustedConstructors.includes(binding)) constructorNames.add(name)
         }
         return false
@@ -139,7 +139,7 @@ export function parseDataApp(files, manifest = {}) {
       if (constructorCollision) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: rebinding an imported Redis constructor.', ...at(ctx.text, constructorCollision, path) })
       findNode(ctx.tree.topNode, node => {
         if (node.name !== 'ImportStatement') return false
-        for (const [name, binding] of redisImportEntries(node, ctx.text)) {
+        for (const [name, binding] of redisImportEntries(node, ctx.text, composite)) {
           if (name === '*') diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: wildcard imports can rebind protected Redis identities.', ...at(ctx.text, node, path) })
           else if (protectedNames.has(name) && binding !== `training_runtime.${ctx.redisHelpers[name] ?? name}`) {
             diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Protected Redis helper '${name}' cannot be rebound.`, ...at(ctx.text, node, path) })
@@ -228,10 +228,10 @@ function rebindsRedisName(node, names, text) {
 
 // Read only parsed ImportStatement nodes: comments and string literals cannot
 // grant constructor/helper authority. Aliases bind to the imported identity.
-function redisImports(tree, text) {
+function redisImports(tree, text, composite = false) {
   const importBindings = {}
   for (const node of kids(tree.topNode).filter(node => node.name === 'ImportStatement')) {
-    for (const [name, binding] of redisImportEntries(node, text)) importBindings[name] = binding
+    for (const [name, binding] of redisImportEntries(node, text, composite)) importBindings[name] = binding
   }
   const redisConstructors = {}; const redisHelpers = {}
   for (const [name, binding] of Object.entries(importBindings)) {
@@ -242,7 +242,7 @@ function redisImports(tree, text) {
   return { importBindings, redisConstructors, redisHelpers }
 }
 
-function redisImportEntries(node, text) {
+function redisImportEntries(node, text, composite = false) {
   const children = kids(node).filter(child => !['Comment', '(', ')'].includes(child.name))
   const importAt = children.findIndex(child => child.name === 'import')
   const module = children[0]?.name === 'from' ? children.slice(1, importAt).map(child => raw(child, text)).join('') : null
@@ -253,7 +253,10 @@ function redisImportEntries(node, text) {
     const asAt = group.findIndex(child => child.name === 'as')
     const imported = (asAt >= 0 ? group.slice(0, asAt) : group).map(child => raw(child, text)).join('')
     const name = asAt >= 0 ? raw(group[asAt + 1], text) : module ? imported : imported.split('.')[0]
-    entries.push([name, module ? `${module}.${imported}` : imported]); group = []
+    // Python's unaliased `import package.submodule` binds `package`; an
+    // explicit alias or from-import binds the full imported identity.
+    const binding = module ? `${module}.${imported}` : composite && asAt < 0 ? imported.split('.')[0] : imported
+    entries.push([name, binding]); group = []
   }
   for (const child of children.slice(importAt + 1)) { if (child.name === ',') append(); else group.push(child) }
   append()

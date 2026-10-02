@@ -127,6 +127,20 @@ describe('parseDataApp', () => {
       expect.soft(foreign.diagnostics.some(d => d.code === 'DATA_UNSUPPORTED'), poolImport).toBe(true)
       expect.soft(foreign.appSpec === null, poolImport).toBe(true)
     }
+    for (const [jsonImport, jsonConstructor] of [
+      ['import psycopg.types.json', 'psycopg.types.json.Jsonb'],
+      ['from psycopg.types.json import Jsonb', 'Jsonb'],
+      ['import psycopg.types.json as json_sdk', 'json_sdk.Jsonb'],
+    ]) {
+      const jsonApp = `${jsonImport}\n${mixedFiles['app.py']}\ndef json_probe():\n    return ${jsonConstructor}({"kind": "article"})\n`
+      const jsonParsed = parseDataApp({ ...mixedFiles, 'app.py': jsonApp }, { ...mixedManifest, editZones: [...mixedManifest.editZones, 'json_probe'] })
+      expect.soft(jsonParsed.diagnostics, jsonImport).toEqual([])
+      if (jsonParsed.appSpec) {
+        const jsonResult = runDataFunction({ appSpec: jsonParsed.appSpec, sandbox: cached, dataTarget: mixedTarget, functionName: 'json_probe', nowMs: 0 })
+        expect(jsonResult.status, JSON.stringify(jsonResult.error)).toBe(200)
+        expect(jsonResult.value.value).toEqual({ kind: 'article' })
+      }
+    }
   })
   it('executes a parameterized Redis semantic hit from real binary vectors and protected decoders', () => {
     const target = REDIS_TARGET
