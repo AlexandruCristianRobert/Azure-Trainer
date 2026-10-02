@@ -517,7 +517,8 @@ function evalPgCall(expr, values, locals, ctx) {
       if (conn.pool && !ctx.pgPoolIds.has(conn.pool)) ctx.pgPoolIds.set(conn.pool, ctx.pgPoolIds.size + 1)
       const bound = ctx.dataTarget.kind === 'composite' && result.kind === 'select' ? bindParams(statements[index], adapted) : null
       const relations = bound ? [bound, ...(bound.joins ?? [])] : []
-      const scopeFilters = bound?.where?.filter(condition => condition.expression?.kind === 'column'
+      const scopeFilters = bound?.where?.filter(condition => condition.expression?.kind === 'column' && condition.operator === '='
+        && ['product', 'version', 'language'].includes(condition.column)
         && relations.some(relation => relation.table === 'documents'
           && (condition.table === (relation.alias ?? relation.table) || !condition.table && relations.length === 1)))
         .map(condition => ({ column: condition.column, operator: condition.operator, value: evaluatePgExpression(condition.value, { row: {}, relations: {} }) })) ?? []

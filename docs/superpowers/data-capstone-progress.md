@@ -6,7 +6,7 @@ Lab `data-knowledge-assistant-capstone` is implemented on `codex/data-capstone`,
 | --- | --- |
 | Tasks 1–6 implementation | Existing commits and task reports; controller review ledger remains authoritative |
 | Task 7 implementation | Own Solutions, controls, scratch seed and exact cleanup integration complete; exact-diff self-review complete |
-| Task 7 independent spec/quality review | First reviews completed; S1/S2/S3/Q7-1 addressed in fix round 1, awaiting independent re-review; minor Q7-2 deferred to final triage |
+| Task 7 independent spec/quality review | Scoped re-review confirms S1/S2/S3/Q7-1 addressed; new Q7-R1 addressed in fix round 2, awaiting re-review; minor Q7-2 deferred to final triage |
 | Whole-branch review/final controller gate | Pending; no approval claimed |
 | Local merge | Not performed |
 | Remote push/publication | Not performed |
@@ -55,3 +55,7 @@ Four blocking review findings were reproduced and fixed without a build or accep
 The same ignored `task-7-fix-controls.mjs` exercises detached retained snapshots with deliberate parsed captured-artifact substitution: no extra builds, actual interpreted Python/store calls, original snapshot files untouched. All **12 focused controls pass**: valid alternate RAG, actual history and relevant alternative indexes; rejection of canned/incidental history, missing scope or similarity threshold (even with identical rows), unrelated indexes, inequality no-match and incidental literal. The named SDK/core command ran once for shared runtime edits: **21/21 pass**. No permanent case was added; minor Q7-2 is not part of this fix wave.
 
 Added validation before final static check: **7.1153912s**, including setup/diagnostic failures (0.1421658 + 0.3091643 + 0.4237052 + 0.6289886 + 0.5652051), focused GREEN/final controls (0.454322 + 0.5231339), and named tests (4.0687063). Supplied pre-fix aggregate423.9989349s gives **431.1143261s** before final static check. Full commands, output summary, final static timing and commit are appended to the ignored Task 7 report. Independent re-review and whole-branch gate remain pending.
+
+## Task 7 fix round 2
+
+Scoped review confirmed the first four fixes and found Q7-R1: diagnostic capture tried to snapshot `condition.value` for supported `IN`, whose actual AST uses `values`. Capture now selects only documents product/version/language equality predicates needed for scope certification. Unrelated/IN predicates still execute unchanged; inequalities do not become equalities. The same ignored controls script adds one outcome-equivalent `d.id IN (all actual corpus document IDs)` control, parsed without diagnostics: RED500/DATA_UNSUPPORTED, GREEN200 with correct sources[1,2]. All earlier12 controls remain GREEN, **13 total**. Metadata-only restriction required no additional named test/build/full replay. Added RED1.1397407s + GREEN0.9659225s = **2.1056632s** before final static check; supplied aggregate431.8621002s -> **433.9677634s**. Final static timing/commit in ignored report; re-review and whole-branch gate pending.
