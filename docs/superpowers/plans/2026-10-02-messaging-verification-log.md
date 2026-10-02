@@ -367,3 +367,15 @@ Exact selected command: `npm test -- tests/messaging-engine.test.js tests/messag
 Five test invocations **19.9948944 seconds**, one build **8.1966347 seconds**, combined **28.1915291 seconds** before static checks. Cumulative **353.4484460 seconds** before static checks. Build600 modules, index2749.91kB/gzip749.83kB; existing >500kB warning. Full raw output/commands/exits/timing, test rationale and self-review are in ignored `final-fix-report.md`. No additional runtime probes. Full/legacy/AKS/Container Apps/cloud/browser checks, CI and deployment **NOT RUN**; no merge/push/publication. Actual Azure host, browser clipboard/focus/responsiveness and first-load performance remain unverified. Controller owns one scoped rereview and residual adjudication.
 
 Final static checks: `git diff --check` exit0 **0.0535647 seconds** (existing LF/CRLF notices only); `git diff --cached --check` exit0 **0.0377530 seconds** (no output). Combined final fix wave **28.2828468 seconds**; cumulative **353.5397637 seconds (5.892329395 minutes)**, below30minutes. These bookkeeping totals were recorded and staged after the checks; no further code changes or execution occurred.
+
+### Authorized merge and release preparation
+
+User selected “1 and publish”. Final scoped review found all seven findings addressed, no new breakage, and ran no additional executable checks. Main was clean and up to date with origin; the reviewed branch fast-forwarded into main at ba207c1. Fresh merged-main verification used only the following commands, launched together; elapsed times are summed, including overlap.
+
+| Command | Result | Exit | Seconds |
+| --- | --- | ---: | ---: |
+| npm run test:messaging | 217/217, 11 files | 0 | 5.5444337 |
+| npm test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js | 21/21, 2 files | 0 | 6.4497560 |
+| npm run build -- --base=/Azure-Trainer/ | Success, 600 modules; existing large-chunk warning | 0 | 8.4073158 |
+
+Release-preparation verification adds **20.4015055 seconds**; cumulative **373.9412692 seconds (6.23235449 minutes)** before publication/CI. No AKS, Container Apps, full legacy or broad browser suite ran. CI/deployment results and durations are pending at this snapshot and will be reported from the actual release workflow.

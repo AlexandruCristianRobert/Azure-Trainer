@@ -2,7 +2,7 @@
 
 Date: 2026-10-02
 
-Status: implemented and locally verified on branch `codex/messaging-orders` on 2026-10-02; not published. All twelve Labs are registered, the focused Messaging checks pass (217 tests after the combined final-review fixes), the retained focused Data checks pass (21 tests), and the production Pages-path build succeeds. The build reports its large-chunk warning. Controller-owned scoped rereview and the user's integration/publication decision remain pending; CI and deployment have not run. See [simulator contract](../../messaging-simulator.md) and [verification log](../plans/2026-10-02-messaging-verification-log.md). The original written specification was approved by the user on 2026-10-02, who subsequently authorized implementation through the selected subagent workflow. This status does not authorize merge, push or publication.
+Status: implemented, reviewed and merged into `main` on 2026-10-02. All twelve Labs are registered. Fresh checks on merged `main` pass: 217 focused Messaging tests, 21 focused Data tests, and the production Pages-path build. The existing large-chunk warning remains. Whole-branch review and the scoped final-fix review are complete, with all seven final findings addressed. The user explicitly selected merge and publication; the release push and CI/deployment results are pending at this documentation snapshot. See [simulator contract](../../messaging-simulator.md) and [verification log](../plans/2026-10-02-messaging-verification-log.md). The original written specification was approved by the user on 2026-10-02, who subsequently authorized implementation through the selected subagent workflow.
 
 ## Purpose and success criteria
 
@@ -100,7 +100,7 @@ Track cumulative test time per Lab publication, including reruns and CI. Aim com
 
 ## Acceptance and next gate
 
-The original design/planning gates were completed and the user selected subagent implementation. The twelve-Lab branch now has the focused local verification recorded above. The remaining gate is controller-owned whole-branch review followed by an explicit integration/publication decision. Local verification is not a live release; CI and deployment results and elapsed time must be recorded only when those checks actually run.
+The design, planning, implementation, whole-branch review and final-fix review gates are complete. The user selected local merge and publication. Merged-main verification is recorded above; the release workflow is the remaining gate at this documentation snapshot. Local verification is not a live release; CI and deployment results and elapsed time must be reported only when those checks actually run.
 
 ## Grounding
 
