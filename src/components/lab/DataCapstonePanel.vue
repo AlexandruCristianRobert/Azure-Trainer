@@ -65,7 +65,9 @@ async function send(action) {
       <details open><summary>Returned answers, sources and history</summary><pre>{{ JSON.stringify(result.requests.map(item => ({ route: item.route, artifact: item.artifactId, returnedFrom: item.returnedFrom, body: item.body, sources: item.sourceIds, historyWrites: item.historyWrites })), null, 2) }}</pre></details>
       <details><summary>Worker before/after and actual cache effects</summary><pre>{{ JSON.stringify({ worker: result.worker, cache: result.cache }, null, 2) }}</pre></details>
       <details><summary>SDK trace</summary><p v-if="result.displayTraceTruncated">Display bounded; complete per-request facts grade the task.</p><pre>{{ JSON.stringify(result.calls, null, 2) }}</pre></details>
-      <details v-if="recovery"><summary>Retained fresh final recovery sources and history</summary><pre>{{ JSON.stringify(recovery.requests.map(item => ({ route: item.route, artifactId: item.artifactId, returnedFrom: item.returnedFrom, body: item.body, historyWrites: item.historyWrites })), null, 2) }}</pre></details>
+    </div>
+    <div v-if="recovery" class="experiment-tool__response">
+      <details><summary>Retained fresh final recovery sources and history</summary><pre>{{ JSON.stringify(recovery.requests.map(item => ({ route: item.route, artifactId: item.artifactId, returnedFrom: item.returnedFrom, body: item.body, historyWrites: item.historyWrites })), null, 2) }}</pre></details>
     </div>
   </section>
 </template>

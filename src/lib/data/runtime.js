@@ -522,7 +522,7 @@ function evalPgCall(expr, values, locals, ctx) {
         && relations.some(relation => relation.table === 'documents'
           && (condition.table === (relation.alias ?? relation.table) || !condition.table && relations.length === 1)))
         .map(condition => ({ column: condition.column, operator: condition.operator, value: evaluatePgExpression(condition.value, { row: {}, relations: {} }) })) ?? []
-      const record = { call, sql: values.query, ...(ctx.dataTarget.kind === 'composite' ? { params: trainingSnapshot(adapted), scopeFilters: trainingSnapshot(scopeFilters) } : {}), plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
+      const record = { call, sql: values.query, statementKind: result.kind, ...(ctx.dataTarget.kind === 'composite' ? { params: trainingSnapshot(adapted), scopeFilters: trainingSnapshot(scopeFilters) } : {}), plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
         poolLifetime: conn.pool?.lifetime ?? null, poolMaxSize: conn.pool?.max_size ?? null,
         poolIdentity: conn.pool ? ctx.pgPoolIds.get(conn.pool) : null,
         charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }

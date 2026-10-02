@@ -6,8 +6,8 @@ Lab `data-knowledge-assistant-capstone` is implemented on `codex/data-capstone`,
 | --- | --- |
 | Tasks 1–6 implementation | Existing commits and task reports; controller review ledger remains authoritative |
 | Task 7 implementation | Own Solutions, controls, scratch seed and exact cleanup integration complete; exact-diff self-review complete |
-| Task 7 independent spec/quality review | Scoped re-review confirms S1/S2/S3/Q7-1 addressed; new Q7-R1 addressed in fix round 2, awaiting re-review; minor Q7-2 deferred to final triage |
-| Whole-branch review/final controller gate | Pending; no approval claimed |
+| Task 7 independent spec/quality review | Scoped re-review confirms S1/S2/S3/Q7-1 addressed; Q7-R1 implemented in fix round 2; Q7-2 implemented in final wave; final scoped re-review pending |
+| Whole-branch review/final controller gate | Whole-branch review found F1/F2/F3 and Q7-2; consolidated fixes implemented, final scoped re-review/controller gate pending; no approval claimed |
 | Local merge | Not performed |
 | Remote push/publication | Not performed |
 
@@ -59,3 +59,22 @@ Added validation before final static check: **7.1153912s**, including setup/diag
 ## Task 7 fix round 2
 
 Scoped review confirmed the first four fixes and found Q7-R1: diagnostic capture tried to snapshot `condition.value` for supported `IN`, whose actual AST uses `values`. Capture now selects only documents product/version/language equality predicates needed for scope certification. Unrelated/IN predicates still execute unchanged; inequalities do not become equalities. The same ignored controls script adds one outcome-equivalent `d.id IN (all actual corpus document IDs)` control, parsed without diagnostics: RED500/DATA_UNSUPPORTED, GREEN200 with correct sources[1,2]. All earlier12 controls remain GREEN, **13 total**. Metadata-only restriction required no additional named test/build/full replay. Added RED1.1397407s + GREEN0.9659225s = **2.1056632s** before final static check; supplied aggregate431.8621002s -> **433.9677634s**. Final static timing/commit in ignored report; re-review and whole-branch gate pending.
+
+## Whole-branch final fix wave
+
+F1 final recovery now requires the current captured connection mode/pool size, API replicas and effective PostgreSQL capacity parameters (`max_connections`, `pgbouncer.enabled`, `pgbouncer.default_pool_size`) to match the successful cold pool recovery. The learner brief explains restoring proven settings before fresh final answers and freeze. Existing current source/evidence and freeze checks remain authoritative; a historical resolved flag alone cannot certify current capacity. F2 newly written sessions and QA history must contain the requested question; QA history must also contain the requested message identity and embedding matching an actual requested-question helper call. F3 each actual PostgreSQL trace records its executed statement kind; successful SELECT results count origin demand despite supported comments or a grouped SET LOCAL/SELECT, while cache hits remain zero. Q7-2 durable final recovery renders independently of scrollback using existing styles. M1 baseline bundle optimization remains deferred.
+
+One ignored `final-controls.mjs` uses detached retained snapshots, real parsed learner functions/store execution and compiled-template server rendering. Final **11 controls pass**: valid final capacity, successful fresh answers with regressed capacity rejected, replica drift rejected, complete cache-hit history credited with zero origin, question-less writes rejected, separate QA identity/embedding checks, standard/commented/grouped actual retrieval counted and durable recovery displayed with empty scrollback. The grouped control uses supported literal SQL values because this bounded grammar binds parameters per statement; SQL binding behavior was not expanded. Original snapshots and accepted walkthrough artifacts are untouched. No permanent cases were added.
+
+| Final-wave validation | Result | Wall seconds |
+| --- | --- | ---: |
+| `node .superpowers/sdd/2026-10-02-data-lab-13-capstone/final-controls.mjs`, initial setup/RED | F1/F2/display RED; comment Python setup and parameterized group setup corrected | 2.100866 |
+| Same command, corrected setup/RED | F1/F2/comment/display RED; grouped fixture changed to supported literal values | 1.6955988 |
+| Same command, meaningful RED | Seven intended regression failures; valid controls pass | 1.8743666 |
+| Same command, GREEN | 10 controls pass | 2.3176408 |
+| Same command, separate QA identity/embedding GREEN | 11 controls pass | 1.6845817 |
+| `npm.cmd test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js`, once | **20/21**; SDK15 pass, one core load fixture expected credit for history missing newly required fields | 11.9096768 |
+| `npm.cmd run build`, once | 568 modules, passed; existing >500kB advisory | 14.4760703 |
+| `npm.cmd test -- tests/data-capstone-core.test.js`, authorized fixture-only exception | **6/6 pass**, corrected existing fixture payloads; assertions/case count unchanged | 11.0822236 |
+
+Final-wave validation subtotal before staged whitespace check: **47.1410246s**. Supplied measured prior **434.0306137s** gives measured **481.1716383s**. The final reviewer probe has unknown duration; controller separately allocates **300s conservatively**, not measured time or an upper bound. Accounted subtotal is **781.1716383s (13.02min)** before staged whitespace check. Final exact timing/commit and full RED/GREEN output are in the ignored `final-fix-report.md`. Only the six-case core file was rerun after the fixture correction; no second SDK/21-case run or build is claimed. No walkthrough replay, browser/cloud/network/legacy/full suite, installation, merge, push or PR occurred. Final scoped review remains pending.

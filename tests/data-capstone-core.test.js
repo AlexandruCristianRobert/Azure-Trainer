@@ -58,14 +58,14 @@ from training_runtime import embed, training_answer, response_key, encode_answer
 ${names.map(name => DATA_CAPSTONE_SOLUTION_FUNCTIONS[name]).join('\n')}
 def answer(question, product, version, language, session_id, message_id):
     result = cached_answer(question, product, version, language, 60)
-    sessions.upsert_item({"id": message_id, "sessionId": session_id, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"]})
+    sessions.upsert_item({"id": message_id, "sessionId": session_id, "question": question, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"]})
     return result
 ` }
   if (history) {
     files['clients.py'] = files['clients.py'].replace('def connect():', 'qa_history = db.get_container_client("qa_history")\ndef connect():')
     files['app.py'] = files['app.py'].replace('from clients import connect, cache, events, leases, sessions', 'from clients import connect, cache, events, leases, sessions, qa_history')
     const finalReturn = files['app.py'].lastIndexOf('    return result')
-    files['app.py'] = files['app.py'].slice(0, finalReturn) + `    qa_history.upsert_item({"id": session_id + ":" + message_id, "sessionId": session_id, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"]})\n` + files['app.py'].slice(finalReturn)
+    files['app.py'] = files['app.py'].slice(0, finalReturn) + `    qa_history.upsert_item({"id": session_id + ":" + message_id, "sessionId": session_id, "messageId": message_id, "question": question, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"], "embedding": embed(question)})\n` + files['app.py'].slice(finalReturn)
   }
   if (literalReturn) files['app.py'] = files['app.py'].slice(0, files['app.py'].lastIndexOf('    return result')) + `    return {"answer": "Contoso Backup v1 retains snapshots for 35 days by default. Set a custom retention rule on the vault policy to extend this period.", "sources": [1, 2], "product": product, "version": version, "language": language}\n`
   if (literalPassage) files['app.py'] = files['app.py'].replace('"\\n\\n".join(passages)', '"Contoso Backup v1 retains snapshots for 35 days by default. Set a custom retention rule on the vault policy to extend this period."')

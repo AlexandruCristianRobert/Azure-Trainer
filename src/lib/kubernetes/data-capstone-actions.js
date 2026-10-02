@@ -80,6 +80,21 @@ function connectionConfig(appSpec) {
   if (ports.length !== 1 || ![5432, 6432].includes(Number(ports[0][1] ?? ports[0][2]))) return null
   return { mode: Number(ports[0][1] ?? ports[0][2]) === 6432 ? 'pgbouncer' : poolMaxSize ? 'pool' : 'per-request', poolMaxSize }
 }
+// Final answers alone do not remeasure concurrency. Keep the capacity that
+// actually passed cold recovery until cleanup proof is frozen.
+export function dataCapstonePoolRecoveryCurrent(run, lab, load) {
+  const config = connectionConfig(pgDeployedArtifact(run, lab.dataRequestTarget)?.appSpec)
+  const target = lab.dataRequestTarget
+  const replicas = run.runtime.kubernetes.clusters[target.clusterId]?.resources[`Deployment/${target.namespace}/${target.deploymentName}`]?.spec.replicas
+  const parameters = run.sandbox.postgresServers?.find(item => item.name === lab.dataTarget.postgres.server
+    && item.resourceGroup === lab.dataTarget.postgres.resourceGroup)?.parameters
+  const capacity = values => ({ maxConnections: String(values?.max_connections ?? 859),
+    bouncerEnabled: String(values?.['pgbouncer.enabled'] ?? 'false'),
+    bouncerPoolSize: String(values?.['pgbouncer.default_pool_size'] ?? 50) })
+  return !!config && !!parameters && load?.originRequests > 0 && load.failed === 0 && !load.errors?.length
+    && config.mode === load.mode && config.poolMaxSize === load.poolMaxSize && replicas === load.replicas
+    && same(capacity(parameters), capacity(load.serverParameters))
+}
 function frame(run, lab, artifact, route, args) {
   if (!artifact?.appSpec?.data?.composite) return { result: { status: 503, sandbox: run.sandbox, value: null, calls: [], error: { code: 'ServiceUnavailable', message: 'No ready captured composite application.' } }, facts: null }
   const beforeKeys = clone(redisDb(run, lab)?.keys ?? {})
@@ -128,7 +143,9 @@ function frame(run, lab, artifact, route, args) {
     // Same-body upserts still increment the SDK item revision. An unrelated
     // write cannot certify an older matching item in the expected partition.
     return item && item._version > (previous?._version ?? 0) && same({ product: item.product, version: item.version, language: item.language }, scope)
-      && item.sessionId === args[4] && item.answer === result.value?.answer && same(item.sources, result.value?.sources)
+      && item.sessionId === args[4] && item.question === args[0] && item.answer === result.value?.answer && same(item.sources, result.value?.sources)
+      && (container !== 'qa_history' || item.messageId === args[5]
+        && result.trainingCalls?.some(call => call.functionName === 'embed' && call.args[0] === args[0] && same(call.result, item.embedding)))
   }).length : 0
   const historyOrigin = result.returnDataProvenance?.origin
   const historyCall = historyOrigin?.kind === 'cosmos' ? result.calls[historyOrigin.callIndex] : null
@@ -149,7 +166,7 @@ function frame(run, lab, artifact, route, args) {
       && Array.isArray(result.value) && result.value.every(row => same({ product: row.product, version: row.version, language: row.language }, scope))) : null
   const facts = { status: result.status, body: result.value, artifactId: artifact.id, returnedFrom, sourceIds, scope, pgCalls, cosmosCalls, redisCalls,
     trainingCalls: result.trainingCalls ?? [], expectedAnswer, historyWrites, emptySourceValid, historyReadValid,
-    originRequests: Number(pgCalls.some(call => !call.error && /^\s*SELECT\b/i.test(call.sql))), traceComplete: complete,
+    originRequests: Number(pgCalls.some(call => !call.error && call.statementKind === 'select')), traceComplete: complete,
     cacheEffects: cacheEffects(redisCalls, beforeKeys, redisDb(next, lab)?.keys ?? {}, run.runtime.simTimeMs, complete) }
   return { result, facts }
 }

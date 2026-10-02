@@ -5,6 +5,7 @@ import { validateDataIncident } from '../../../lib/labEngine/data-capstone/incid
 import { dataOwnedCleanupReady, dataFrozenActionAllowed } from '../../../lib/labEngine/data-capstone/ownership.js'
 import { redisMemory } from '../../../lib/data/redis-store.js'
 import { canonicalize } from '../../../lib/labEngine/evidence.js'
+import { dataCapstonePoolRecoveryCurrent } from '../../../lib/kubernetes/data-capstone-actions.js'
 import { seedDataCapstone } from './capstone-seed.js'
 import { DATA_CAPSTONE_TARGET, DATA_CAPSTONE_API_TARGET, DATA_CAPSTONE_WORKER_TARGET, dataCapstoneDependencies,
   CAPSTONE_PG_COMMANDS, CAPSTONE_INDEX_SQL, CAPSTONE_REDIS_COMMANDS, capstoneServices,
@@ -218,9 +219,10 @@ export const dataCapstoneLab = {
       command('az postgres flexible-server parameter set -g rg-data-capstone --server-name pg-assistant --name pgbouncer.default_pool_size --value 12'),
       ...release('api', 'capstone-pool-fixed', [file('clients.py', DATA_CAPSTONE_CLIENT_VARIANTS.fixed)], 3), scenario('pool-recovered'), action('data-advance-stage')],
     'Use SET LOCAL for transaction-local tuning. GeneralPurpose supports the supplied PgBouncer model; session state is not a transaction guarantee.'),
-    task('final-recovery', 'final-cleanup', 'After both recoveries, run fresh PG and cache answers with correct history, then explicitly freeze the cleanup checkpoint.', context => {
+    task('final-recovery', 'final-cleanup', 'After both recoveries, keep the server capacity, deployed pool and API replicas that passed cold recovery. Restore those proven settings if changed, run fresh PG and cache answers with correct history, then explicitly freeze the cleanup checkpoint.', context => {
       const m = measured(context, 'final-recovery')
       return correct(m) && bounded(m) && memoryBounded(context) && resolved(context) && m.historyWrites === 4 && m.ragMisses >= 1 && m.semanticHits >= 1
+        && dataCapstonePoolRecoveryCurrent(context, dataCapstoneLab, measured(context, 'pool-recovered')?.load)
         && capstoneFunctionsCurrent(context, 'api', [...appHistory, 'connect']) && capstoneConfigCurrent(context) && capstoneFunctionsCurrent(context, 'worker', workerNames)
     }, [...allFields, 'ownership:inventory'], [scenario('final-recovery'), action('data-freeze-cleanup')],
     'Historical seals preserve milestones; final proof must be fresh against all current builds and settings before deletion.'),
