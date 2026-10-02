@@ -298,3 +298,18 @@ Base a5f039f. Reviewer supplied read-only probe **0.3269391 seconds**, already r
 | 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0427300 |
 
 Four test invocations **11.0967744 seconds**, static **0.0427300 seconds**, combined **11.1395044 seconds**. New cumulative **280.6650023 seconds (4.6777500383 minutes)**. No unmeasured executable probes; ordinary diff/status/source reads are not probes. Full raw GREEN and fix rationale appended to ignored task-9-report.md. Actual Functions receipt conformance remains Task10; catalog/legacy focused integration remains Task11; previous deferred null-trace guard and filtered-source fixture remain controller final-review pointers.
+
+### Task 10: Python Functions Labs 10–11 and combined orders capstone
+
+Base9755c3e; starting cumulative **280.6650023 seconds**. Only the two owning files ran, together on every invocation. No aggregate/full/legacy/AKS/Container Apps/cloud/browser/build tests, new runtime changes, agents, merge/push/publication. Actual Functions callback notification rows and same-attempt delivery acknowledgement were observed through the real host in the new curriculum exercises. The only full capstone replay pair is the positive fixture and its missing-publication mutation.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial RED | npm test -- tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js | 8 failed; missing FUNCTIONS_LABS and messagingCapstoneLab exports; bodies18ms | 1 | 2.7143757 |
+| 2026-10-02 | Implementation diagnostic | npm test -- tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js | 8 failed; manifest-required scaffold omitted and optional uninitialized Event Grid test access; bodies75ms | 1 | 2.7792760 |
+| 2026-10-02 | Contract diagnostic | npm test -- tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js | 4 failed /4 passed; subscription .filter nesting and test-only entities[].messages shape; bodies269ms | 1 | 2.8523398 |
+| 2026-10-02 | First GREEN | npm test -- tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js | 8 passed; actual AzureFunction receipt/acknowledgement and capstone linked ValueError/abandon/DLQ; bodies302ms, pristine | 0 | 2.8356195 |
+| 2026-10-02 | Final GREEN after self-review | npm test -- tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js | 8 passed; shared causal callback policy, exact invalid receipt diagnostics, host/runtime/storage configuration; bodies306ms, pristine | 0 | 2.8674111 |
+| 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0423212 |
+
+Five test invocations **14.0490221 seconds**, static **0.0423212 seconds**, combined **14.0913433 seconds**. New cumulative **294.7563456 seconds (4.91260576 minutes)**. No unmeasured executable probes; code/context/status/diff reads are not probes. Full report/raw final GREEN in ignored task-10-report.md. Journey-local MESSAGING_LABS contains all12; aggregate catalog remains Task11. Deferred Task9/controller final-review pointers untouched.

@@ -11,6 +11,9 @@ export const EVENT_TOPIC_ID = `${GROUP_ID}/providers/microsoft.eventgrid/topics/
 export const EVENT_SUBSCRIPTION_ID = `${EVENT_TOPIC_ID}/eventsubscriptions/order-notifications`
 export const EVENT_ENDPOINT = 'https://orders.trainer.invalid/events'
 export const STORAGE_ID = `${GROUP_ID}/providers/microsoft.storage/storageaccounts/stmessagingorders`
+export const FUNCTION_APP_ID = `${GROUP_ID}/providers/microsoft.web/sites/func-orders`
+export const FUNCTION_ENDPOINT = `${FUNCTION_APP_ID}/functions/NotifyOrder`
+export const functionApp = sandbox => sandbox.functionApps.find(row => eq(row.resourceGroup, MESSAGING_GROUP) && eq(row.name, 'func-orders'))
 export const EVENT_DESTINATION = `${STORAGE_ID}/blobservices/default/containers/event-deadletters`
 export const eventTopic = sandbox => sandbox.eventGridTopics.find(row => eq(row.resourceGroup, MESSAGING_GROUP) && eq(row.name, 'evgt-orders'))
 export const eventSubscription = sandbox => eventTopic(sandbox)?.eventSubscriptions.find(row => eq(row.name, 'order-notifications'))
@@ -27,6 +30,9 @@ export function messagingResourceById(sandbox, id) {
   const group = sandbox.resourceGroups.find(row => eq(row.name, parts[3]))
   if (!group) return null
   if (parts.length === 4) return group
+  if (parts.length === 8 && parts[4] === 'providers' && parts[5] === 'microsoft.web' && parts[6] === 'sites') {
+    return sandbox.functionApps.find(row => eq(row.resourceGroup, group.name) && eq(row.name, parts[7])) ?? null
+  }
   if (parts[4] === 'providers' && parts[5] === 'microsoft.eventgrid' && parts[6] === 'topics') {
     const topic = sandbox.eventGridTopics.find(row => eq(row.resourceGroup, group.name) && eq(row.name, parts[7]))
     if (!topic) return null
@@ -79,6 +85,25 @@ export const exerciseTask = (task, entry, check) => ({ taskId: task.id, ...task.
 export const eventResources = [GROUP_ID, NAMESPACE_ID, EVENT_TOPIC_ID]
 export const eventReady = ({ sandbox }) => ordersNamespace(sandbox)?.sku === 'Standard' && eventTopic(sandbox)?.inputSchema === 'EventGridSchema'
 export const eventReadme = description => baselineReadme(description) + '\nEvent Grid publication and callback registration are simulations: no Azure webhook deployment. The trainer bridge delivers actual event envelopes and drains bounded due retries with logical ticks, without real waits or Azure retry timing guarantees. No FIFO/exactly-once guarantee or real blob durability.\n'
+export const functionsMetadata = Object.freeze({ ...messagingMetadata, service: 'functions', capabilities: { messaging: true, messagingFunctions: true } })
+export const functionsPaths = ['function_app.py', 'training_runtime.py', 'requirements.txt', 'host.json', 'local.settings.json']
+export const functionsResources = [...orderResources, STORAGE_ID, FUNCTION_APP_ID]
+export const functionsReady = context => {
+  const app = functionApp(context.sandbox)
+  const storage = messagingResourceById(context.sandbox, STORAGE_ID)
+  return ordersReady(context) && app?.runtime === 'python' && app.runtimeVersion === '3.12'
+    && app.functionsVersion === '4' && app.os === 'Linux' && app.hostingPlan === 'FlexConsumption'
+    && app.location === 'westeurope'
+    && eq(app.storageAccount, 'stmessagingorders') && eq(app.storageResourceGroup, MESSAGING_GROUP)
+    && storage?.kind === 'StorageV2' && storage.sku === 'Standard_LRS' && storage.location === 'westeurope'
+}
+export const functionsExerciseTask = (task, check) => ({ ...exerciseTask(task, 'function_app.py', check), mode: 'functions' })
+export const functionsReadme = description => eventReadme(description) + '\nUse Python 3.12, Functions 4, Linux Flex Consumption and Python v2 decorators. func start captures saved files for one synchronous bounded host run; save and start again to capture edits. Storage and DefaultAzureCredential are trainer simulations with no secrets, authentication, real Python/Azure process, deployment or background service. The host completes actual Service Bus receipts only after successful invocation. Ordinary func.ServiceBusMessage has no SDK manual settlement methods. Supported ValueError failures abandon and redeliver within broker limits. A successful Event Grid Function acknowledges its actual delivered envelope. Protected work/marker/notification helpers are teaching stores. Reset restores consumed fixtures; no production durability or exactly-once/outbox guarantee.\n'
+
+export function notifiedFunctionDelivery(measurement, row, expected) {
+  return !!row && row.endpointType === 'AzureFunction' && eq(row.endpoint, FUNCTION_ENDPOINT)
+    && callbackNotification(measurement, row, expected)
+}
 
 export function exactEvent(actual, expected) {
   return actual?.id === expected.id && actual.subject === expected.subject && actual.eventType === expected.eventType
@@ -100,8 +125,11 @@ export function publishedEvents(measurement, expected) {
 }
 
 export function notifiedDelivery(measurement, row, expected) {
-  if (!row || row.subscriptionId !== EVENT_SUBSCRIPTION_ID || row.endpointType !== 'WebHook' || row.endpoint !== EVENT_ENDPOINT
-    || row.status !== 'delivered' || row.lastStatus !== 200 || !exactEvent(row.event, expected)) return false
+  return !!row && row.endpointType === 'WebHook' && row.endpoint === EVENT_ENDPOINT && callbackNotification(measurement, row, expected)
+}
+
+function callbackNotification(measurement, row, expected) {
+  if (row.subscriptionId !== EVENT_SUBSCRIPTION_ID || row.status !== 'delivered' || row.lastStatus !== 200 || !exactEvent(row.event, expected)) return false
   const linked = trace => trace.deliveryId === row.id && trace.eventRecordId === row.eventRecordId
   const notifications = measurement.trace.filter(trace => trace.kind === 'notification' && linked(trace))
   if (notifications.length !== 1) return false
