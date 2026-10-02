@@ -23,7 +23,7 @@ const args = ['How many days are Contoso Backup v1 snapshots retained by default
 export const coreScenario = steps => ({ kind: 'data-capstone', version: 1, stageId: 'core', mode: 'worker', steps })
 // Local SDK project: no Lab import or full application walkthrough. A wrong
 // worker checkpoint, namespace delete, or cache-demand branch breaks these cases.
-export function capstoneCoreFixture(poolSize = 12, { literalReturn = false, literalPassage = false } = {}) {
+export function capstoneCoreFixture(poolSize = 12, { literalReturn = false, literalPassage = false, history = false } = {}) {
   const names = ['read_lease', 'save_lease', 'apply_change', 'process_changes', 'invalidate_product', 'retrieve_passages', 'build_context', 'rag_answer', 'cached_answer']
   const files = { ...CAPSTONE_HELPER_FILES, 'clients.py': `import psycopg
 from psycopg_pool import ConnectionPool
@@ -49,9 +49,15 @@ def answer(question, product, version, language, session_id, message_id):
     sessions.upsert_item({"id": message_id, "sessionId": session_id, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"]})
     return result
 ` }
+  if (history) {
+    files['clients.py'] = files['clients.py'].replace('def connect():', 'qa_history = db.get_container_client("qa_history")\ndef connect():')
+    files['app.py'] = files['app.py'].replace('from clients import connect, cache, events, leases, sessions', 'from clients import connect, cache, events, leases, sessions, qa_history')
+    const finalReturn = files['app.py'].lastIndexOf('    return result')
+    files['app.py'] = files['app.py'].slice(0, finalReturn) + `    qa_history.upsert_item({"id": session_id + ":" + message_id, "sessionId": session_id, "product": product, "version": version, "language": language, "answer": result["answer"], "sources": result["sources"]})\n` + files['app.py'].slice(finalReturn)
+  }
   if (literalReturn) files['app.py'] = files['app.py'].slice(0, files['app.py'].lastIndexOf('    return result')) + `    return {"answer": "Contoso Backup v1 retains snapshots for 35 days by default. Set a custom retention rule on the vault policy to extend this period.", "sources": [1, 2], "product": product, "version": version, "language": language}\n`
   if (literalPassage) files['app.py'] = files['app.py'].replace('"\\n\\n".join(passages)', '"Contoso Backup v1 retains snapshots for 35 days by default. Set a custom retention rule on the vault policy to extend this period."')
-  const parsed = parseDataApp(files, { ...DATA_CAPSTONE_MANIFEST, fixedFunctions: {}, receivers: { events: 'cosmos-container', leases: 'cosmos-container', sessions: 'cosmos-container' }, editZones: [...names, 'answer'] })
+  const parsed = parseDataApp(files, { ...DATA_CAPSTONE_MANIFEST, fixedFunctions: {}, receivers: { events: 'cosmos-container', leases: 'cosmos-container', sessions: 'cosmos-container', ...(history ? { qa_history: 'cosmos-container' } : {}) }, editZones: [...names, 'answer'] })
   expect(parsed.diagnostics).toEqual([])
   let sandbox = createResourceGroup(createSandbox(), { name: target.postgres.resourceGroup, location: 'eastus' }).sandbox
   sandbox = createPostgresServer(sandbox, { ...target.postgres, name: target.postgres.server }).sandbox
@@ -64,7 +70,7 @@ def answer(question, product, version, language, session_id, message_id):
   const cosmos = { ...target.cosmos, resourceGroup: target.postgres.resourceGroup }
   sandbox = createCosmosAccount(sandbox, { ...cosmos, name: cosmos.account, locations: { regionName: 'eastus' } }).sandbox
   sandbox = createCosmosDatabase(sandbox, { ...cosmos, name: cosmos.database }).sandbox
-  for (const [name, partitionKeyPath] of [['events', '/product'], ['leases', '/id'], ['sessions', '/sessionId']]) sandbox = createCosmosContainer(sandbox, { ...cosmos, name, partitionKeyPath, throughput: 400 }).sandbox
+  for (const [name, partitionKeyPath] of [['events', '/product'], ['leases', '/id'], ['sessions', '/sessionId'], ...(history ? [['qa_history', '/product']] : [])]) sandbox = createCosmosContainer(sandbox, { ...cosmos, name, partitionKeyPath, throughput: 400 }).sandbox
   sandbox.aksClusters = [{ id: requestTarget.clusterId, identityProfile: { kubeletidentity: { objectId: 'core-kubelet' } } }]
   sandbox.containerRegistries = [{ id: 'core-acr', loginServer: 'core.azurecr.io' }]
   sandbox.roleAssignments = [{ scope: 'core-acr', principalId: 'core-kubelet', roleDefinitionId: ACR_PULL_ROLE_ID }]
@@ -82,6 +88,16 @@ export function coreEvent(run, id, type = 'document-update') {
 }
 const lease = run => readItem(run.sandbox, { ...target.cosmos, container: 'leases' }, 'feedback-worker', 'feedback-worker')?.continuation ?? null
 const execute = (run, lab, steps) => bridge.runCapstoneSteps(run, lab, coreScenario(steps))
+function capturedApp(run, change) {
+  const next = structuredClone(run)
+  const files = { ...next.artifacts.sourceSnapshotsByHash['core-source'].files }
+  files['app.py'] = change(files['app.py'])
+  const receivers = Object.fromEntries(Object.keys(next.artifacts.buildsById.core.appSpec.data.composite.containers).map(name => [name, 'cosmos-container']))
+  const parsed = parseDataApp(files, { ...DATA_CAPSTONE_MANIFEST, fixedFunctions: {}, receivers, editZones: Object.keys(next.artifacts.buildsById.core.appSpec.data.functions) })
+  expect(parsed.diagnostics).toEqual([])
+  next.artifacts.buildsById.core.appSpec = parsed.appSpec
+  return next
+}
 
 it('resumes a pending update after worker replacement and redelivers repeat-safe product invalidations', () => {
   const fixture = capstoneCoreFixture()
@@ -108,6 +124,12 @@ it('resumes a pending update after worker replacement and redelivers repeat-safe
   expect(getDeploymentPods(restarted.run, requestTarget.clusterId, 'assistant', 'worker')[0].metadata.uid).not.toBe(oldUid)
   expect(Object.keys(restarted.run.sandbox.redisClusters[0].database.keys)).toEqual(['ka:answer:contoso-support:one'])
   expect(restarted.measurements.worker.invalidatedKeys.map(item => item.key).sort()).toEqual(['ka:answer:contoso-backup:one', 'ka:sem:contoso-backup:one'])
+  const noDelete = execute(capturedApp(pending, source => source.replaceAll('cache.delete(key)', 'cache.exists(key)')), fixture.lab, [{ action: 'worker-batch' }])
+  expect(noDelete.measurements.status).toBe(200)
+  expect(noDelete.measurements.requests[0].cacheEffects.scanPatterns).toEqual(['ka:answer:contoso-backup:*', 'ka:sem:contoso-backup:*'])
+  expect(noDelete.measurements.requests[0].redisCalls.some(call => call.command === 'DEL')).toBe(false)
+  expect(Object.keys(noDelete.run.sandbox.redisClusters[0].database.keys).sort()).toEqual(['ka:answer:contoso-backup:one', 'ka:answer:contoso-support:one', 'ka:sem:contoso-backup:one'])
+  expect(noDelete.measurements.worker.handledEventIds).toEqual([])
 })
 
 it('keeps the durable continuation when the declared Redis SDK client fails', () => {
@@ -131,6 +153,20 @@ it('models zero PG demand for hits and cold concurrent pool pressure followed by
   expect(seeded.measurements.provenanceValid, 'canonical miss must prove its returned PG answer and sources').toBe(true)
   expect(seeded.measurements.historyWrites).toBe(1)
   expect(seeded.measurements.requests[0].returnedFrom).toBe('postgres')
+  const historyFixture = capstoneCoreFixture(12, { history: true })
+  const firstHistory = execute(historyFixture.run, historyFixture.lab, [request])
+  expect(firstHistory.measurements.historyWrites).toBe(2)
+  const expectedHistory = (state, container) => readItem(state.sandbox, { ...target.cosmos, container }, container === 'sessions' ? 'core-message' : 'core-session:core-message', container === 'sessions' ? 'core-session' : 'contoso-backup')
+  const repeated = execute(firstHistory.run, historyFixture.lab, [request])
+  expect(repeated.measurements.historyWrites).toBe(2)
+  for (const container of ['sessions', 'qa_history']) expect(expectedHistory(repeated.run, container)._version).toBe(2)
+  const unrelated = capturedApp(firstHistory.run, source => source.replace(/    (sessions|qa_history)\.upsert_item\([^\n]+\)/g, '    $1.upsert_item({"id": "unrelated", "sessionId": "other-session", "product": "contoso-support", "version": "v1", "language": "en", "answer": "unrelated answer", "sources": [19]})'))
+  const falseHistory = execute(unrelated, historyFixture.lab, [request])
+  expect(falseHistory.measurements.status).toBe(200)
+  expect(falseHistory.measurements.requests[0].returnedFrom).toBe('response-cache')
+  expect(falseHistory.measurements.requests[0].cosmosCalls.filter(call => call.call === 'cosmos.container.upsert_item')).toHaveLength(2)
+  for (const container of ['sessions', 'qa_history']) expect(expectedHistory(falseHistory.run, container)._version).toBe(1)
+  expect(falseHistory.measurements.historyWrites).toBe(0)
   for (const options of [{ literalReturn: true }, { literalPassage: true }]) {
     const incidental = capstoneCoreFixture(12, options)
     const literal = execute(incidental.run, incidental.lab, [request])

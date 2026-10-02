@@ -106,8 +106,14 @@ function frame(run, lab, artifact, route, args) {
   const expectedAnswer = route === 'GET /answer' && same(result.value, capstoneExpectedAnswer(args[0], scope, revised ? 2 : 1))
   const historyWrites = route === 'GET /answer' ? ['sessions', 'qa_history'].filter(container => {
     if (!cosmosCalls.some(call => !call.error && call.call === 'cosmos.container.upsert_item' && call.container === container)) return false
-    const item = readItem(result.sandbox, { ...lab.dataTarget.cosmos, container }, container === 'sessions' ? args[5] : `${args[4]}:${args[5]}`, container === 'sessions' ? args[4] : args[1])
-    return item && same({ product: item.product, version: item.version, language: item.language }, scope)
+    const ref = { ...lab.dataTarget.cosmos, container }
+    const id = container === 'sessions' ? args[5] : `${args[4]}:${args[5]}`
+    const partition = container === 'sessions' ? args[4] : args[1]
+    const previous = readItem(run.sandbox, ref, id, partition)
+    const item = readItem(result.sandbox, ref, id, partition)
+    // Same-body upserts still increment the SDK item revision. An unrelated
+    // write cannot certify an older matching item in the expected partition.
+    return item && item._version > (previous?._version ?? 0) && same({ product: item.product, version: item.version, language: item.language }, scope)
       && item.sessionId === args[4] && item.answer === result.value?.answer && same(item.sources, result.value?.sources)
   }).length : 0
   const facts = { status: result.status, body: result.value, artifactId: artifact.id, returnedFrom, sourceIds, scope, pgCalls, cosmosCalls, redisCalls,
@@ -219,6 +225,7 @@ export function runCapstoneSteps(input, lab, scenario) {
     const requests = step.action === 'worker-redeliver' ? run.runtime.dataCapstone.worker.lastBatch.map(item => ({ route: 'worker:item', args: [item] }))
       : [{ route: worker ? 'worker:batch' : step.route, args: worker ? [] : step.args }]
     const batch = step.action === 'worker-batch' ? readChangeFeed(findContainer(run.sandbox, { ...lab.dataTarget.cosmos, container: 'events' }), { continuation: continuation(run, lab), startTime: 'Beginning' }) : null
+    const batchBeforeKeys = batch ? clone(redisDb(run, lab)?.keys ?? {}) : null
     for (const request of requests) {
       const observation = frame(run, lab, artifact, request.route, request.args)
       recordFrame(measurements, observation, request.route, request.args, stepIndex)
@@ -235,8 +242,15 @@ export function runCapstoneSteps(input, lab, scenario) {
     if (batch && measurements.status === 200 && measurements.traceComplete && continuation(run, lab) === batch.continuation) {
       run.runtime.dataCapstone.worker = { lastBatch: clone(batch.items), artifactId: artifact?.id ?? null }
       const patterns = measurements.requests.at(-1)?.cacheEffects.scanPatterns ?? []
+      const removed = measurements.requests.at(-1)?.cacheEffects.removedKeys ?? []
+      const afterKeys = redisDb(run, lab)?.keys ?? {}
       for (const item of batch.items) {
-        const observed = item.type === 'positive-feedback' || ['negative-feedback', 'document-update'].includes(item.type) && ['ka:answer:', 'ka:sem:'].every(prefix => patterns.includes(`${prefix}${item.product}:*`))
+        const prefixes = ['ka:answer:', 'ka:sem:'].map(prefix => `${prefix}${item.product}:`)
+        const existingKeys = Object.entries(batchBeforeKeys).filter(([key, entry]) => prefixes.some(prefix => key.startsWith(prefix))
+          && (entry.expiresAtMs === null || entry.expiresAtMs > run.runtime.simTimeMs)).map(([key]) => key)
+        const invalidated = prefixes.every(prefix => patterns.includes(`${prefix}*`))
+          && existingKeys.every(key => removed.some(effect => effect.key === key && effect.command === 'DEL') && !Object.hasOwn(afterKeys, key))
+        const observed = item.type === 'positive-feedback' || ['negative-feedback', 'document-update'].includes(item.type) && invalidated
         if (observed && !measurements.worker.handledEventIds.includes(item.id)) measurements.worker.handledEventIds.push(item.id)
       }
     }
