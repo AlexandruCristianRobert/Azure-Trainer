@@ -4,6 +4,7 @@ import { renderInline } from '../../lib/inlineCode.js'
 import FluentIcon from '../icons/FluentIcon.vue'
 import HintBox from './HintBox.vue'
 import ExamNote from './ExamNote.vue'
+import TaskRationale from './TaskRationale.vue'
 import { useLabRunStore } from '../../stores/labRun.js'
 
 const props = defineProps({
@@ -55,8 +56,9 @@ async function copySolution() {
       </div>
     </div>
     <ExamNote v-if="state === 'done' && examNoteOpen" class="task__indent" :text="task.examNote" />
+    <TaskRationale v-if="task.rationale" :key="task.id" class="task__indent" :lab-title="run.lab?.title ?? ''" :task-text="task.text" :rationale="task.rationale" />
     <template v-if="state === 'current'">
-      <p v-if="task.explanation" class="task__explanation task__indent">{{ task.explanation }}</p>
+      <p v-if="task.explanation && !task.rationale" class="task__explanation task__indent">{{ task.explanation }}</p>
       <HintBox v-for="i in hintsRevealed" :key="i" class="task__indent" :index="i" :total="task.hints.length" :text="task.hints[i - 1]" />
       <div v-if="solutionRevealed" class="solution task__indent">
         <div class="solution__head"><span class="solution__label">SOLUTION</span><button type="button" class="solution__copy" @click="copySolution">{{ copied ? 'Copied' : 'Copy' }}</button></div>
