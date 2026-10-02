@@ -35,6 +35,7 @@ import { advanceConfigIncident } from '../kubernetes/config-incidents.js'
 import { advanceConnectivityIncident } from '../kubernetes/connectivity-incidents.js'
 import { cancelChangedProbeExperiments } from '../kubernetes/probe-experiments.js'
 import { cancelChangedResourceExperiments } from '../kubernetes/resource-experiments.js'
+import { isDataCapstone, advanceDataStage, freezeDataCleanup, dataStageFrozenActionAllowed } from './data-capstone/stages.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -88,6 +89,8 @@ function compiledFromRun(run, resourceGroup, parameterPath) {
 }
 
 export function applyCommandEffects(run, effects, lab) {
+  if (isDataCapstone(lab) && run.stages.cleanupCheckpoint && effects.length)
+    fail('DATA_CLEANUP_FROZEN', 'Frozen cleanup cannot accept command effects outside the exact ownership adapter.')
   let next = run
   const events = []
   const diagnostics = []
@@ -234,6 +237,10 @@ function commandAction(run, action, lab) {
   if (typeof action.line !== 'string' || action.line.length > 4096) return actionError(run, 'A bounded command line is required.')
   const result = runLine(run.sandbox, action.line, { run, lab })
   if (!isJsonValue(result.sandbox) || !isJsonValue(result.lines) || !isJsonValue(result.events ?? [])) fail('INVALID_EFFECT', 'The command returned unsupported data.')
+  if (isDataCapstone(lab) && run.stages.cleanupCheckpoint
+    && (canonicalize(result.sandbox) !== canonicalize(run.sandbox) || (result.effects ?? []).length)
+    && !(typeof lab.dataCleanup?.allowAction === 'function' && lab.dataCleanup.allowAction(run, action, lab) === true))
+    return actionError(run, 'Frozen inventory reads cannot mutate state or execute command effects.')
   if (capstoneStages(lab) && !run.stages.cleanupCheckpoint
     && (result.events ?? []).some(event => event.type === 'deleted' && event.resourceType === 'resourceGroup'))
     return actionError(run, 'Seal the recovery checkpoint before deleting a Capstone resource group.')
@@ -572,6 +579,8 @@ export function applyRunAction(run, action, lab) {
   validateBehavioralRun(run, lab)
   if (run.completedAt !== null) fail('RUN_COMPLETED', 'Completed attempts are read-only. Restart to create a new attempt.')
   if (!action || typeof action !== 'object' || Array.isArray(action) || !isJsonValue(action)) return actionError(run, 'The action must be finite JSON data.')
+  if (isDataCapstone(lab) && !dataStageFrozenActionAllowed(run, action, lab))
+    return envelope(run, [], [], [diagnostic('DATA_CLEANUP_FROZEN', 'Final proof is frozen. Only inventory, exact owned deletion, cleanup verification and final sealing remain.')])
   if (isAksCapstone(lab) && run.stages.cleanupCheckpoint && !aksFrozenActionAllowed(action))
     return envelope(run, [], [], [diagnostic('AKS_CLEANUP_FROZEN', 'Final proof is frozen. Only reads, cleanup deletions, cleanup Verify and final stage sealing are available.')])
   if (isAksCapstone(lab) && action.scenarioId !== undefined) {
@@ -600,6 +609,14 @@ export function applyRunAction(run, action, lab) {
   }
   let result
   switch (action.type) {
+    case 'data-freeze-cleanup':
+      if (!isDataCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'Data freeze accepts no caller checkpoint state.')
+      result = freezeDataCleanup(run, lab)
+      break
+    case 'data-advance-stage':
+      if (!isDataCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'Data stage advancement accepts no caller state.')
+      result = advanceDataStage(run, lab)
+      break
     case 'aks-freeze-cleanup': {
       if (!isAksCapstone(lab) || Object.keys(action).length !== 1) return actionError(run, 'Freeze accepts no caller-supplied checkpoint state.')
       const frozen = freezeAksCleanup(run, lab)
@@ -683,13 +700,13 @@ export function applyRunAction(run, action, lab) {
         draftFiles: { ...run.project.draftFiles, [action.path]: text }, diagnostics: [] } })
       else {
         const key = `file:${action.path}`
-        if ((capstoneStages(lab) || isAksCapstone(lab)) && run.project.sourceJournal.length >= MAX_SOURCE_SAVES)
+        if ((capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab)) && run.project.sourceJournal.length >= MAX_SOURCE_SAVES)
           return actionError(run, 'The Capstone source save limit has been reached.')
-        const project = capstoneStages(lab) || isAksCapstone(lab)
+        const project = capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab)
           ? { ...saved.project, sourceJournal: [...run.project.sourceJournal, { sequence: run.nextSequence,
             path: action.path, version: saved.project.fileVersions[action.path], hash: sourceTextHash(text) }] }
           : saved.project
-        result = envelope({ ...run, project, nextSequence: run.nextSequence + (capstoneStages(lab) || isAksCapstone(lab) ? 1 : 0),
+        result = envelope({ ...run, project, nextSequence: run.nextSequence + (capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab) ? 1 : 0),
           dependencyGenerations: { ...run.dependencyGenerations, [key]: (run.dependencyGenerations[key] ?? 0) + 1 } })
       }
       break

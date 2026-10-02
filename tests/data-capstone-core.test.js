@@ -12,9 +12,16 @@ import { upsertItem, readItem } from '../src/lib/data/cosmos-store.js'
 import { recordChange } from '../src/lib/data/change-feed.js'
 import { reconcileKubernetes, getDeploymentPods } from '../src/lib/kubernetes/reconcile.js'
 import { ACR_PULL_ROLE_ID } from '../src/lib/sandbox/roleAssignments.js'
-import { DATA_CAPSTONE_TARGET, DATA_CAPSTONE_MANIFEST, DATA_CAPSTONE_SOLUTION_FUNCTIONS, DATA_CAPSTONE_SCHEMA } from '../src/data/templates/data-python/capstone.js'
+import { DATA_CAPSTONE_TARGET, DATA_CAPSTONE_MANIFEST, DATA_CAPSTONE_SOLUTION_FUNCTIONS, DATA_CAPSTONE_SCHEMA, DATA_CAPSTONE_SOLUTION_FILES } from '../src/data/templates/data-python/capstone.js'
 import { CAPSTONE_HELPER_FILES } from '../src/data/templates/data-python/capstone-runtime.js'
 import { CAPSTONE_CORPUS } from '../src/data/fixtures/data/capstone.js'
+import * as stages from '../src/lib/labEngine/data-capstone/stages.js'
+import { createBehavioralRun } from '../src/lib/labEngine/run.js'
+import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
+import { recordVerification } from '../src/lib/labEngine/evidence.js'
+import { applyRunAction } from '../src/lib/labEngine/actions.js'
+import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
+import { projectSourceHash, selectBuildFiles } from '../src/lib/project/build.js'
 
 const target = DATA_CAPSTONE_TARGET
 const requestTarget = { clusterId: 'core-cluster', namespace: 'assistant', serviceName: 'api', deploymentName: 'api' }
@@ -187,4 +194,103 @@ it('models zero PG demand for hits and cold concurrent pool pressure followed by
   expect(repaired.originRequests).toBe(1000)
   expect(repaired.poolMaxSize).toBe(4)
   expect(repaired.failed).toBe(0)
+})
+
+// A changed evidence link or skipped stage must reject resume; a removed live
+// fingerprint comparison must reject the drift controls before cleanup freezes.
+function stagedFixture() {
+  const fixture = capstoneCoreFixture(4)
+  const files = { ...DATA_CAPSTONE_SOLUTION_FILES, ...fixture.run.artifacts.sourceSnapshotsByHash['core-source'].files }
+  const current = ({ evidence }, task) => evidence.experimentsById[evidence.currentEvidenceByTask[task]]?.measurements
+  const lab = { ...fixture.lab, id: 'core-stages', engineVersion: 2, contentVersion: 1,
+    capabilities: { dataCapstone: true }, manifestId: DATA_CAPSTONE_MANIFEST.id, initialProjectFiles: files,
+    stages: [{ id: 'core', taskIds: ['worker'] }, { id: 'final', taskIds: ['answer'] }],
+    tasks: [
+      { id: 'worker', verification: { scenarioId: 'worker-proof', scenarioVersion: 1 },
+        dependencies: { pool: ({ sandbox }) => sandbox.postgresServers[0].parameters.max_connections },
+        check: context => current(context, 'worker')?.worker.handledEventIds.includes('stage-event') === true },
+      { id: 'answer', verification: { scenarioId: 'answer-proof', scenarioVersion: 1 },
+        dependencies: { pool: ({ sandbox }) => sandbox.postgresServers[0].parameters.max_connections },
+        check: context => current(context, 'answer')?.provenanceValid === true && current(context, 'answer')?.answersCorrect === true },
+    ], scenarios: { 'worker-proof': coreScenario([{ action: 'worker-batch' }]),
+      'answer-proof': { ...coreScenario([{ action: 'request', route: 'GET /answer', args }]), stageId: 'final', mode: 'request' } } }
+  let run = createBehavioralRun(lab, { attemptId: 'stage-attempt' })
+  const sequence = fixture.run.nextSequence
+  const id = `build-${sequence}`
+  const buildFiles = selectBuildFiles(files, DATA_CAPSTONE_MANIFEST)
+  const sourceHash = projectSourceHash(buildFiles)
+  run.sandbox = { ...fixture.run.sandbox, aksClusters: [], containerRegistries: [], roleAssignments: [] }
+  run.artifacts = { ...fixture.run.artifacts, buildsById: { [id]: { ...fixture.run.artifacts.buildsById.core, id, sourceHash, digest: 'sha256:core' } },
+    sourceSnapshotsByHash: { [sourceHash]: { hash: sourceHash, files: buildFiles } }, publishedTags: { 'core.azurecr.io/core:v1': id } }
+  run.runtime = { ...run.runtime, ...fixture.run.runtime }
+  for (const snapshot of Object.values(run.runtime.kubernetes.clusters[requestTarget.clusterId].podSnapshots)) if (snapshot.artifactId === 'core') snapshot.artifactId = id
+  run.nextSequence = sequence + 1
+  return { run: coreEvent(run, 'stage-event'), lab }
+}
+function stagedVerify(run, lab, taskId) {
+  const task = lab.tasks.find(task => task.id === taskId)
+  const measured = bridge.runCapstoneSteps(run, lab, lab.scenarios[task.verification.scenarioId])
+  return recordVerification(measured.run, lab, taskId, { scenarioId: task.verification.scenarioId, scenarioVersion: 1,
+    outcome: measured.measurements.status === 200 ? 'passed' : 'failed', completed: measured.measurements.status === 200,
+    startedAtMs: run.runtime.simTimeMs, endedAtMs: measured.run.runtime.simTimeMs, measurements: measured.measurements })
+}
+
+it('preserves ordered measured stage seals across export while rejecting changed evidence and skipped stages', () => {
+  expect(stages.advanceDataStage).toBeTypeOf('function')
+  const { run, lab } = stagedFixture()
+  const unverified = stages.advanceDataStage(run, lab)
+  expect(unverified.diagnostics.length).toBeGreaterThan(0)
+  expect(() => stagedVerify(run, lab, 'answer')).toThrow()
+  const verified = stagedVerify(run, lab, 'worker')
+  const advanced = stages.advanceDataStage(verified, lab)
+  expect(advanced.diagnostics).toEqual([])
+  const resumed = deserializeRun(serializeRun(advanced.run, lab), lab)
+  expect(resumed.stages.activeStageId).toBe('final')
+  expect(evaluateLab(lab, resumed).tasks.find(task => task.id === 'worker').reason).toBe('stage-sealed')
+  const changed = structuredClone(resumed)
+  changed.evidence.experimentsById[changed.stages.sealedStages[0].evidenceIds[0]].measurements.worker.handledEventIds = []
+  expect(() => stages.validateDataStageState(changed, lab)).toThrow()
+  const skipped = structuredClone(resumed)
+  skipped.stages.activeStageId = null
+  expect(() => deserializeRun(JSON.stringify(skipped), lab)).toThrow()
+  const reordered = structuredClone(resumed)
+  reordered.stages.sealedStages[0].stageId = 'final'
+  expect(() => stages.validateDataStageState(reordered, lab)).toThrow()
+  const saved = applyRunAction(resumed, { type: 'save-file', path: 'app.py', text: `${resumed.project.savedFiles['app.py']}\n# repair\n` }, lab).run
+  expect(saved.project.sourceJournal).toHaveLength(1)
+  expect(deserializeRun(serializeRun(saved, lab), lab).stages.sealedStages).toHaveLength(1)
+})
+
+it('requires fresh current final evidence after deployed source and service drift before freezing cleanup', () => {
+  expect(stages.freezeDataCleanup).toBeTypeOf('function')
+  const fixture = stagedFixture()
+  const active = stages.advanceDataStage(stagedVerify(fixture.run, fixture.lab, 'worker'), fixture.lab).run
+  const final = stagedVerify(active, fixture.lab, 'answer')
+  for (const mutate of [
+    state => { state.sandbox.postgresServers[0].parameters.max_connections = '24' },
+    state => { state.sandbox.postgresServers[0].databases[0].indexes.push({ name: 'changed-index' }) },
+    state => { state.sandbox.cosmosAccounts[0].databases[0].containers[0].indexingPolicy.includedPaths = [] },
+    state => { state.runtime.kubernetes.clusters[requestTarget.clusterId].resources['Deployment/assistant/worker'].spec.replicas = 2 },
+  ]) {
+    const drifted = structuredClone(final)
+    mutate(drifted)
+    expect(stages.freezeDataCleanup(drifted, fixture.lab).diagnostics.length).toBeGreaterThan(0)
+    expect(evaluateLab(fixture.lab, drifted).tasks.find(task => task.id === 'worker').done).toBe(true)
+  }
+  const drifted = applyRunAction(final, { type: 'save-file', path: 'app.py', text: `${final.project.savedFiles['app.py']}\n# next repair\n` }, fixture.lab).run
+  expect(stages.freezeDataCleanup(drifted, fixture.lab).diagnostics.length).toBeGreaterThan(0)
+  const fresh = stagedVerify(drifted, fixture.lab, 'answer')
+  const frozen = stages.freezeDataCleanup(fresh, fixture.lab)
+  expect(frozen.diagnostics).toEqual([])
+  expect(frozen.run.stages.cleanupCheckpoint).not.toBeNull()
+  for (const action of [{ type: 'save-file', path: 'app.py', text: 'changed' }, { type: 'simulation-advance', seconds: 1 },
+    { type: 'command', line: 'az acr build --registry core --image core:v2 .' }, { type: 'data-capstone', scenarioId: 'answer-proof' }]) {
+    const blocked = applyRunAction(frozen.run, action, fixture.lab)
+    expect(blocked.diagnostics.length).toBeGreaterThan(0)
+    expect(blocked.run).toEqual(frozen.run)
+  }
+  expect(bridge.applyDataCapstoneAction(frozen.run, { type: 'data-capstone', scenarioId: 'answer-proof' }, fixture.lab).diagnostics.length).toBeGreaterThan(0)
+  expect(() => bridge.runCapstoneSteps(frozen.run, fixture.lab, fixture.lab.scenarios['answer-proof'])).toThrow()
+  expect(stages.advanceDataStage(frozen.run, fixture.lab).diagnostics.length).toBeGreaterThan(0)
+  expect(deserializeRun(serializeRun(frozen.run, fixture.lab), fixture.lab).stages.cleanupCheckpoint).not.toBeNull()
 })

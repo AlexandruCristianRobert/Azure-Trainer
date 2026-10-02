@@ -11,6 +11,7 @@ import { validDiagnosisEvidenceRecord } from '../kubernetes/diagnosis-incidents.
 import { isAksCapstone, initializeAksStages, validateAksStageLab, validateAksCapstoneState, isAksPinnedDiagnosisEvidence } from '../kubernetes/capstone/stages.js'
 import { createAksCapstoneSeed } from '../../data/labs/aks-journey/capstone-seed.js'
 import { aksProtectedRefs, validateAksOwnership } from '../kubernetes/capstone/ownership.js'
+import { isDataCapstone, initializeDataStages, validateDataStageLab, validateDataStageState } from './data-capstone/stages.js'
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
@@ -89,6 +90,7 @@ export function validateBehavioralLab(lab) {
   }
   validateStageLab(lab)
   validateAksStageLab(lab)
+  validateDataStageLab(lab)
   if (lab.initialProjectFiles !== undefined && !validStringMap(lab.initialProjectFiles)) {
     fail('INVALID_LAB', 'Initial project files must be a string map.')
   }
@@ -125,7 +127,7 @@ function validArtifacts(artifacts) {
 }
 
 function validateCapstoneArtifacts(run, lab) {
-  if (isAksCapstone(lab)) return
+  if (isAksCapstone(lab) || isDataCapstone(lab)) return
   if (getProjectManifest(run.project.manifestId)?.capstone !== true) return
   const snapshots = run.artifacts.sourceSnapshotsByHash
   const expectedPaths = Object.keys(lab.initialProjectFiles ?? {}).sort()
@@ -279,6 +281,7 @@ export function validateBehavioralRun(run, lab = null) {
     }
     validateStageState(run, lab)
     validateAksCapstoneState(run, lab)
+    validateDataStageState(run, lab)
     if (isAksCapstone(lab)) validateAksOwnership(run)
     validateCapstoneArtifacts(run, lab)
     validateCapstoneIncident(run, lab)
@@ -303,16 +306,17 @@ export function createBehavioralRun(lab, { attemptId } = {}) {
     nextSequence: 1,
     sandbox,
     project: { manifestId: lab.manifestId ?? null, savedFiles: files, draftFiles: cloneJson(files), fileVersions: {}, diagnostics: [],
-      ...(capstoneStages(lab) || isAksCapstone(lab) ? { sourceJournal: [] } : {}) },
+      ...(capstoneStages(lab) || isAksCapstone(lab) || isDataCapstone(lab) ? { sourceJournal: [] } : {}) },
     artifacts: { buildsById: {}, publishedTags: {}, sourceSnapshotsByHash: {} },
     runtime: { simTimeMs: 0, deploymentsByApp: {}, replicasByApp: {}, activeScenario: null, scheduledEvents: [],
+      ...(isDataCapstone(lab) ? { dataCapstone: { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } } } : {}),
       ...(lab.capabilities?.kubernetes === true ? { kubernetes: emptyKubernetesRuntime() } : {}),
       ...(lab.capabilities?.bicepDeployment === true ? { bicep: emptyBicepProvenance({
         trackIncident: lab.capabilities?.bicepIdentityFault === true }) } : {}) },
     evidence: { experimentsById: {}, currentEvidenceByTask: {}, milestoneRecords: [],
       ...(isAksCapstone(lab) ? { aksCapstoneReceipts: {} } : {}),
       ...(capstoneStages(lab) ? { groupReceipts: [] } : {}) },
-    stages: isAksCapstone(lab) ? initializeAksStages(lab) : { activeStageId: capstoneStages(lab) ? lab.stages[0].id : null, sealedStages: [], cleanupCheckpoint: null,
+    stages: isDataCapstone(lab) ? initializeDataStages(lab) : isAksCapstone(lab) ? initializeAksStages(lab) : { activeStageId: capstoneStages(lab) ? lab.stages[0].id : null, sealedStages: [], cleanupCheckpoint: null,
       ...(capstoneStages(lab) ? { ownedGroups: [], groupCreations: [], deletedApps: [] } : {}) },
     dependencyGenerations: {},
     scrollback: [],

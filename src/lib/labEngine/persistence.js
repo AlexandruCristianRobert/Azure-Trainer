@@ -6,6 +6,14 @@ const DATABASE_VERSION = 1
 const RUNS_STORE = 'runs'
 const RESULTS_STORE = 'results'
 
+export function serializeRun(run, lab) {
+  validateBehavioralRun(run, lab)
+  return JSON.stringify(run)
+}
+export function deserializeRun(json, lab) {
+  return validateBehavioralRun(JSON.parse(json), lab)
+}
+
 function causalDetails(cause) {
   if (!cause) return {}
   return {

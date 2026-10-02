@@ -12,6 +12,8 @@ import { refreshKubernetesDependencies } from './evidence.js'
 import { isPlainObject, isJsonValue } from '../labEngine/run.js'
 import { DATA_CAPSTONE_ROUTES, DATA_CAPSTONE_ROUTE_ARGS } from '../../data/templates/data-python/capstone.js'
 import { CAPSTONE_REVISION_2, capstoneCorpusRevision, capstoneExpectedAnswer } from '../../data/fixtures/data/capstone.js'
+import { dataStageFrozenActionAllowed } from '../labEngine/data-capstone/stages.js'
+import { fail } from '../labEngine/errors.js'
 
 const clone = value => structuredClone(value)
 const same = (a, b) => a !== undefined && b !== undefined && canonicalize(a) === canonicalize(b)
@@ -165,6 +167,9 @@ function corpusUpdate(run, lab, step) {
   return { ...run, sandbox }
 }
 export function runCapstoneSteps(input, lab, scenario) {
+  if (input.stages?.cleanupCheckpoint && (!['cleanup', 'inspect'].includes(scenario.mode)
+    || scenario.stageId !== input.stages.activeStageId || scenario.steps.some(step => step.action !== 'inspect')))
+    fail('DATA_CLEANUP_FROZEN', 'Frozen Data recovery proof permits only inventory inspection.')
   let run = clone(input)
   const before = continuation(run, lab)
   run.runtime.dataCapstone ??= { version: 1, incident: null, worker: { lastBatch: [], artifactId: null } }
@@ -261,6 +266,7 @@ export function runCapstoneSteps(input, lab, scenario) {
 }
 const invalid = (run, message) => ({ run, lines: [], portalEvents: [], diagnostics: [{ code: 'INVALID_DATA_ACTION', message }] })
 export function applyDataCapstoneAction(run, action, lab) {
+  if (run.stages?.cleanupCheckpoint && !dataStageFrozenActionAllowed(run, action, lab)) return invalid(run, 'Data recovery proof is frozen; only cleanup verification remains.')
   const manifest = getProjectManifest(run.project.manifestId)
   if (lab.capabilities?.dataCapstone !== true || manifest.dataBackend !== 'composite' || !same(manifest.dataTarget, lab.dataTarget)
     || !targetValid(lab.dataRequestTarget, true) || !targetValid(lab.dataWorkerTarget, false)) return invalid(run, 'Capstone workloads require the declared capability, composite target and trusted Pod targets.')
@@ -273,6 +279,7 @@ export function applyDataCapstoneAction(run, action, lab) {
   const knownFault = ['ConnectionError', 'TooManyRequests'].includes(outcome.measurements.error?.code) || outcome.measurements.load?.errors.some(error => error.includes('too many clients already'))
   const completed = outcome.measurements.traceComplete && (outcome.measurements.status === 200 || scenario.mode === 'incident' && knownFault === true)
   const refreshed = refreshKubernetesDependencies(run, outcome.run, lab)
+  if (run.stages?.cleanupCheckpoint && scenario.mode === 'inspect') return { run, lines: [{ kind: 'out', text: 'Frozen Data inventory inspection.', measurements: outcome.measurements }], portalEvents: [], diagnostics: [] }
   const next = recordVerification(refreshed, lab, task.id, { scenarioId: action.scenarioId, scenarioVersion: scenario.version, outcome: completed ? 'passed' : 'failed', completed, startedAtMs: run.runtime.simTimeMs, endedAtMs: outcome.run.runtime.simTimeMs, measurements: outcome.measurements })
   return { run: next, lines: [{ kind: completed ? 'out' : 'err', text: `Data capstone ${action.scenarioId}: HTTP ${outcome.measurements.status}. ${outcome.measurements.estimate}`, status: outcome.measurements.status, measurements: outcome.measurements }], portalEvents: [], diagnostics: [] }
 }

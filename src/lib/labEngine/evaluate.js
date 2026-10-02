@@ -3,6 +3,7 @@ import { contextFor, isPlainObject, validCounter, validEvidenceRecord, validateB
 import { fail } from './errors.js'
 import { capstoneStages } from './stages.js'
 import { isAksCapstone, getAksSealedTaskIds, aksCleanupReady, isAksTaskSourceCurrent } from '../kubernetes/capstone/stages.js'
+import { isDataCapstone, dataSealedTaskIds, dataEvidenceCurrent } from './data-capstone/stages.js'
 
 function safelyCheck(task, argument) {
   try { return task.check(argument) === true } catch { return false }
@@ -55,6 +56,11 @@ function behavioralTaskState(lab, run, task, index) {
   const context = contextFor(run)
   const predicate = safelyCheck(task, context) && (!isAksCapstone(lab) || isAksTaskSourceCurrent(run, task))
   const base = { ...task, index, done: false, status: 'pending', reason: 'requirements-not-satisfied', evidenceIds: [] }
+  if (isDataCapstone(lab) && run.stages.cleanupCheckpoint?.taskIds.includes(task.id))
+    return { ...base, done: true, status: 'done', reason: 'cleanup-proof-frozen', evidenceIds: run.stages.cleanupCheckpoint.evidenceIds
+      .filter(id => run.evidence.experimentsById[id]?.taskId === task.id) }
+  if (isDataCapstone(lab) && !lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(task.id))
+    return { ...base, reason: 'stage-inactive' }
   if (!task.verification) {
     return predicate
       ? { ...base, done: true, status: 'done', reason: 'requirements-satisfied' }
@@ -62,7 +68,8 @@ function behavioralTaskState(lab, run, task, index) {
   }
   const { records, latest } = latestForTask(run, task.id)
   const evidenceIds = records.filter(([, record]) => typeof record?.id === 'string').map(([, record]) => record.id)
-  if (predicate && latest && evidenceIsCurrent(run, lab, task, latest[0], latest[1])) {
+  if (predicate && latest && evidenceIsCurrent(run, lab, task, latest[0], latest[1])
+    && (!isDataCapstone(lab) || dataEvidenceCurrent(run, lab, task, latest[1]))) {
     return { ...base, done: true, status: 'done', reason: 'verification-current', evidenceIds }
   }
   const hadValidPass = records.some(([id, record]) => evidenceHasTaskIdentity(run, lab, task, id, record)
@@ -88,7 +95,7 @@ export function evaluateLab(lab, run) {
       return { tasks, doneCount: 0, total: tasks.length, isComplete: false }
     }
   }
-  const sealedIds = behavioral && isAksCapstone(lab) ? getAksSealedTaskIds(run, lab) : behavioral && capstoneStages(lab)
+  const sealedIds = behavioral && isDataCapstone(lab) ? dataSealedTaskIds(run, lab) : behavioral && isAksCapstone(lab) ? getAksSealedTaskIds(run, lab) : behavioral && capstoneStages(lab)
     ? new Set(lab.stages.slice(0, run.stages.sealedStages.length).flatMap(stage => stage.taskIds)) : new Set()
   const tasks = lab.tasks.map((task, index) => {
     if (sealedIds.has(task.id)) return { ...task, index, done: true, status: 'done', reason: 'stage-sealed',
@@ -99,5 +106,6 @@ export function evaluateLab(lab, run) {
   const doneCount = tasks.filter((task) => task.done).length
   return { tasks, doneCount, total: tasks.length,
     isComplete: doneCount === tasks.length && (!behavioral || !capstoneStages(lab) || run.stages.sealedStages.length === lab.stages.length)
-      && (!isAksCapstone(lab) || run.stages.sealedStages.length === 8 && aksCleanupReady(run, lab)) }
+      && (!isAksCapstone(lab) || run.stages.sealedStages.length === 8 && aksCleanupReady(run, lab))
+      && (!isDataCapstone(lab) || run.stages.sealedStages.length === lab.stages.length) }
 }

@@ -1,5 +1,6 @@
 import { fail } from './errors.js'
 import { isAksCapstone, captureAksVerification } from '../kubernetes/capstone/stages.js'
+import { isDataCapstone, captureDataVerification } from './data-capstone/stages.js'
 import { cloneJson, contextFor, isJsonValue, isPlainObject, validCounter, validString, validateBehavioralLab, validateBehavioralRun } from './run.js'
 
 export function canonicalize(value) {
@@ -53,6 +54,9 @@ export function recordVerification(run, lab, taskId, result) {
   const task = taskFor(lab, taskId)
   if (isAksCapstone(lab) && !lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(taskId))
     fail('INVALID_EVIDENCE', 'Only active AKS stage Tasks can be verified.')
+  if (isDataCapstone(lab) && (!lab.stages.find(stage => stage.id === run.stages.activeStageId)?.taskIds.includes(taskId)
+    || run.stages.cleanupCheckpoint && lab.scenarios?.[task.verification.scenarioId]?.mode !== 'cleanup'))
+    fail('INVALID_EVIDENCE', 'Only active Data Tasks may record evidence; frozen recovery proof is read-only.')
   validateResult(result, task)
   const { values, generations } = dependencySnapshot(run, task)
   const sequence = run.nextSequence
@@ -82,6 +86,7 @@ export function recordVerification(run, lab, taskId, result) {
   }
   let next = { ...run, nextSequence: sequence + 1, evidence }
   if (isAksCapstone(lab)) next = captureAksVerification(next, record)
+  if (isDataCapstone(lab)) next = captureDataVerification(next, lab, record)
   return validateBehavioralRun(next, lab)
 }
 

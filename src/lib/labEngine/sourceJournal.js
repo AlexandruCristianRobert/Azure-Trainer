@@ -32,7 +32,7 @@ export function validateSourceJournal(run, lab) {
   for (const event of journal) {
     if (!event || typeof event !== 'object' || Array.isArray(event)
       || Object.keys(event).sort().join('|') !== 'hash|path|sequence|version'
-      || !manifest.files.includes(event.path)
+      || !manifest?.files?.includes(event.path)
       || !Number.isSafeInteger(event.sequence) || event.sequence <= previousSequence || event.sequence >= run.nextSequence
       || !Number.isSafeInteger(event.version) || event.version !== (versions[event.path] ?? 0) + 1
       || typeof event.hash !== 'string' || !/^[0-9a-f]{64}$/.test(event.hash)) {
