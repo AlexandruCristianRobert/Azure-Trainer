@@ -208,9 +208,9 @@ Only saved source executes the literal/expression query. Receipt includes parsed
 
 ### Task 5: Code-first security Labs 1–5
 
-**Files:** Create `src/data/templates/security-python/security.js`, `src/data/labs/security-journey/{helpers,seeds,identity.lab,secrets.lab,rotation.lab,configuration.lab,refresh.lab}.js`; test `tests/security-labs.test.js`.
+**Files:** Create `src/data/templates/security-python/security.js`, `src/data/labs/security-journey/{helpers,seeds,security,identity.lab,secrets.lab,rotation.lab,configuration.lab,refresh.lab}.js`; test `tests/security-labs.test.js`.
 **Consumes:** resource helpers, secure SDK/profile, same-provider refresh fixture; actual manifest.
-**Produces:** export `SECURITY_LABS` array (orders1–5), shared `securityTask(options)`, `seedSecurityStage(run,stage)`, metadata/resources/selectors and Solution/starter source. Shared seed helper may support later stage strings now only with required baseline configuration; no new task proof.
+**Produces:** `security.js` exports `SECURITY_LABS` array (orders1–5), importing the five Lab records; shared helpers export `securityTask(options)` and seeds export `seedSecurityStage(run,stage)`, metadata/resources/selectors and Solution/starter source. Shared seed helper may support later stage strings now only with required baseline configuration; no new task proof. The aggregate must not live in helpers.js because Lab records import those helpers.
 - [ ] Write RED one parameterized Solution replay for five Labs and one loop unfinished baseline/persistence. Negative cases no actual key consumer, pinned stale version, wrong label, reload instead of refresh.
 ```js
 for (const lab of SECURITY_LABS) {
@@ -233,9 +233,9 @@ Use existing task rationale/Solution UI contract and authored local explanation 
 
 ### Task 6: Instrumentation, context, logs and KQL Labs 6–11
 
-**Files:** Create `src/data/templates/security-python/telemetry.js`, `src/data/labs/security-journey/{telemetry-setup,spans,context,logging,failure-query,metrics}.lab.js`; extend shared helpers/seeds; test `tests/observability-labs.test.js`.
+**Files:** Create `src/data/templates/security-python/telemetry.js`, `src/data/labs/security-journey/{telemetry-setup,spans,context,logging,failure-query,metrics}.lab.js`, `src/data/labs/security-journey/observability.js`; extend shared helpers/seeds; test `tests/observability-labs.test.js`.
 **Consumes:** shared securityTask/seeds, actual telemetry/KQL APIs and security Lab baseline.
-**Produces:** export `OBSERVABILITY_LABS` array (orders6–11) and integrated saved source reusable by capstone.
+**Produces:** `observability.js` exports `OBSERVABILITY_LABS` array (orders6–11), importing the six Lab records, and integrated saved source reusable by capstone. The aggregate must not live in helpers.js because Lab records import those helpers. Task7's index.js imports SECURITY_LABS and OBSERVABILITY_LABS from their dedicated aggregate modules and appends capstoneLab.
 - [ ] Write RED one Solution replay per Lab with unfinished baseline and typed persistence; focused no-span, no-carrier, sensitive-log and fabricated-query negative source edits.
 ```js
 expect(OBSERVABILITY_LABS.map(l=>l.journeyOrder)).toEqual([6,7,8,9,10,11])
@@ -282,4 +282,3 @@ User has already chosen local merge AND publish: verify main worktree clean (exc
 ## Plan self-review
 
 Coverage: Task1 identity/provisioning; Task2 consumption/refresh/privacy/evidence; Task3 instrumentation/context/metrics; Task4 query semantics; Task5 Labs1–5; Task6 Labs6–11; Task7 capstone/catalog/docs/CI. All five Review Focus classes have owning tests. Shared extension/signature names and profile are consistent, old measurements unchanged. No additional services/CloudEvents/Python subprocess or general-purpose Python/KQL interpreter are included.
-
