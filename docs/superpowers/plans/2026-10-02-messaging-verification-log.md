@@ -88,3 +88,13 @@ Every invocation below ran only `npm test -- tests/messaging-eventgrid.test.js`,
 | 2026-10-02 | Final terminal drain GREEN | Test Files 1 passed, Tests 13 passed; test bodies 55ms | 0 | 2.6537219 |
 
 Task 4 measured total: **31.1271017 seconds**. Starting cumulative: **59.6755688 seconds**. New cumulative known verification: **90.8026705 seconds (1.513378 minutes)**. All RED/reruns included; no unmeasured executable diagnostic or test invocation. Initial missing-module RED did not execute behavioral cases; later shared-clock/persistence/registration/sequence regressions are observed production behavior failures. Two intervening fixture errors are disclosed above. Focused-only verification follows the controller/user boundary over skill broad-suite guidance. Static `git diff --check` passed with Windows LF/CRLF notices only.
+
+## Task 4 fix round 1
+
+| Date | Stage | Command | Actual relevant result | Exit | Elapsed seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Supplied review diagnostic (not rerun) | Reviewer tiny in-memory Node reproduction | http200ExhaustionAccepted:true; unattemptedUnexpiredDropAccepted:true | 0 | 0.1047444 |
+| 2026-10-02 | Terminal persistence RED | `npm test -- tests/messaging-eventgrid.test.js` | Test Files1 failed; Tests2 failed /13 passed; both named persistence cases expected true to be false | 1 | 2.8840153 |
+| 2026-10-02 | Terminal persistence GREEN | `npm test -- tests/messaging-eventgrid.test.js` | Test Files1 passed; Tests15 passed; test bodies58ms | 0 | 2.8344453 |
+
+Fix round1 measured test total: **5.7184606 seconds**. Starting cumulative including supplied review diagnostic: **90.9074149 seconds**. New cumulative known verification: **96.6258755 seconds (1.610431 minutes)**. Every executable invocation this round measured above; only the owning Event Grid test file ran. No agents, broad suites, build, browser, cloud, replay or further executable diagnostics. Static git diff/whitespace checks are not test invocations. Deferred filtered-integration fixture Minor was not included in this fix scope.

@@ -124,6 +124,9 @@ export function validateMessagingState(state) {
         || !nullableString(delivery.reason)
         || (delivery.deadLetterDestination !== null && (!parseEventGridDeadLetterDestination(delivery.deadLetterDestination) || parseEventGridDeadLetterDestination(delivery.deadLetterDestination).subscriptionId.toLowerCase() !== SUBSCRIPTION_ID.toLowerCase()))) return false
       const pending = ['pending', 'retrying'].includes(delivery.status)
+      const successfulStatus = delivery.lastStatus >= 200 && delivery.lastStatus < 300
+      const nonRetryableFailure = delivery.attempts > 0 && [400, 403, 413, ...(delivery.endpointType === 'WebHook' ? [401] : [])].includes(delivery.lastStatus)
+      const exhaustedFailure = delivery.attempts === delivery.maxDeliveryAttempts && !successfulStatus
       if (pending ? !counter(delivery.nextAttemptAtMs) || delivery.nextAttemptAtMs < source.publishedAtMs || delivery.reason !== null || delivery.deadLetter !== null : delivery.nextAttemptAtMs !== null) return false
       if (delivery.status === 'pending' ? delivery.attempts !== 0 || delivery.lastStatus !== null : delivery.status === 'deadlettered' || delivery.status === 'dropped'
         ? delivery.attempts === 0 && delivery.lastStatus !== null || delivery.attempts > 0 && (!Number.isSafeInteger(delivery.lastStatus) || delivery.lastStatus < 100 || delivery.lastStatus > 599)
@@ -137,9 +140,11 @@ export function validateMessagingState(state) {
           || letter.attempts !== delivery.attempts || !counter(letter.timeMs) || letter.timeMs > state.timeMs) return false
       } else if (delivery.deadLetter !== null) return false
       if (['deadlettered', 'dropped'].includes(delivery.status) && !['NonRetryableStatus', 'MaxDeliveryAttemptsExceeded', 'TimeToLiveExceeded', 'DeadLetterDestinationUnavailable'].includes(delivery.reason)) return false
-      if (delivery.reason === 'NonRetryableStatus' && (delivery.attempts === 0 || ![400, 403, 413, ...(delivery.endpointType === 'WebHook' ? [401] : [])].includes(delivery.lastStatus))) return false
-      if (delivery.reason === 'DeadLetterDestinationUnavailable' && (delivery.deadLetterDestination === null || delivery.status !== 'dropped')) return false
-      if (delivery.reason === 'MaxDeliveryAttemptsExceeded' && delivery.attempts !== delivery.maxDeliveryAttempts || delivery.reason === 'TimeToLiveExceeded' && delivery.expiresAtMs > state.timeMs) return false
+      if (['deadlettered', 'dropped'].includes(delivery.status) && successfulStatus) return false
+      if (delivery.reason === 'NonRetryableStatus' && !nonRetryableFailure) return false
+      if (delivery.reason === 'DeadLetterDestinationUnavailable' && (delivery.deadLetterDestination === null || delivery.status !== 'dropped'
+        || !(delivery.expiresAtMs <= state.timeMs || nonRetryableFailure || exhaustedFailure))) return false
+      if (delivery.reason === 'MaxDeliveryAttemptsExceeded' && !exhaustedFailure || delivery.reason === 'TimeToLiveExceeded' && delivery.expiresAtMs > state.timeMs) return false
     }
     for (const receipt of grid.traces) {
       if (!plainObject(receipt) || !/^eg-trace-/.test(receipt.id) || !id(receipt.id, true, true) || !['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance'].includes(receipt.kind)

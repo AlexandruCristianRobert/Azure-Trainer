@@ -113,6 +113,41 @@ describe('bounded Event Grid publication and delivery', () => {
     const nullRecord = JSON.parse(JSON.stringify(result.state)); nullRecord.eventGrid.deliveries[0] = null
     expect(validateMessagingState(nullRecord)).toBe(false)
   })
+  it('rejects successful delivery restored as dropped or deadlettered exhaustion', () => {
+    const { sandbox } = fixture({ maxDeliveryAttempts: 1, deadLetterDestination: destination })
+    const successful = deliver(publish(sandbox).state, sandbox, 200)
+    expect(successful.diagnostics).toEqual([])
+    expect(validateMessagingState(JSON.parse(JSON.stringify(successful.state)))).toBe(true)
+    for (const status of ['dropped', 'deadlettered']) {
+      const malformed = JSON.parse(JSON.stringify(successful.state))
+      Object.assign(malformed.eventGrid.deliveries[0], { status, reason: 'MaxDeliveryAttemptsExceeded', deadLetter: status === 'deadlettered'
+        ? { destination, event, reason: 'MaxDeliveryAttemptsExceeded', attempts: 1, timeMs: 0 } : null })
+      expect(validateMessagingState(malformed)).toBe(false)
+    }
+  })
+  it('requires an actual terminal cause for unavailable-destination drops', () => {
+    const { sandbox } = fixture({ maxDeliveryAttempts: 2, eventTimeToLiveInMinutes: 1, deadLetterDestination: destination })
+    const pending = publish(sandbox)
+    const transient = deliver(pending.state, sandbox, 503)
+    expect(pending.diagnostics).toEqual([])
+    expect(transient.diagnostics).toEqual([])
+    for (const state of [pending.state, transient.state]) {
+      const malformed = JSON.parse(JSON.stringify(state))
+      Object.assign(malformed.eventGrid.deliveries[0], { status: 'dropped', nextAttemptAtMs: null, reason: 'DeadLetterDestinationUnavailable' })
+      expect(validateMessagingState(malformed)).toBe(false)
+    }
+    const missingDestination = { ...sandbox, storageAccounts: [] }
+    const outcomes = [
+      advance(pending.state, missingDestination, 60000),
+      deliver(pending.state, missingDestination, 400),
+      deliver(advance(transient.state, missingDestination, 1000).state, missingDestination, 503),
+    ]
+    for (const outcome of outcomes) {
+      expect(outcome.diagnostics).toEqual([])
+      expect(record(outcome)).toMatchObject({ status: 'dropped', reason: 'DeadLetterDestinationUnavailable' })
+      expect(validateMessagingState(JSON.parse(JSON.stringify(outcome.state)))).toBe(true)
+    }
+  })
   it('creates and reads CLI retry/destination fields and rejects unresolved or out-of-range values', () => {
     const { sandbox } = fixture()
     const base = 'az eventgrid topic event-subscription'
