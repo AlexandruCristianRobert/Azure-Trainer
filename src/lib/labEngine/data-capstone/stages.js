@@ -67,7 +67,7 @@ export function dataLiveFingerprint(run, lab) {
   const cosmosDb = cosmos?.databases.find(item => item.name === lab.dataTarget.cosmos.database)
   const redis = run.sandbox.redisClusters?.find(item => item.name === lab.dataTarget?.redis?.cluster && item.resourceGroup === lab.dataTarget.redis.resourceGroup)
   return { deployments, postgres: { server: pick(pg, ['name', 'resourceGroup', 'version', 'tier', 'skuName', 'vCores', 'memoryGiB', 'storageSizeGb', 'publicAccess', 'parameters']),
-    database: pick(database, ['name', 'extensions', 'indexes', 'settings']), tables: (database?.tables ?? []).map(table => pick(table, ['name', 'columns', 'constraints'])) },
+    database: pick(database, ['name', 'extensions', 'indexes', 'settings']), tables: (database?.tables ?? []).map(table => pick(table, ['name', 'columns', 'primaryKey'])) },
   cosmos: { account: pick(cosmos, ['name', 'resourceGroup', 'locations', 'consistencyPolicy', 'capabilities']),
     containers: (cosmosDb?.containers ?? []).map(container => pick(container, ['name', 'partitionKeyPath', 'throughput', 'maxThroughput', 'physicalPartitions', 'vectorEmbeddingPolicy', 'indexingPolicy'])) },
   redis: { cluster: pick(redis, ['name', 'resourceGroup', 'sku', 'hostName']), database: pick(redis?.database, ['name', 'port', 'modules', 'clusteringPolicy', 'evictionPolicy', 'clientProtocol', 'accessKeysAuthentication', 'memoryLimitBytes']),
@@ -160,6 +160,7 @@ function validateSnapshot(run, lab, snapshot, tasks, previousSequence) {
   const records = tasks.map(task => latest(run, task.id, snapshot.sequence))
   if (records.some((record, index) => !record || record.sequence <= previousSequence || record.outcome !== 'passed' || record.completed !== true
     || record.dataCapstoneProof.stageId !== snapshot.stageId || record.id !== snapshot.evidenceIds[index]
+    || !same(record.dataCapstoneProof.sourceVersions, snapshot.sourceVersions)
     || snapshot.evidenceHashes[record.id] !== hash(record) || !same(snapshot.dependencyValues[record.taskId], record.dependencyValues)
     || !same(snapshot.dependencyGenerations[record.taskId], record.dependencyGenerations))) fail('INVALID_RUN', 'Data checkpoint must link the latest ordered successful measured evidence.')
   if (!same(snapshot.artifactIds, [...new Set(records.flatMap(record => record.dataCapstoneProof.artifactIds))].sort()))

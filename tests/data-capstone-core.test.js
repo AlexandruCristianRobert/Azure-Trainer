@@ -18,7 +18,8 @@ import { CAPSTONE_CORPUS } from '../src/data/fixtures/data/capstone.js'
 import * as stages from '../src/lib/labEngine/data-capstone/stages.js'
 import { createBehavioralRun } from '../src/lib/labEngine/run.js'
 import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
-import { recordVerification } from '../src/lib/labEngine/evidence.js'
+import { canonicalize, recordVerification } from '../src/lib/labEngine/evidence.js'
+import { sourceTextHash } from '../src/lib/labEngine/sourceJournal.js'
 import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { projectSourceHash, selectBuildFiles } from '../src/lib/project/build.js'
@@ -220,6 +221,7 @@ function stagedFixture() {
   const buildFiles = selectBuildFiles(files, DATA_CAPSTONE_MANIFEST)
   const sourceHash = projectSourceHash(buildFiles)
   run.sandbox = { ...fixture.run.sandbox, aksClusters: [], containerRegistries: [], roleAssignments: [] }
+  run.sandbox = executePg(run.sandbox, { ...target.postgres, sql: 'CREATE TABLE schema_identity (id bigint, PRIMARY KEY (id));' }).sandbox
   run.artifacts = { ...fixture.run.artifacts, buildsById: { [id]: { ...fixture.run.artifacts.buildsById.core, id, sourceHash, digest: 'sha256:core' } },
     sourceSnapshotsByHash: { [sourceHash]: { hash: sourceHash, files: buildFiles } }, publishedTags: { 'core.azurecr.io/core:v1': id } }
   run.runtime = { ...run.runtime, ...fixture.run.runtime }
@@ -259,6 +261,17 @@ it('preserves ordered measured stage seals across export while rejecting changed
   const saved = applyRunAction(resumed, { type: 'save-file', path: 'app.py', text: `${resumed.project.savedFiles['app.py']}\n# repair\n` }, lab).run
   expect(saved.project.sourceJournal).toHaveLength(1)
   expect(deserializeRun(serializeRun(saved, lab), lab).stages.sealedStages).toHaveLength(1)
+  // Move only the actual save before the seal, retaining its original hash and
+  // all evidence unchanged. Updating the seal mirror must not revive old proof.
+  const staleSeal = structuredClone(saved)
+  const seal = staleSeal.stages.sealedStages[0]
+  const save = staleSeal.project.sourceJournal[0]
+  ;[seal.sequence, save.sequence] = [save.sequence, seal.sequence]
+  seal.sourceVersions = { 'app.py': 1 }
+  const { proofHash, ...sealBody } = seal
+  seal.proofHash = sourceTextHash(canonicalize(sealBody))
+  staleSeal.evidence.milestoneRecords[0] = { ...staleSeal.evidence.milestoneRecords[0], sequence: seal.sequence, snapshot: canonicalize(seal) }
+  expect(() => deserializeRun(JSON.stringify(staleSeal), lab)).toThrow()
 })
 
 it('requires fresh current final evidence after deployed source and service drift before freezing cleanup', () => {
@@ -266,9 +279,11 @@ it('requires fresh current final evidence after deployed source and service drif
   const fixture = stagedFixture()
   const active = stages.advanceDataStage(stagedVerify(fixture.run, fixture.lab, 'worker'), fixture.lab).run
   const final = stagedVerify(active, fixture.lab, 'answer')
+  expect(final.sandbox.postgresServers[0].databases[0].tables.find(table => table.name === 'schema_identity').primaryKey).toEqual(['id'])
   for (const mutate of [
     state => { state.sandbox.postgresServers[0].parameters.max_connections = '24' },
     state => { state.sandbox.postgresServers[0].databases[0].indexes.push({ name: 'changed-index' }) },
+    state => { state.sandbox.postgresServers[0].databases[0].tables.find(table => table.name === 'schema_identity').primaryKey = [] },
     state => { state.sandbox.cosmosAccounts[0].databases[0].containers[0].indexingPolicy.includedPaths = [] },
     state => { state.runtime.kubernetes.clusters[requestTarget.clusterId].resources['Deployment/assistant/worker'].spec.replicas = 2 },
   ]) {
@@ -293,4 +308,14 @@ it('requires fresh current final evidence after deployed source and service drif
   expect(() => bridge.runCapstoneSteps(frozen.run, fixture.lab, fixture.lab.scenarios['answer-proof'])).toThrow()
   expect(stages.advanceDataStage(frozen.run, fixture.lab).diagnostics.length).toBeGreaterThan(0)
   expect(deserializeRun(serializeRun(frozen.run, fixture.lab), fixture.lab).stages.cleanupCheckpoint).not.toBeNull()
+  const afterProofSave = applyRunAction(fresh, { type: 'save-file', path: 'app.py', text: `${fresh.project.savedFiles['app.py']}\n# after proof\n` }, fixture.lab).run
+  const staleCheckpoint = structuredClone(frozen.run.stages.cleanupCheckpoint)
+  staleCheckpoint.sequence = afterProofSave.nextSequence
+  staleCheckpoint.sourceVersions = { 'app.py': 2 }
+  const { proofHash, ...checkpointBody } = staleCheckpoint
+  staleCheckpoint.proofHash = sourceTextHash(canonicalize(checkpointBody))
+  const reorderedFreeze = { ...afterProofSave, nextSequence: afterProofSave.nextSequence + 1,
+    stages: { ...afterProofSave.stages, cleanupCheckpoint: staleCheckpoint }, evidence: { ...afterProofSave.evidence,
+      dataCleanupReceipt: { sequence: staleCheckpoint.sequence, attemptId: afterProofSave.attemptId, snapshot: canonicalize(staleCheckpoint) } } }
+  expect(() => deserializeRun(JSON.stringify(reorderedFreeze), fixture.lab)).toThrow()
 })
