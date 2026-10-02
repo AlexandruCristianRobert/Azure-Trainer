@@ -15,7 +15,8 @@ function processedOrder(measurement) {
   return row.entityId === ORDERS_ID && row.messageId === 'm1' && row.status === 'completed' && row.subQueue === 'active'
     && orderPayload(row.body, 'o1', 2) && row.lockHistory.length === 1 && completed >= 0
     && measurement.trace.some((trace, index) => index < completed && trace.kind === 'receive' && trace.messageRecordId === row.id && trace.lockToken === row.lockHistory[0].lockToken)
-    && completedOrderWork(measurement, 'o1', 2)
+    && completedOrderWork(measurement, row, 'o1', 2)
+    && measurement.trace.filter(trace => ['order-work', 'order-record'].includes(trace.kind)).length === 2
     && Object.keys(measurement.effects.after.workByOrder ?? {}).length === 1
     && Object.keys(measurement.effects.after.processed ?? {}).length === 1
 }

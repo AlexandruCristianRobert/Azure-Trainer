@@ -35,7 +35,9 @@ function quarantinedAndRecovered(measurement) {
     && repaired.lockHistory.length === 1 && repairedCompleteAt > originalCompleteAt
     && measurement.trace.some(trace => trace.kind === 'send' && trace.entityId === ORDERS_ID && trace.messageId === repaired.messageId && trace.sourceMessageId === repaired.sourceMessageId)
     && measurement.trace.some((trace, index) => index > originalCompleteAt && index < repairedCompleteAt && trace.kind === 'receive' && trace.messageRecordId === repaired.id && trace.subQueue === 'active' && trace.lockToken === repaired.lockHistory[0].lockToken)
-    && completedOrderWork(measurement, 'o1', 2) && completedOrderWork(measurement, 'o2', 1)
+    && completedOrderWork(measurement, good, 'o1', 2) && completedOrderWork(measurement, repaired, 'o2', 1)
+    && !measurement.trace.some(trace => ['order-work', 'order-record'].includes(trace.kind) && trace.messageRecordId === bad.id)
+    && measurement.trace.filter(trace => ['order-work', 'order-record'].includes(trace.kind)).length === 4
     && Object.keys(measurement.effects.after.workByOrder ?? {}).length === 2
     && Object.keys(measurement.effects.after.processed ?? {}).length === 2
 }

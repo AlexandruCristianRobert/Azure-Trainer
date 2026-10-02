@@ -57,6 +57,49 @@ describe('Service Bus foundation curriculum', () => {
     expect(JSON.parse(actual.body).region).toBe('US')
     expect(evaluateLab(lab, changed).tasks.at(-1).done).toBe(false)
   })
+  it('rejects completion before actual business work even when final totals and marker are correct', () => {
+    const lab = SERVICEBUS_FOUNDATION_LABS[1]
+    const run = replayMessagingSolution(lab, { 'worker.py': `from clients import bus
+from training_runtime import perform_order_work, record_processed
+import json
+def main():
+    with bus.get_queue_receiver(queue_name="orders") as receiver:
+        for message in receiver.receive_messages(max_message_count=10):
+            order = json.loads(str(message))
+            receiver.complete_message(message)
+            record_processed(order)
+            perform_order_work(order)
+` })
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 1 })
+    expect(run.runtime.messaging.effects.processed.o1).toEqual({ id: 'o1', region: 'EU', quantity: 2 })
+    expect(Object.values(run.runtime.messaging.entities)[0].messages[0].status).toBe('completed')
+    expect(evaluateLab(lab, run).tasks[0].done).toBe(false)
+  })
+  it('rejects invalid original work substituted for corrected receipt work despite matching final totals', () => {
+    const lab = SERVICEBUS_FOUNDATION_LABS[2]
+    const run = replayMessagingSolution(lab, { 'worker.py': `from clients import bus
+from training_runtime import perform_order_work, record_processed
+import json
+def process_orders():
+    with bus.get_queue_receiver(queue_name="orders") as receiver:
+        for message in receiver.receive_messages(max_message_count=10):
+            order = json.loads(str(message))
+            if order["quantity"] <= 0:
+                perform_order_work(order)
+                receiver.dead_letter_message(message, reason="InvalidOrder")
+            else:
+                if order["id"] == "o1":
+                    perform_order_work(order)
+                record_processed(order)
+                receiver.complete_message(message)
+def main():
+    process_orders()
+` })
+    expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 1, o2: 1 })
+    expect(run.runtime.messaging.effects.processed.o2).toEqual({ id: 'o2', region: 'EU', quantity: 1 })
+    expect(Object.values(run.runtime.messaging.entities)[0].messages.map(row => row.status)).toEqual(['completed', 'completed', 'completed'])
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([false, false])
+  })
   it('appends the independent simulated labs to the catalog in journey order', () => {
     expect(SERVICEBUS_FOUNDATION_LABS.map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])
     expect(LABS.slice(-3).map(lab => lab.id)).toEqual(['messaging-send', 'messaging-receive', 'messaging-deadletter'])

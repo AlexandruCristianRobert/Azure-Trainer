@@ -12,7 +12,7 @@ const cap = (value, fallback) => Number.isSafeInteger(value) && value > 0 ? Math
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
 export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
   let current = state, steps = 0, depth = 0, receiverSequence = 0, eventSequence = 0, draining = false, activeDelivery = null
-  const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap()
+  const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap(), orderOrigins = new WeakMap()
   let outputBytes = 0
   const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
   const maximumFrames = cap(limits.frames, 100), maximumValues = cap(limits.valueBytes, 128 * 1024)
@@ -24,6 +24,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
+  const unbox = value => info(value)?.type === 'bodytext' ? info(value).value : value
   const callable = (name, owner) => handle('callable', { name, owner })
   function chargeBytes(budget, bytes, loc) {
     budget.bytes += bytes
@@ -44,6 +45,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function jsonValue(value, loc, seen = new Set(), nesting = 0, budget = { bytes: 0 }) {
     tick(loc)
+    value = unbox(value)
     if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
     if (typeof value === 'string') { chargeString(budget, value, loc); return value }
@@ -72,6 +74,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     return JSON.stringify(jsonValue(value, loc))
   }
   function truth(value) {
+    value = unbox(value)
     if (value === null || value === false || value === 0 || value === '') return false
     if (Array.isArray(value)) return value.length > 0
     if (value && typeof value === 'object' && !info(value)) return Object.keys(value).length > 0
@@ -79,6 +82,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function equal(left, right, loc, nesting = 0) {
     tick(loc)
+    left = unbox(left); right = unbox(right)
     if (nesting > 100) fail('Comparison nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (left === right) return true
     if (info(left) || info(right)) return false
@@ -95,6 +99,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function string(value, loc) {
     const object = info(value)
+    if (object?.type === 'bodytext') return object.value
     if (object?.type === 'receipt') return object.record.body
     if (object?.type === 'bytes') return object.value
     if (object) fail('This SDK resource cannot be converted to a string.', loc)
@@ -110,6 +115,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     fail(`Unbound name '${name}'.`, loc)
   }
   function readIndex(object, key, loc) {
+    object = unbox(object); key = unbox(key)
     safeKey(key, loc)
     if (info(object) || object === null || !['object', 'string'].includes(typeof object)) fail('Only lists, strings and dictionaries support indexing.', loc)
     if ((Array.isArray(object) || typeof object === 'string') && (!Number.isSafeInteger(key) || key < 0)) fail('A nonnegative integer index is required.', loc)
@@ -128,7 +134,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (object.type === 'subqueue' && name === 'DEAD_LETTER') return 'deadletter'
     if (object.type === 'receipt') {
       const metadata = { message_id: 'messageId', session_id: 'sessionId', application_properties: 'properties', delivery_count: 'deliveryCount', dead_letter_reason: 'deadLetterReason', dead_letter_error_description: 'deadLetterDescription' }
-      if (name === 'body') return handle('bytes', { value: object.record.body })
+      if (name === 'body') return handle('bytes', { value: object.record.body, record: object.record })
       if (own(metadata, name)) return clone(object.record[metadata[name]])
     }
     if (object.type === 'functionmessage') {
@@ -257,18 +263,30 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (object.parent) usable(object.parent, loc)
     return object
   }
-  function effects(name, key, value, loc, increment = false) {
+  function effects(name, key, value, loc, increment = false, application = null) {
     if (typeof key !== 'string' || !key) fail('Teaching record IDs must be nonempty strings.', loc)
     safeKey(key, loc)
+    // Refuse before changing the store: every admitted order helper call has a row.
+    if (application && (trace.length >= maximumTraces || current.nextId >= Number.MAX_SAFE_INTEGER)) fail('Order effect trace capacity reached.', loc, 'MESSAGING_LIMIT')
     const next = clone(current), map = own(next.effects, name) ? next.effects[name] : {}
     if (!map || typeof map !== 'object' || Array.isArray(map)) fail('Teaching record state is malformed.', loc, 'MESSAGING_CONFIG')
     if (!own(map, key) && Object.keys(map).length >= 50) fail('Teaching record store exceeds 50 records.', loc, 'MESSAGING_LIMIT')
+    const changed = increment || !own(map, key)
     if (increment) {
       const count = own(map, key) ? map[key] : 0
       if (!Number.isSafeInteger(count) || count < 0 || count >= Number.MAX_SAFE_INTEGER) fail('Business effect counter is invalid.', loc, 'MESSAGING_CONFIG')
       map[key] = count + 1
     } else if (!own(map, key)) map[key] = clone(value)
-    next.effects[name] = map; current = next
+    next.effects[name] = map
+    if (application) {
+      const receipt = application.receipt
+      const row = { id: `trace-${next.nextId++}`, kind: increment ? 'order-work' : 'order-record', timeMs: next.timeMs,
+        order: application.order, changed, entityId: receipt?.entityId ?? null, messageRecordId: receipt?.id ?? null,
+        messageId: receipt?.messageId ?? null, receiverId: receipt?.receiverId ?? null, lockToken: receipt?.lockToken ?? null }
+      next.deliveries = [...next.deliveries, row].slice(-500)
+      trace.push(clone(row))
+    }
+    current = next
     return null
   }
   function call(target, args, kwargs, loc) {
@@ -280,7 +298,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const a = bindArguments(names, required, args, kwargs, loc)
     if (name === 'DefaultAzureCredential') return handle('credential')
     if (name === 'FunctionApp') return handle('functionapp')
-    if (name === 'functionmessage.get_body') return handle('bytes', { value: info(owner).record.body })
+    if (name === 'functionmessage.get_body') return handle('bytes', { value: info(owner).record.body, record: info(owner).record })
     if (name === 'functionevent.get_json') return jsonValue(info(owner).event.data, loc)
     if (name === 'EventGridPublisherClient') {
       if (info(a.credential)?.type !== 'credential') fail('Use the simulated DefaultAzureCredential identity.', loc, 'MESSAGING_CONFIG')
@@ -329,7 +347,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       return handle('bus', { target: namespace(a.fully_qualified_namespace, loc), closed: false })
     }
     if (name === 'ServiceBusMessage') {
-      const body = info(a.body)?.type === 'bytes' ? info(a.body).value : a.body
+      const body = info(a.body)?.type === 'bytes' ? info(a.body).value : unbox(a.body)
       if (typeof body !== 'string') fail('ServiceBusMessage body must be a string or bytes.', loc)
       const properties = a.application_properties === undefined ? {} : jsonValue(a.application_properties, loc)
       if (!properties || Array.isArray(properties) || typeof properties !== 'object') fail('application_properties must be a dictionary.', loc)
@@ -368,19 +386,30 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     }
     if (name === 'bytes.decode') {
       if (a.encoding !== undefined && !['utf-8', 'utf8'].includes(a.encoding)) fail('Only UTF-8 decoding is supported.', loc, 'MESSAGING_UNSUPPORTED')
-      return info(owner).value
+      const bytes = info(owner)
+      return bytes.record ? handle('bodytext', { value: bytes.value, record: bytes.record }) : bytes.value
     }
     if (name === 'json.dumps') return stringify(a.obj, loc)
     if (name === 'json.loads') {
-      const source = info(a.s)?.type === 'bytes' ? info(a.s).value : a.s
+      const body = info(a.s), source = body?.type === 'bytes' ? body.value : unbox(a.s)
       if (typeof source !== 'string') fail('json.loads requires a string or bytes.', loc)
       if (source.length > maximumValues) fail('JSON exceeds 128 KiB.', loc, 'MESSAGING_LIMIT')
-      try { return jsonValue(JSON.parse(source), loc) } catch (error) { if (error.diagnostic) throw error; fail('Invalid JSON payload.', loc) }
+      try {
+        const order = jsonValue(JSON.parse(source), loc)
+        if (body?.record && order && typeof order === 'object') orderOrigins.set(order, body.record)
+        return order
+      } catch (error) { if (error.diagnostic) throw error; fail('Invalid JSON payload.', loc) }
     }
-    if (name === 'str') return string(a.object, loc)
+    if (name === 'str') {
+      const object = info(a.object)
+      if (object?.type === 'bodytext') return a.object
+      if (object?.type === 'receipt' || object?.type === 'bytes' && object.record) return handle('bodytext', { value: string(a.object, loc), record: object.record })
+      return string(a.object, loc)
+    }
     if (name === 'len') {
-      if (info(a.object) || a.object === null || !['string', 'object'].includes(typeof a.object)) fail('len requires a string, list or dictionary.', loc)
-      return typeof a.object === 'string' || Array.isArray(a.object) ? a.object.length : Object.keys(a.object).length
+      const object = unbox(a.object)
+      if (info(object) || object === null || !['string', 'object'].includes(typeof object)) fail('len requires a string, list or dictionary.', loc)
+      return typeof object === 'string' || Array.isArray(object) ? object.length : Object.keys(object).length
     }
     if (name === 'print') {
       const line = a.map(value => string(value, loc)).join(' ')
@@ -408,7 +437,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (name === 'perform_order_work' || name === 'record_processed') {
       const order = jsonValue(a.order, loc)
       if (!order || Array.isArray(order) || typeof order !== 'object' || !own(order, 'id')) fail('An order dictionary with id is required.', loc)
-      return name === 'perform_order_work' ? effects('workByOrder', order.id, null, loc, true) : effects('processed', order.id, order, loc)
+      const application = { order: clone(order), receipt: orderOrigins.get(a.order) ?? null }
+      return name === 'perform_order_work' ? effects('workByOrder', order.id, null, loc, true, application) : effects('processed', order.id, order, loc, false, application)
     }
     fail(`Unsupported call '${name}'.`, loc, 'MESSAGING_UNSUPPORTED')
   }
@@ -421,7 +451,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       case 'list': return node.items.map(item => evaluate(item, env))
       case 'dict': {
         const value = Object.create(null)
-        for (const [key, item] of node.entries) value[safeKey(evaluate(key, env), key.loc)] = evaluate(item, env)
+        for (const [key, item] of node.entries) value[safeKey(unbox(evaluate(key, env)), key.loc)] = evaluate(item, env)
         return value
       }
       case 'index': return readIndex(evaluate(node.object, env), evaluate(node.index, env), node.loc)
@@ -434,10 +464,11 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         return node.op === '-' ? -value : value
       }
       case 'binary': {
-        const left = evaluate(node.left, env)
+        let left = evaluate(node.left, env)
         if (node.op === 'and') return truth(left) ? evaluate(node.right, env) : left
         if (node.op === 'or') return truth(left) ? left : evaluate(node.right, env)
-        const right = evaluate(node.right, env)
+        const right = unbox(evaluate(node.right, env))
+        left = unbox(left)
         if (node.op === '+') {
           if (typeof left === 'string' && typeof right === 'string') {
             const budget = { bytes: 0 }; chargeString(budget, left, node.loc); chargeString(budget, right, node.loc)
@@ -480,7 +511,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         case 'assign':
           if (statement.target.kind === 'name') env.set(safeKey(statement.target.name, statement.loc), value)
           else {
-            const object = evaluate(statement.target.object, env), key = evaluate(statement.target.index, env)
+            const object = evaluate(statement.target.object, env), key = unbox(evaluate(statement.target.index, env))
             safeKey(key, statement.loc)
             if (!object || typeof object !== 'object' || info(object)) fail('Assignment requires a dictionary or list.', statement.loc)
             if (Array.isArray(object) && (!Number.isSafeInteger(key) || key < 0 || key >= object.length)) fail('List assignment requires an existing index.', statement.loc)

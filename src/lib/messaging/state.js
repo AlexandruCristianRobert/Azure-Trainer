@@ -31,6 +31,23 @@ export function emptyMessagingState() {
   return { version: 1, nextId: 1, timeMs: 0, entities: {}, deliveries: [], effects: {}, hosts: {}, executionReceipts: [] }
 }
 
+/** Typed helper-call receipt, with original receive ownership retained after settlement. */
+export function validOrderEffectTrace(trace, state) {
+  if (!plainObject(trace) || Object.keys(trace).sort().join(',') !== 'changed,entityId,id,kind,lockToken,messageId,messageRecordId,order,receiverId,timeMs'
+    || !/^trace-[1-9]\d*$/.test(trace.id) || !['order-work', 'order-record'].includes(trace.kind)
+    || !counter(trace.timeMs) || trace.timeMs > state.timeMs || typeof trace.changed !== 'boolean'
+    || trace.kind === 'order-work' && trace.changed !== true
+    || !plainObject(trace.order) || !finiteJson(trace.order) || !string(trace.order.id)
+    || new TextEncoder().encode(JSON.stringify(trace.order)).length > 128 * 1024) return false
+  const identity = ['entityId', 'messageRecordId', 'messageId', 'receiverId', 'lockToken']
+  if (identity.every(key => trace[key] === null)) return true
+  if (!identity.every(key => string(trace[key]))) return false
+  const entity = state.entities[trace.entityId]
+  const message = Array.isArray(entity?.messages) && entity.messages.find(row => row?.id === trace.messageRecordId && row.messageId === trace.messageId)
+  return !!message && Array.isArray(message.lockHistory) && message.lockHistory.some(lock => lock?.lockToken === trace.lockToken
+    && lock.receiverId === trace.receiverId && counter(lock.lockedAtMs) && lock.lockedAtMs <= trace.timeMs)
+}
+
 /** Immutable command-boundary data; not executable IR or a grading outcome. */
 function validExecutionMeasurement(value) {
   if (!plainObject(value) || Object.keys(value).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
@@ -117,8 +134,9 @@ export function validateMessagingState(state) {
       if (!plainObject(trace) || !traceId || traces.has(trace.id) || Number(traceId[1]) <= previousExecution
         || Number(traceId[1]) >= sequence || !counter(trace.timeMs) || trace.timeMs > state.timeMs) return false
       const kinds = trace.id.startsWith('eg-trace-') ? ['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance']
-        : ['send', 'duplicate', 'enqueue', 'receive', 'complete', 'abandon', 'deadletter', 'advance', 'lock-expired', 'message-expired']
+        : ['send', 'duplicate', 'enqueue', 'receive', 'complete', 'abandon', 'deadletter', 'advance', 'lock-expired', 'message-expired', 'order-work', 'order-record']
       if (!kinds.includes(trace.kind)) return false
+      if (['order-work', 'order-record'].includes(trace.kind) && !validOrderEffectTrace(trace, state)) return false
       traces.add(trace.id)
     }
     allocated.add(execution.id)
@@ -172,6 +190,10 @@ export function validateMessagingState(state) {
   }
   if (messageCount > 50) return false
   for (const trace of state.deliveries) {
+    if (['order-work', 'order-record'].includes(trace.kind)) {
+      if (!validOrderEffectTrace(trace, state) || !id(trace.id, true)) return false
+      continue
+    }
     if (!plainObject(trace) || !id(trace.id, true) || !['send', 'duplicate', 'enqueue', 'receive', 'complete', 'abandon', 'deadletter', 'advance', 'lock-expired', 'message-expired'].includes(trace.kind)
       || !counter(trace.timeMs) || trace.timeMs > state.timeMs
       || (trace.entityId !== null && !own(state.entities, trace.entityId))

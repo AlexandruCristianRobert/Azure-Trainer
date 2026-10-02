@@ -30,6 +30,68 @@ function run(source, { state = emptyMessagingState(), sandbox = fixture(), extra
 }
 
 describe('source-driven bounded messaging Python', () => {
+  it('preserves receipt bodytext string semantics and ordered actual lock provenance', () => {
+    const sent = run(producer(`'{"id":"o1","quantity":2}'`))
+    const result = run(`from clients import bus
+from training_runtime import perform_order_work, record_processed
+import json
+def work(order):
+    perform_order_work(order)
+    record_processed(order)
+    record_processed(order)
+def main():
+    with bus.get_queue_receiver(queue_name="orders") as rx:
+        for msg in rx.receive_messages():
+            text = str(msg)
+            plain = '{"id":"o1","quantity":2}'
+            order = json.loads(text)
+            alias = order
+            work(alias)
+            rx.complete_message(msg)
+            print(text, msg.body.decode("utf-8"))
+            return [text, len(text), text + "!", "prefix" + text, "o1" in text, text in [plain], text == plain, text != plain, json.dumps(text), msg.body.decode("utf-8") == text, text[0], str(text)]
+`, { state: sent.state })
+    expect(result.diagnostics).toEqual([])
+    const body = '{"id":"o1","quantity":2}'
+    expect(result.value).toEqual([body, 24, body + '!', 'prefix' + body, true, true, true, false, JSON.stringify(body), true, '{', body])
+    expect(result.output).toEqual([body + ' ' + body])
+    const record = messages(result.state)[0], lock = record.lockHistory[0]
+    expect(result.trace.map(row => row.kind)).toEqual(['receive', 'order-work', 'order-record', 'order-record', 'complete'])
+    for (const row of result.trace.filter(row => row.kind.startsWith('order-'))) {
+      expect(row).toMatchObject({ entityId: record.entityId, messageRecordId: record.id, messageId: 'm1', receiverId: lock.receiverId, lockToken: lock.lockToken, order: { id: 'o1', quantity: 2 } })
+    }
+    expect(result.trace.filter(row => row.kind === 'order-record').map(row => row.changed)).toEqual([true, false])
+    expect(validateMessagingState(result.state)).toBe(true)
+    const malformed = JSON.parse(JSON.stringify(result.state))
+    malformed.deliveries.find(row => row.kind === 'order-work').lockToken = 'lock-999'
+    expect(validateMessagingState(malformed)).toBe(false)
+  })
+  it('charges receipt bodytext JSON and concatenation against encoded byte limits before work', () => {
+    const sent = run(producer('"éééééééééé"'))
+    for (const expression of ['json.dumps(str(msg))', 'str(msg) + "é"']) {
+      const result = run(`from clients import bus
+import json
+def main():
+    with bus.get_queue_receiver(queue_name="orders") as rx:
+        for msg in rx.receive_messages():
+            return ${expression}
+`, { state: sent.state, limits: { valueBytes: 20 } })
+      expect(result.diagnostics[0]?.code).toBe('MESSAGING_LIMIT')
+      expect(result.state.effects).toEqual({})
+    }
+    const queued = run(producer(`'{"id":"o1","quantity":2}'`))
+    const capped = run(`from clients import bus
+from training_runtime import perform_order_work
+import json
+def main():
+    with bus.get_queue_receiver(queue_name="orders") as rx:
+        for msg in rx.receive_messages():
+            perform_order_work(json.loads(str(msg)))
+`, { state: queued.state, limits: { traces: 1 } })
+    expect(capped.diagnostics[0]?.code).toBe('MESSAGING_LIMIT')
+    expect(capped.trace.map(row => row.kind)).toEqual(['receive'])
+    expect(capped.state.effects).toEqual({})
+  })
   it('binds aliased imports and renamed values with CRLF and comments', () => {
     const source = producer().replace(/\bsender\b/g, 'outbox').replace('message_id="m1"))', 'message_id="m1")) # work').replace(/\n/g, '\r\n')
     const parsed = parse(source)

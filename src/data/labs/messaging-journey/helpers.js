@@ -70,5 +70,18 @@ export const receiptOperation = (measurement, row, kind, subQueue) => measuremen
   && (subQueue === undefined || trace.subQueue === subQueue)
   && (kind === 'enqueue' || row.lockHistory.some(lock => lock.lockToken === trace.lockToken && lock.receiverId === trace.receiverId && lock.settlement === kind)))
 
-export const completedOrderWork = (measurement, id, quantity) => (measurement.effects.after.workByOrder?.[id] ?? 0) - (measurement.effects.before.workByOrder?.[id] ?? 0) === 1
-  && orderPayload(measurement.effects.after.processed?.[id], id, quantity)
+export function completedOrderWork(measurement, row, id, quantity) {
+  const completeAt = receiptOperation(measurement, row, 'complete', 'active')
+  const complete = measurement.trace[completeAt]
+  if (!complete) return false
+  const linked = trace => trace.entityId === row.entityId && trace.messageRecordId === row.id && trace.messageId === row.messageId
+    && trace.receiverId === complete.receiverId && trace.lockToken === complete.lockToken
+  const rows = measurement.trace.filter(trace => ['order-work', 'order-record'].includes(trace.kind) && linked(trace))
+  if (rows.length !== 2 || rows[0].kind !== 'order-work' || rows[1].kind !== 'order-record'
+    || rows.some(trace => !trace.changed || !orderPayload(trace.order, id, quantity))) return false
+  const workAt = measurement.trace.indexOf(rows[0]), markerAt = measurement.trace.indexOf(rows[1])
+  return measurement.trace.some((trace, index) => index < workAt && trace.kind === 'receive' && linked(trace))
+    && workAt < markerAt && markerAt < completeAt && orderPayload(row.body, id, quantity)
+    && (measurement.effects.after.workByOrder?.[id] ?? 0) - (measurement.effects.before.workByOrder?.[id] ?? 0) === 1
+    && orderPayload(measurement.effects.after.processed?.[id], id, quantity)
+}
