@@ -251,3 +251,36 @@ Review performed no tests/probes: **0 seconds**. Starting cumulative **221.73958
 | 2026-10-02 | Static whitespace diagnostic | git diff --check | exit0; existing Git LF/CRLF notices only | 0 | 0.0487655 |
 
 Fix tests **6.9171999 seconds**, static **0.0487655 seconds**, combined **6.9659654 seconds**. Final cumulative **228.7055510 seconds (3.8117591833 minutes)**. Whole-invocation PowerShell Stopwatch measurements; full RED/GREEN stdout appended to ignored task-8-report.md. No agents/full/aggregate/foundation/AKS/Container Apps/legacy/cloud/browser/build/load/performance checks, merge/push/publication. Review CannotVerify items remain assigned to owning Tasks1/3/6 and later Tasks9–11; no cross-scope compatibility claim.
+
+### Task 9: custom publication, filtering and bounded recovery Labs 7–9
+
+Starting cumulative **228.7055510 seconds**. Controller approved two precise missing receipt boundaries before shared changes: actual publication snapshot on publish trace, and actual callback-bound notification helper trace. No new measurement family, API/service/sink, broad Sandbox dependency or catalog aggregation. Prepared owned storage/container ruling followed; learner configures actual attempts/TTL/destination and writes actual handler. All npm invocations wrapped with PowerShell Stopwatch around whole command. No full/aggregate engine/AKS/Container Apps/legacy/cloud/browser/build/proactive agents, merge/push/publication.
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial authoring RED | npm test -- tests/messaging-labs-eventgrid.test.js | 5 failed /1 passed (vacuous source loop); missing EVENTGRID_LABS; bodies12ms | 1 | 2.7183704 |
+| 2026-10-02 | Publication receipt RED | npm test -- tests/messaging-eventgrid.test.js -t "causal event receipts" | 1 failed /15 skipped; missing actual envelope/topic on publish receipt | 1 | 2.6598981 |
+| 2026-10-02 | Callback receipt RED | npm test -- tests/messaging-engine.test.js -t "causal event receipts" | 1 failed /44 skipped; absent notification helper receipt | 1 | 2.7113652 |
+| 2026-10-02 | Publication receipt GREEN | same focused EventGrid filter | 1 passed /15 skipped; bodies7ms | 0 | 2.5733753 |
+| 2026-10-02 | Callback diagnostic | same focused engine filter | 1 failed /44 skipped; effects helper returns null rather than changed boolean; callback rolled back | 1 | 2.7021558 |
+| 2026-10-02 | Callback GREEN | same focused engine filter | 1 passed /44 skipped; bodies49ms | 0 | 2.5941172 |
+| 2026-10-02 | Initial authoring GREEN | npm test -- tests/messaging-labs-eventgrid.test.js | 6 passed; bodies149ms | 0 | 2.7946300 |
+| 2026-10-02 | Argument/history admission GREEN | same focused engine filter | 1 passed /44 skipped; synthetic main marker, actual wrong typed args, impossible attempt tampering; bodies57ms | 0 | 2.6844386 |
+| 2026-10-02 | Authoring freshness/causality GREEN | npm test -- tests/messaging-labs-eventgrid.test.js | 8 passed; bodies166ms | 0 | 2.7951988 |
+| 2026-10-02 | Owning EventGrid GREEN | npm test -- tests/messaging-eventgrid.test.js | 16 passed; bodies60ms | 0 | 2.6497413 |
+| 2026-10-02 | Retained payload bound RED | same focused EventGrid filter | 1 failed /1 passed /15 skipped; oversized retained event admitted after publication history eviction | 1 | 2.5995038 |
+| 2026-10-02 | Final owning EventGrid GREEN | npm test -- tests/messaging-eventgrid.test.js | 17 passed; bodies58ms; pristine | 0 | 2.6435366 |
+| 2026-10-02 | Final authoring GREEN | npm test -- tests/messaging-labs-eventgrid.test.js | 8 passed; bodies173ms; pristine | 0 | 2.8166009 |
+| 2026-10-02 | Static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0463351 |
+
+Thirteen test invocations **34.9429320 seconds**, static **0.0463351 seconds**, combined **34.9892671 seconds**. Cumulative **263.6948181 seconds (4.394913635 minutes)**. Ordinary source/context/status/diff reads are not execution probes. Full raw GREEN output and exact API/handoff documented in ignored task-9-report.md. Catalog integration remains Task11; deferred pre-existing malformed null-trace guard and legacy filtered-source fixture remain controller final-review pointers. No broad compatibility claim.
+
+Final self-review added safe Array.isArray checks to the new trace reader for malformed publication/delivery collections (no unrelated legacy null-trace change). Fresh relevant checks after this adjustment:
+
+| Date | Stage | Command | Actual result | Exit | Seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Final callback/journal GREEN | npm test -- tests/messaging-engine.test.js -t "causal event receipts" | 1 passed /44 skipped; bodies55ms; pristine | 0 | 2.6456556 |
+| 2026-10-02 | Final Lab GREEN | npm test -- tests/messaging-labs-eventgrid.test.js | 8 passed; bodies169ms; pristine | 0 | 2.8100438 |
+| 2026-10-02 | Final static whitespace | git diff --check | exit0; existing LF/CRLF notices only | 0 | 0.0480413 |
+
+Task9 final total: fifteen npm invocations **40.3986314 seconds**, two static probes **0.0943764 seconds**, combined **40.4930078 seconds**. New cumulative **269.1985588 seconds (4.4866426467 minutes)**. No unmeasured executable probes.

@@ -48,6 +48,27 @@ export function validOrderEffectTrace(trace, state) {
     && lock.receiverId === trace.receiverId && counter(lock.lockedAtMs) && lock.lockedAtMs <= trace.timeMs)
 }
 
+/** Actual publication snapshots and callback-bound notification helper receipts. */
+export function validEventGridApplicationTrace(trace, state, inFlight = false) {
+  const base = 'attempts,deliveryId,eventRecordId,id,kind,reason,status,timeMs,timing'
+  if (trace.kind === 'publish') {
+    const source = Array.isArray(state.eventGrid?.events) && state.eventGrid.events.find(row => row?.id === trace.eventRecordId)
+    return Object.keys(trace).sort().join(',') === `attempts,deliveryId,event,eventRecordId,id,kind,reason,status,timeMs,timing,topicId`
+      && !!source && trace.topicId === source.topicId && trace.timeMs === source.publishedAtMs
+      && JSON.stringify(trace.event) === JSON.stringify(source.event)
+      && new TextEncoder().encode(JSON.stringify(trace.event)).length <= 128 * 1024
+  }
+  if (trace.kind === 'notification') {
+    const delivery = Array.isArray(state.eventGrid?.deliveries) && state.eventGrid.deliveries.find(row => row?.id === trace.deliveryId && row.eventRecordId === trace.eventRecordId)
+    return Object.keys(trace).sort().join(',') === 'attempts,changed,deliveryId,eventId,eventRecordId,id,kind,orderId,reason,status,timeMs,timing'
+      && !!delivery && Number.isSafeInteger(trace.attempts) && trace.attempts >= 1
+      && trace.attempts <= delivery.maxDeliveryAttempts && trace.attempts <= delivery.attempts + (inFlight ? 1 : 0)
+      && string(trace.eventId) && string(trace.orderId) && typeof trace.changed === 'boolean'
+      && trace.status === null && trace.reason === null
+  }
+  return Object.keys(trace).sort().join(',') === base
+}
+
 /** Immutable command-boundary data; not executable IR or a grading outcome. */
 function validExecutionMeasurement(value) {
   if (!plainObject(value) || Object.keys(value).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
@@ -133,9 +154,10 @@ export function validateMessagingState(state) {
       const traceId = /^(?:trace|eg-trace)-([1-9]\d*)$/.exec(trace?.id)
       if (!plainObject(trace) || !traceId || traces.has(trace.id) || Number(traceId[1]) <= previousExecution
         || Number(traceId[1]) >= sequence || !counter(trace.timeMs) || trace.timeMs > state.timeMs) return false
-      const kinds = trace.id.startsWith('eg-trace-') ? ['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance']
+      const kinds = trace.id.startsWith('eg-trace-') ? ['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance', 'notification']
         : ['send', 'duplicate', 'enqueue', 'receive', 'complete', 'abandon', 'deadletter', 'advance', 'lock-expired', 'message-expired', 'order-work', 'order-record']
       if (!kinds.includes(trace.kind)) return false
+      if (trace.id.startsWith('eg-trace-') && !validEventGridApplicationTrace(trace, state)) return false
       if (['order-work', 'order-record'].includes(trace.kind) && !validOrderEffectTrace(trace, state)) return false
       traces.add(trace.id)
     }
@@ -208,6 +230,7 @@ export function validateMessagingState(state) {
   if (state.eventGrid !== undefined) {
     const grid = state.eventGrid
     const envelope = event => plainObject(event) && string(event.id) && typeof event.subject === 'string' && string(event.eventType) && string(event.dataVersion) && own(event, 'data')
+      && new TextEncoder().encode(JSON.stringify(event)).length <= 128 * 1024
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
     if (!plainObject(grid) || !Array.isArray(grid.events) || grid.events.length > 50 || !Array.isArray(grid.deliveries) || grid.deliveries.length > 50 || !Array.isArray(grid.traces) || grid.traces.length > 500) return false
     for (const event of grid.events) if (!plainObject(event) || !/^eg-event-/.test(event.id) || !id(event.id, true, true) || !envelope(event.event)
@@ -249,11 +272,13 @@ export function validateMessagingState(state) {
       if (delivery.reason === 'MaxDeliveryAttemptsExceeded' && !exhaustedFailure || delivery.reason === 'TimeToLiveExceeded' && delivery.expiresAtMs > state.timeMs) return false
     }
     for (const receipt of grid.traces) {
-      if (!plainObject(receipt) || !/^eg-trace-/.test(receipt.id) || !id(receipt.id, true, true) || !['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance'].includes(receipt.kind)
+      if (!plainObject(receipt) || !/^eg-trace-/.test(receipt.id) || !id(receipt.id, true, true) || !['publish', 'route', 'retry', 'delivered', 'deadlettered', 'dropped', 'advance', 'notification'].includes(receipt.kind)
+      || !validEventGridApplicationTrace(receipt, state, true)
       || !counter(receipt.timeMs) || receipt.timeMs > state.timeMs || receipt.timing !== 'logical-simulator-ticks'
       || (receipt.eventRecordId !== null && !grid.events.some(event => event.id === receipt.eventRecordId))
       || (receipt.deliveryId !== null && !grid.deliveries.some(delivery => delivery.id === receipt.deliveryId && delivery.eventRecordId === receipt.eventRecordId))
       || (receipt.attempts !== null && (!counter(receipt.attempts) || receipt.attempts > 30)) || ![null, 'pending', 'retrying', 'delivered', 'deadlettered', 'dropped'].includes(receipt.status) || !nullableString(receipt.reason)) return false
+      if (receipt.kind === 'notification') continue
       if (['publish', 'advance'].includes(receipt.kind)) {
         if (receipt.deliveryId !== null || receipt.attempts !== null || receipt.status !== null || receipt.reason !== null || (receipt.kind === 'publish' ? receipt.eventRecordId === null : receipt.eventRecordId !== null)) return false
       } else {

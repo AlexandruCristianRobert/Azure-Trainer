@@ -117,6 +117,41 @@ def main():
 }
 
 describe('messaging shell, current behavior evidence and persistence', () => {
+  it('causal event receipts link notifications only to their actual callback attempt', () => {
+    const f = webhookFixture()
+    let published = command(f.run, f.lab, 'python events.py').run
+    const handled = command(published, f.lab, 'python handler.py').run
+    const measurement = handled.runtime.messaging.executionReceipts.at(-1).measurements
+    const row = measurement.trace.find(row => row.kind === 'notification')
+    expect(row).toMatchObject({ eventId: 'e1', orderId: 'o1', attempts: 2, changed: true,
+      deliveryId: handled.runtime.messaging.eventGrid.deliveries[0].id, eventRecordId: handled.runtime.messaging.eventGrid.events[0].id })
+    expect(measurement.trace.indexOf(row)).toBeLessThan(measurement.trace.findIndex(trace => trace.kind === 'delivered'))
+    expect(() => deserializeRun(serializeRun(handled, f.lab), f.lab)).not.toThrow()
+    const forged = JSON.parse(serializeRun(handled, f.lab))
+    forged.runtime.messaging.executionReceipts.at(-1).measurements.trace.find(row => row.kind === 'notification').attempts = 3
+    expect(() => deserializeRun(JSON.stringify(forged), f.lab)).toThrow()
+    const wrongArgs = save(published, f.lab, 'handler.py', `from training_runtime import record_notification, deliver_events
+def handle_event(event):
+    record_notification("unrelated", "wrong-order")
+    return 200
+def main():
+    deliver_events(handle_event)
+`)
+    const unrelated = command(wrongArgs, f.lab, 'python handler.py').run
+    expect(unrelated.runtime.messaging.executionReceipts.at(-1).measurements.trace.find(row => row.kind === 'notification')).toMatchObject({ eventId: 'unrelated', orderId: 'wrong-order', changed: true })
+    expect(() => deserializeRun(serializeRun(unrelated, f.lab), f.lab)).not.toThrow()
+    const wrong = save(published, f.lab, 'handler.py', `from training_runtime import record_notification, deliver_events
+def handle_event(event):
+    return 200
+def main():
+    deliver_events(handle_event)
+    record_notification("e1", "o1")
+`)
+    const synthetic = command(wrong, f.lab, 'python handler.py').run
+    expect(synthetic.runtime.messaging.effects.notifications.e1).toEqual({ eventId: 'e1', orderId: 'o1' })
+    expect(synthetic.runtime.messaging.executionReceipts.at(-1).measurements.trace.some(row => row.kind === 'notification')).toBe(false)
+    expect(() => deserializeRun(serializeRun(synthetic, f.lab), f.lab)).not.toThrow()
+  })
   it('does not revive evidence after source revert', () => {
     const f = engineFixture(), proved = command(f.run, f.lab).run
     expect(done(f.lab, proved)).toBe(true)

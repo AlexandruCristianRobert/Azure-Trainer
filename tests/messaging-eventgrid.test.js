@@ -35,6 +35,26 @@ const out = result => result.lines.filter(line => line.kind === 'out').map(line 
 const err = result => result.lines.filter(line => line.kind === 'err').map(line => line.text).join('\n')
 
 describe('bounded Event Grid publication and delivery', () => {
+  it('causal event receipts expose actual publication without a subscriber', () => {
+    const { sandbox } = fixture()
+    sandbox.eventGridTopics[0].eventSubscriptions = []
+    const result = publish(sandbox)
+    expect(result.trace[0]).toMatchObject({ kind: 'publish', topicId: `${root}/Microsoft.EventGrid/topics/evgt-orders`.toLowerCase(), event })
+    expect(result.state.eventGrid.deliveries).toEqual([])
+    expect(validateMessagingState(result.state)).toBe(true)
+    const forged = JSON.parse(JSON.stringify(result.state))
+    forged.eventGrid.traces[0].event.data.order_id = 'unrelated'
+    expect(validateMessagingState(forged)).toBe(false)
+  })
+  it('causal event receipts bound retained event payloads after publication trace eviction', () => {
+    const { sandbox } = fixture()
+    sandbox.eventGridTopics[0].eventSubscriptions = []
+    const result = publish(sandbox)
+    const evicted = JSON.parse(JSON.stringify(result.state))
+    evicted.eventGrid.traces = []
+    evicted.eventGrid.events[0].event.data = { order_id: 'x'.repeat(128 * 1024) }
+    expect(validateMessagingState(evicted)).toBe(false)
+  })
   it('routes exact event types and case-aware subject filters with isolated fan-out', () => {
     let { sandbox } = fixture({ includedEventTypes: ['Contoso.OrderProcessed'], subjectBeginsWith: '/ORDERS/EU/', subjectEndsWith: '/o1' })
     sandbox = createEventGridSubscription(sandbox, { ...target, topicName: target.topic, name: 'second-handler', endpoint, subjectBeginsWith: '/ORDERS/EU/', isSubjectCaseSensitive: true }).sandbox

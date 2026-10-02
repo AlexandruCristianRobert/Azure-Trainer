@@ -7,6 +7,13 @@ export const ORDERS_TARGET = Object.freeze({ resourceGroup: MESSAGING_GROUP, nam
 export const GROUP_ID = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${MESSAGING_GROUP}`.toLowerCase()
 export const NAMESPACE_ID = `${GROUP_ID}/providers/microsoft.servicebus/namespaces/${MESSAGING_NAMESPACE}`
 export const ORDERS_ID = `${NAMESPACE_ID}/queues/orders`
+export const EVENT_TOPIC_ID = `${GROUP_ID}/providers/microsoft.eventgrid/topics/evgt-orders`
+export const EVENT_SUBSCRIPTION_ID = `${EVENT_TOPIC_ID}/eventsubscriptions/order-notifications`
+export const EVENT_ENDPOINT = 'https://orders.trainer.invalid/events'
+export const STORAGE_ID = `${GROUP_ID}/providers/microsoft.storage/storageaccounts/stmessagingorders`
+export const EVENT_DESTINATION = `${STORAGE_ID}/blobservices/default/containers/event-deadletters`
+export const eventTopic = sandbox => sandbox.eventGridTopics.find(row => eq(row.resourceGroup, MESSAGING_GROUP) && eq(row.name, 'evgt-orders'))
+export const eventSubscription = sandbox => eventTopic(sandbox)?.eventSubscriptions.find(row => eq(row.name, 'order-notifications'))
 export const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 export const ordersNamespace = sandbox => sandbox.namespaces.find(row => eq(row.resourceGroup, MESSAGING_GROUP) && eq(row.name, MESSAGING_NAMESPACE))
 export const ordersQueue = sandbox => ordersNamespace(sandbox)?.queues.find(row => eq(row.name, 'orders'))
@@ -20,6 +27,19 @@ export function messagingResourceById(sandbox, id) {
   const group = sandbox.resourceGroups.find(row => eq(row.name, parts[3]))
   if (!group) return null
   if (parts.length === 4) return group
+  if (parts[4] === 'providers' && parts[5] === 'microsoft.eventgrid' && parts[6] === 'topics') {
+    const topic = sandbox.eventGridTopics.find(row => eq(row.resourceGroup, group.name) && eq(row.name, parts[7]))
+    if (!topic) return null
+    if (parts.length === 8) { const { eventSubscriptions, ...configuration } = topic; return configuration }
+    return parts.length === 10 && parts[8] === 'eventsubscriptions' ? topic.eventSubscriptions.find(row => eq(row.name, parts[9])) ?? null : null
+  }
+  if (parts[4] === 'providers' && parts[5] === 'microsoft.storage' && parts[6] === 'storageaccounts') {
+    const account = sandbox.storageAccounts.find(row => eq(row.resourceGroup, group.name) && eq(row.name, parts[7]))
+    if (!account) return null
+    if (parts.length === 8) { const { blobContainers, ...configuration } = account; return configuration }
+    return parts.length === 12 && parts[8] === 'blobservices' && parts[9] === 'default' && parts[10] === 'containers'
+      && account.blobContainers?.includes(parts[11]) ? { name: parts[11], storageAccount: account.name, resourceGroup: account.resourceGroup } : null
+  }
   if (parts[4] !== 'providers' || parts[5] !== 'microsoft.servicebus' || parts[6] !== 'namespaces') return null
   const namespace = sandbox.namespaces.find(row => eq(row.resourceGroup, group.name) && eq(row.name, parts[7]))
   if (!namespace) return null
@@ -56,6 +76,33 @@ export const messagingMetadata = Object.freeze({ engineVersion: 2, contentVersio
 export const baselineReadme = description => `# Orders: simulated Service Bus\n\n${description}\n\nThis trainer executes a bounded synchronous Python SDK subset, without Python processes, Azure authentication, network calls, or production durability. DefaultAzureCredential is a simulated trainer identity. Work and processed records are protected teaching helpers, not a production database. Only 50 executions and 50 retained messages are supported per attempt; reset restores the supplied fixture and clears proof.\n`
 
 export const exerciseTask = (task, entry, check) => ({ taskId: task.id, ...task.verification, entry, mode: 'script', check })
+export const eventResources = [GROUP_ID, NAMESPACE_ID, EVENT_TOPIC_ID]
+export const eventReady = ({ sandbox }) => ordersNamespace(sandbox)?.sku === 'Standard' && eventTopic(sandbox)?.inputSchema === 'EventGridSchema'
+export const eventReadme = description => baselineReadme(description) + '\nEvent Grid publication and callback registration are simulations: no Azure webhook deployment. The trainer bridge delivers actual event envelopes and drains bounded due retries with logical ticks, without real waits or Azure retry timing guarantees. No FIFO/exactly-once guarantee or real blob durability.\n'
+
+export function exactEvent(actual, expected) {
+  return actual?.id === expected.id && actual.subject === expected.subject && actual.eventType === expected.eventType
+    && actual.dataVersion === expected.dataVersion && exactOrder(actual.data, expected.data)
+    && Object.keys(actual).length === 5
+}
+
+export function publishedEvents(measurement, expected) {
+  const rows = measurement.trace.filter(row => row.kind === 'publish')
+  return rows.length === expected.length && rows.every((row, index) => row.topicId === EVENT_TOPIC_ID
+    && exactEvent(row.event, expected[index]) && !!row.eventRecordId)
+}
+
+export function notifiedDelivery(measurement, row, expected) {
+  if (!row || row.subscriptionId !== EVENT_SUBSCRIPTION_ID || row.endpointType !== 'WebHook' || row.endpoint !== EVENT_ENDPOINT
+    || row.status !== 'delivered' || row.lastStatus !== 200 || !exactEvent(row.event, expected)) return false
+  const linked = trace => trace.deliveryId === row.id && trace.eventRecordId === row.eventRecordId
+  const notifications = measurement.trace.filter(trace => trace.kind === 'notification' && linked(trace))
+  if (notifications.length !== 1) return false
+  const work = notifications[0]
+  return work.attempts === row.attempts && work.changed && work.eventId === row.event.id && work.orderId === row.event.data.order_id
+    && measurement.trace.some((trace, index) => index > measurement.trace.indexOf(work) && trace.kind === 'delivered' && linked(trace) && trace.attempts === work.attempts)
+    && exactOrder(measurement.effects.after.notifications?.[row.event.id], { eventId: row.event.id, orderId: row.event.data.order_id })
+}
 
 export function orderPayload(body, id, quantity) {
   try {

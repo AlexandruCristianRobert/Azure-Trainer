@@ -451,7 +451,20 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (name === 'record_notification') {
       if (typeof a.order_id !== 'string' || !a.order_id) fail('Notification order_id must be a nonempty string.', loc)
       safeKey(a.order_id, loc)
-      return effects('notifications', a.event_id, { eventId: a.event_id, orderId: a.order_id }, loc)
+      const value = jsonValue({ eventId: a.event_id, orderId: a.order_id }, loc)
+      if (activeDelivery && (trace.length >= maximumTraces || current.nextId >= Number.MAX_SAFE_INTEGER)) fail('Notification trace capacity reached.', loc, 'MESSAGING_LIMIT')
+      const changed = !own(current.effects.notifications ?? {}, a.event_id)
+      effects('notifications', a.event_id, value, loc)
+      if (activeDelivery) {
+        const next = clone(current)
+        const row = { id: `eg-trace-${next.nextId++}`, kind: 'notification', timeMs: next.timeMs,
+          deliveryId: activeDelivery.id, eventRecordId: activeDelivery.eventRecordId, attempts: activeDelivery.attempts + 1,
+          status: null, reason: null, timing: 'logical-simulator-ticks', eventId: a.event_id, orderId: a.order_id, changed }
+        next.eventGrid.traces.push(row)
+        if (next.eventGrid.traces.length > 500) next.eventGrid.traces.shift()
+        current = next; trace.push(clone(row))
+      }
+      return null
     }
     if (name === 'perform_order_work' || name === 'record_processed') {
       const order = jsonValue(a.order, loc)

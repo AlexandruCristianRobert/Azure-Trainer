@@ -13,6 +13,7 @@ const config = message => reject('MESSAGING_CONFIG', message)
 const runtime = message => reject('MESSAGING_RUNTIME', message)
 export const validEventGridEnvelope = event => plainObject(event) && text(event.id) && typeof event.subject === 'string'
   && text(event.eventType) && text(event.dataVersion) && Object.hasOwn(event, 'data') && finiteJson(event.data)
+  && new TextEncoder().encode(JSON.stringify(event)).length <= 128 * 1024
 
 /** Trusted Lab registration is checked independently of callback execution/delivery status. */
 export function validateEventGridWebhookRegistration(sandbox, registrations) {
@@ -51,6 +52,10 @@ export function applyEventGridOperation(state, sandbox, operation) {
     }
     const emit = (kind, record = null, eventRecordId = null) => {
       const receipt = { id: allocate('eg-trace'), kind, timeMs: next.timeMs, deliveryId: record?.id ?? null, eventRecordId: record?.eventRecordId ?? eventRecordId, attempts: record?.attempts ?? null, status: record?.status ?? null, reason: record?.reason ?? null, timing: 'logical-simulator-ticks' }
+      if (kind === 'publish') {
+        const source = grid.events.find(event => event.id === eventRecordId)
+        receipt.topicId = source.topicId; receipt.event = clone(source.event)
+      }
       grid.traces.push(receipt); trace.push(clone(receipt))
       if (grid.traces.length > 500) grid.traces.shift()
     }

@@ -49,3 +49,33 @@ def main():
     deliver_events(handle_event)
 `,
 })
+
+const processedEvent = (id, subject, type, orderId, region, quantity) => `    ${id.replaceAll('-', '_')} = EventGridEvent(subject="${subject}", event_type="${type}",
+                          data={"order_id": "${orderId}", "region": "${region}", "quantity": ${quantity}}, data_version="1.0", id="${id}")\n`
+const eventHeader = 'from azure.eventgrid import EventGridEvent\nfrom clients import publisher\n\n'
+const eu = processedEvent('e-eu', '/orders/eu/o1', 'Contoso.OrderProcessed', 'o1', 'EU', 2)
+const publishing = (declarations, variables) => eventHeader + 'def publish_events():\n' + declarations + `    publisher.send([${variables}])\n\ndef main():\n    publish_events()\n`
+const handler = handlerHeader + `from events import publish_events
+
+def handle_event(event):
+    order_id = event.data["order_id"]
+    status = handler_status(order_id)
+    if status == 200:
+        record_notification(event.id, order_id)
+    return status
+
+def main():
+    publish_events()
+    # Trainer callback bridge: bounded logical ticks, no real network or waits.
+    attempts = deliver_events(handle_event)
+    print("Delivery attempts:", attempts)
+`
+export const EVENTGRID_PUBLISH_STARTER_FILES = EVENTGRID_STARTER_FILES
+export const EVENTGRID_PUBLISH_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_STARTER_FILES, 'events.py': publishing(eu, 'e_eu') })
+export const EVENTGRID_FILTER_STARTER_FILES = EVENTGRID_STARTER_FILES
+export const EVENTGRID_FILTER_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_STARTER_FILES,
+  'events.py': publishing(eu + processedEvent('e-us', '/orders/us/o2', 'Contoso.OrderProcessed', 'o2', 'US', 1)
+    + processedEvent('e-other', '/orders/eu/o3', 'Contoso.OrderAccepted', 'o3', 'EU', 1), 'e_eu, e_us, e_other'), 'handler.py': handler })
+export const EVENTGRID_RECOVERY_STARTER_FILES = Object.freeze({ ...EVENTGRID_STARTER_FILES,
+  'events.py': publishing(eu + processedEvent('e-terminal', '/orders/eu/o2', 'Contoso.OrderProcessed', 'o2', 'EU', 1), 'e_eu, e_terminal') })
+export const EVENTGRID_RECOVERY_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_RECOVERY_STARTER_FILES, 'handler.py': handler })
