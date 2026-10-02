@@ -346,3 +346,24 @@ Five test invocations **18.2505345 seconds** plus one build **5.9780497 seconds*
 Final `git diff --check`: exit 0, **0.0430921 seconds**, no whitespace errors, existing Windows LF/CRLF notices only. Task11 combined **24.2716763 seconds**; new cumulative **324.9043613 seconds (5.41507269 minutes)**. CI/deployment remain **NOT RUN**, with no invented duration. Local branch readiness is verified; whole-branch review/integration/publication remain separately pending.
 
 After explicitly staging the ten scoped files (including new docs/catalog test), `git diff --cached --check` also exited 0 with no output, **0.0341313 seconds**. Two static checks total **0.0772234 seconds**. Final Task11 combined **24.3058076 seconds**, final cumulative **324.9384926 seconds (5.41564154 minutes)**. No additional test, build or runtime diagnostic.
+
+### Combined final review fix wave
+
+Base 938282b. Starting cumulative **325.2569169 seconds**, including final whole-branch review probe 0.3184243 seconds. All seven findings addressed narrowly: incomplete Event Grid Function callbacks roll back their effects/traces when execution or finalization aborts, retaining completed siblings; known effect families are typed/bounded on state admission even without a journal; registration preserves the actual FunctionApp object through aliases and declaration-time binding; null traces reject; state/direct broker enforce aggregate500 retained locks; filtered source fixture proves publication before asserting exclusion; docs distinguish skipped lowering from whole-file freshness.
+
+RED/GREEN only selected new/owning cases in engine, Functions, Service Bus and Event Grid files. RED selected 11 cases: 10 expected failures plus same-object alias positive. First stdout exceeded the tool cap because identity failure printed500 locks; report retains raw returned output and explicitly notes truncation. Added an earlier diagnostic assertion, then compact same-scope RED recaptured all failures before production edits. GREEN11/11 passed. No mocks, stress loop, architecture expansion or journal/proof weakening. One final Messaging aggregate217/217, exact Data2 command21/21 and Pages build all succeeded. Independent final checks were launched together; accounting sums measured process elapsed times, including overlap.
+
+| Stage | Exit | Seconds |
+| --- | ---: | ---: |
+| Combined RED | 1 | 2.8825546 |
+| Compact RED recapture | 1 | 2.8057233 |
+| Focused GREEN | 0 | 2.7537545 |
+| Final Messaging aggregate | 0 | 5.4083974 |
+| Data integration | 0 | 6.1444646 |
+| Pages build | 0 | 8.1966347 |
+
+Exact selected command: `npm test -- tests/messaging-engine.test.js tests/messaging-functions.test.js tests/messaging-servicebus.test.js tests/messaging-eventgrid.test.js -t "restores the unfinished|unjournaled effect|registration objects|same-object registration|delivery finalization|forged trace/history|aggregate retained lock|executes aliased SDK"`. Final commands: `npm run test:messaging`; `npm test -- tests/data-python-sdk.test.js tests/data-capstone-core.test.js`; `npm run build -- --base=/Azure-Trainer/`.
+
+Five test invocations **19.9948944 seconds**, one build **8.1966347 seconds**, combined **28.1915291 seconds** before static checks. Cumulative **353.4484460 seconds** before static checks. Build600 modules, index2749.91kB/gzip749.83kB; existing >500kB warning. Full raw output/commands/exits/timing, test rationale and self-review are in ignored `final-fix-report.md`. No additional runtime probes. Full/legacy/AKS/Container Apps/cloud/browser checks, CI and deployment **NOT RUN**; no merge/push/publication. Actual Azure host, browser clipboard/focus/responsiveness and first-load performance remain unverified. Controller owns one scoped rereview and residual adjudication.
+
+Final static checks: `git diff --check` exit0 **0.0535647 seconds** (existing LF/CRLF notices only); `git diff --cached --check` exit0 **0.0377530 seconds** (no output). Combined final fix wave **28.2828468 seconds**; cumulative **353.5397637 seconds (5.892329395 minutes)**, below30minutes. These bookkeeping totals were recorded and staged after the checks; no further code changes or execution occurred.

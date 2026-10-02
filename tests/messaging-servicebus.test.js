@@ -230,6 +230,7 @@ describe('bounded Service Bus lifecycle', () => {
     for (const mutate of [
       state => { entity(state).target.queue = 'another-queue' },
       state => { state.deliveries[0].kind = 'invented-success' },
+      state => { state.deliveries[0] = null },
       state => { state.deliveries[0].receiverId = 5 },
       state => { entity(state).messages[0].lockHistory[0].lockedUntilMs = 0 },
       state => { entity(state).messages[0].deliveryCount = -1 },
@@ -240,6 +241,29 @@ describe('bounded Service Bus lifecycle', () => {
     }
   })
 
+  it('enforces the aggregate retained lock ceiling without changing the original on failure', () => {
+    const fixture = brokerFixture()
+    let state = send(emptyMessagingState(), fixture).state
+    state = send(state, fixture, message('m2')).state
+    const rows = entity(state).messages
+    // Construct settled history across two physical messages, avoiding repeated broker calls.
+    rows[0].lockHistory = Array.from({ length: 250 }, (_, i) => ({ lockToken: `lock-${100 + i}`, receiverId: 'old', lockedAtMs: 0, lockedUntilMs: 1000, settlement: 'abandon', settledAtMs: 0 }))
+    rows[1].lockHistory = Array.from({ length: 249 }, (_, i) => ({ lockToken: `lock-${350 + i}`, receiverId: 'old', lockedAtMs: 0, lockedUntilMs: 1000, settlement: 'abandon', settledAtMs: 0 }))
+    state.nextId = 600
+    expect(validateMessagingState(state)).toBe(true)
+    const last = receive(state, fixture)
+    expect(last.diagnostics).toEqual([])
+    expect(entity(last.state).messages.reduce((sum, row) => sum + row.lockHistory.length, 0)).toBe(500)
+    const before = structuredClone(last.state)
+    const rejected = receive(last.state, fixture)
+    expect(rejected.diagnostics[0]?.code).toBe('MESSAGING_LIMIT')
+    expectFailure(rejected, last.state, 'MESSAGING_LIMIT')
+    expect(last.state).toEqual(before)
+    const invalid = structuredClone(last.state)
+    entity(invalid).messages[1].lockHistory.push({ lockToken: 'lock-700', receiverId: 'old', lockedAtMs: 0, lockedUntilMs: 1000, settlement: 'abandon', settledAtMs: 0 })
+    invalid.nextId = 701
+    expect(validateMessagingState(invalid)).toBe(false)
+  })
   it('retains only the latest 500 trace entries and returns independent deterministic JSON', () => {
     const fixture = brokerFixture()
     const original = emptyMessagingState()

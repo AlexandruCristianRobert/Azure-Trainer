@@ -14,6 +14,9 @@ import { applyEventGridOperation } from '../src/lib/messaging/eventgrid.js'
 import { SUBSCRIPTION_ID } from '../src/lib/sandbox/model.js'
 import { FUNCTIONS_SOLUTION_FILES } from '../src/data/templates/messaging-python/functions.js'
 import { EVENTGRID_SOLUTION_FILES } from '../src/data/templates/messaging-python/eventgrid.js'
+import { functionsEventgridLab } from '../src/data/labs/messaging-journey/functions-eventgrid.lab.js'
+import { FUNCTIONS_EVENTGRID_SOLUTION_FILES } from '../src/data/templates/messaging-python/functions.js'
+import { validateMessagingState } from '../src/lib/messaging/state.js'
 
 const target = { resourceGroup: 'rg-messaging', namespace: 'sb-orders', queue: 'orders' }
 // Removing the settlement or idempotency guard must fail the real behavior check.
@@ -117,6 +120,56 @@ def main():
 }
 
 describe('messaging shell, current behavior evidence and persistence', () => {
+  it.each([
+    ['MESSAGING_LIMIT', 'spin()', '\ndef spin():\n    spin()\n'],
+    ['MESSAGING_CONFIG', 'ServiceBusClient("missing.servicebus.windows.net", DefaultAzureCredential())', '\nfrom azure.servicebus import ServiceBusClient\nfrom azure.identity import DefaultAzureCredential\n'],
+    ['MESSAGING_UNSUPPORTED', 'record_notification("constructor", "o2")', ''],
+  ])('restores the unfinished callback after %s while retaining completed siblings', (code, failure, extra) => {
+    const lab = functionsEventgridLab
+    let run = createBehavioralRun(lab, { attemptId: 'callback-boundary' })
+    run = command(run, lab, lab.tasks[0].solution.steps[0].line).run
+    // One prepared event finishes before the queue Function publishes e-o1.
+    const published = applyEventGridOperation(run.runtime.messaging, run.sandbox, { kind: 'publish', target: { resourceGroup: 'rg-messaging', topic: 'evgt-orders' },
+      events: [{ id: 'prior-event', subject: '/orders/EU/prior', eventType: 'Contoso.OrderProcessed', data: { order_id: 'prior' }, dataVersion: '1.0' }] })
+    run.runtime.messaging = published.state
+    const source = FUNCTIONS_EVENTGRID_SOLUTION_FILES['function_app.py'].replace('record_notification(event.id, data["order_id"])',
+      `record_notification(event.id, data["order_id"])\n    if event.id == "e-o1":\n        ${failure}`) + extra
+    run = save(run, lab, 'function_app.py', source)
+    const result = command(run, lab, 'func start')
+    expect(result.diagnostics).toEqual([expect.objectContaining({ code, path: 'function_app.py', line: expect.any(Number), column: expect.any(Number) })])
+    const state = result.run.runtime.messaging
+    expect(state.effects.notifications).toEqual({ 'prior-event': { eventId: 'prior-event', orderId: 'prior' } })
+    expect(state.effects.workByOrder).toEqual({ o1: 1 })
+    expect(state.eventGrid.deliveries.map(row => [row.event.id, row.status, row.attempts])).toEqual([
+      ['prior-event', 'delivered', 1], ['e-o1', 'pending', 0],
+    ])
+    expect(state.executionReceipts.at(-1).measurements.trace.filter(row => row.kind === 'notification').map(row => row.eventId)).toEqual(['prior-event'])
+    expect(done(lab, result.run)).toBe(false)
+    expect(validateMessagingState(state)).toBe(true)
+    expect(deserializeRun(serializeRun(result.run, lab), lab).runtime.messaging).toEqual(state)
+  })
+  it('rejects malformed unjournaled effect families and preserves valid historical effects', () => {
+    const f = engineFixture()
+    const valid = { workByOrder: { prior: 2 }, processed: { prior: { id: 'prior', quantity: 1 } }, notifications: { e0: { eventId: 'e0', orderId: 'prior' } } }
+    f.run.runtime.messaging.effects = valid
+    expect(deserializeRun(serializeRun(f.run, f.lab), f.lab).runtime.messaging.effects).toEqual(valid)
+    const resumed = command(f.run, f.lab).run
+    expect(resumed.runtime.messaging.effects.processed.prior).toEqual(valid.processed.prior)
+    expect(deserializeRun(serializeRun(resumed, f.lab), f.lab).runtime.messaging.effects).toEqual(resumed.runtime.messaging.effects)
+    for (const effects of [
+      { unknown: {} }, { workByOrder: { o1: -2 } }, { workByOrder: { o1: 0.5 } }, { workByOrder: { o1: Number.MAX_SAFE_INTEGER + 1 } },
+      { processed: { o1: false } }, { processed: { o1: { id: 'different' } } },
+      { notifications: { e1: { eventId: 'different', orderId: 'o1' } } }, { notifications: { e1: { eventId: 'e1', orderId: '' } } },
+      { processed: { o1: { id: 'o1', payload: 'x'.repeat(128 * 1024) } } },
+      { processed: { o1: { id: 'o1', nested: JSON.parse('{"constructor":1}') } } },
+      { workByOrder: JSON.parse('{"__proto__":1}') }, { processed: Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`o${i}`, { id: `o${i}` }])) },
+    ]) {
+      const invalid = structuredClone(f.run)
+      invalid.runtime.messaging.effects = effects
+      expect(validateMessagingState(invalid.runtime.messaging)).toBe(false)
+      expect(() => deserializeRun(JSON.stringify(invalid), f.lab)).toThrow()
+    }
+  })
   it('causal event receipts link notifications only to their actual callback attempt', () => {
     const f = webhookFixture()
     let published = command(f.run, f.lab, 'python events.py').run

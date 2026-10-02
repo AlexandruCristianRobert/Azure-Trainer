@@ -83,7 +83,7 @@ const mergeTypes = values => {
 export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {} } = {}) {
   const program = { entry, mode, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [] }
   const modules = new Map(), definitions = new Map(), analyzing = new Map()
-  let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false
+  let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false, registrationSequence = 0
   const unsupported = (message, loc = location) => { throw messagingError('MESSAGING_UNSUPPORTED', message, loc) }
   const tick = loc => { if (++analysisSteps > 10000) throw messagingError('MESSAGING_LIMIT', 'Source analysis exceeds 10,000 steps.', loc) }
   const text = (node, path) => files[path].slice(node.from, node.to)
@@ -265,7 +265,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         if (object.type === 'functionevent' && ['id', 'subject', 'event_type', 'data_version'].includes(node.name)) return data
         if (object.type === 'functionmessage' && ['message_id', 'delivery_count', 'application_properties'].includes(node.name)) return data
         const name = `${object.type}.${node.name}`
-        if (own(SDK_SIGNATURES, name)) return callable(name)
+        if (own(SDK_SIGNATURES, name)) return { ...callable(name), ...(object.type === 'functionapp' ? { registrationId: object.registrationId } : {}) }
         unsupported(`Unsupported member '${node.name}' on ${object.type}.`, node.loc); break
       }
       case 'call': {
@@ -277,6 +277,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         if (target.name.startsWith('functionapp.')) unsupported('Functions decorator factories are supported only as registration metadata.', node.loc)
         const [names, required, returns] = SDK_SIGNATURES[target.name]
         const bound = bindArguments(names, required, args, kwargs, node.loc)
+        if (target.name === 'FunctionApp') return { type: 'functionapp', registrationId: ++registrationSequence }
         if (target.name === 'deliver_events') {
           if (bound.handler?.type !== 'function') unsupported('deliver_events requires an actual local handler function.', node.loc)
           analyzeFunction(bound.handler.id, [typed('event')], {}, node.loc)
@@ -399,13 +400,16 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
   }
   function registerHandlers() {
     const names = new Set()
+    let registrationId = null
     for (const [id, definition] of definitions) {
       if (!definition.decorators?.length) continue
-      const env = modules.get(definition.path), binding = { functionName: definition.name, functionId: id, path: definition.path }
+      const env = definition.registrationEnv, binding = { functionName: definition.name, functionId: id, path: definition.path }
       let trigger = false, named = false
       for (const decorator of definition.decorators) {
         const target = infer(decorator.callee, env, definition.path)
         if (target.type !== 'callable' || !['functionapp.function_name', 'functionapp.service_bus_queue_trigger', 'functionapp.event_grid_trigger'].includes(target.name)) unsupported('Only supported Functions v2 decorators are allowed.', decorator.loc)
+        if (registrationId !== null && registrationId !== target.registrationId) unsupported('All handlers must register on one FunctionApp object; distinct apps and blueprints are unsupported.', decorator.loc)
+        registrationId = target.registrationId
         const [parameters, required] = SDK_SIGNATURES[target.name]
         const values = Object.fromEntries(Object.entries(decorator.kwargs).map(([key, value]) => {
           const result = infer(value, env, definition.path)
@@ -456,6 +460,12 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       }
     }
     for (const node of children(root)) {
+      if (node.name === 'DecoratedStatement') {
+        const definition = children(node).find(n => n.name === 'FunctionDefinition')
+        const name = text(children(definition).find(n => n.name === 'VariableName'), path)
+        // Decorators resolve at declaration, before later variable reassignment.
+        definitions.get(`${path}:${name}`).registrationEnv = new Map(env)
+      }
       if (['FunctionDefinition', 'DecoratedStatement'].includes(node.name)) continue
       if (node.name === 'ImportStatement') {
         for (const item of imports(node, path)) { env.set(item.alias, importedType(item)); program.imports[path].push(item) }

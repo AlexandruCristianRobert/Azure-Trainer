@@ -11,6 +11,7 @@ import { parseMessagingProject } from '../src/lib/messaging/python.js'
 import { FUNCTIONS_SOLUTION_FILES } from '../src/data/templates/messaging-python/functions.js'
 import { MESSAGING_RUNTIME_FILES } from '../src/data/templates/messaging-python/runtime.js'
 import { runLine } from '../src/lib/az/shell.js'
+import { executeMessagingProgram } from '../src/lib/messaging/vm.js'
 
 const root = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-messaging/providers`
 const appId = `${root}/Microsoft.Web/sites/func-orders`
@@ -36,6 +37,35 @@ const messages = result => Object.values(result.run.runtime.messaging.entities).
 const host = result => result.run.runtime.messaging.hosts[appId.toLowerCase()]
 
 describe('bounded Python Functions host', () => {
+  it.each(['other = func.FunctionApp()', 'app = func.FunctionApp()\nother = app'])('rejects distinct registration objects before effects: %s', declaration => {
+    const f = functionsFixture({ events: true })
+    f.run.project.savedFiles['function_app.py'] = source(success) + '\n' + declaration + eventHandler.replaceAll('@app.', '@other.')
+    const result = runMessagingFunctions(f.run, f.lab)
+    expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'MESSAGING_UNSUPPORTED', path: 'function_app.py', line: expect.any(Number), column: expect.any(Number) })])
+    expect(result.run.runtime.messaging).toBe(f.run.runtime.messaging)
+    expect(result.run.runtime.messaging.effects).toEqual({})
+  })
+  it('preserves same-object registration aliases across handlers', () => {
+    const f = functionsFixture({ events: true })
+    f.run.project.savedFiles['function_app.py'] = source(success) + '\nother = app\n' + eventHandler.replaceAll('@app.', '@other.')
+    const result = runMessagingFunctions(f.run, f.lab)
+    expect(result.diagnostics).toEqual([])
+    expect(result.run.runtime.messaging.effects.workByOrder).toEqual({ o7: 1 })
+    expect(result.run.runtime.messaging.effects.notifications).toEqual({ e7: { eventId: 'e7', orderId: 'o7' } })
+  })
+  it('rolls back callback effects when delivery finalization exceeds the trace budget', () => {
+    const f = functionsFixture({ events: true })
+    const parsed = parseMessagingProject({ 'function_app.py': header + eventHandler }, { entry: 'function_app.py', mode: 'functions' })
+    expect(parsed.diagnostics).toEqual([])
+    parsed.program.host = { appId: appId.toLowerCase(), bindings: [] }
+    // Advancing the two brokers uses two traces; notification consumes the third.
+    const result = executeMessagingProgram({ program: parsed.program, state: f.run.runtime.messaging, sandbox: f.run.sandbox, limits: { traces: 3 } })
+    expect(result.diagnostics[0].code).toBe('MESSAGING_LIMIT')
+    expect(result.state.effects).toEqual({})
+    expect(result.trace.map(row => row.kind)).toEqual(['advance', 'advance'])
+    expect(result.state.eventGrid.deliveries[0]).toMatchObject({ status: 'pending', attempts: 0 })
+    expect(validateMessagingState(JSON.parse(JSON.stringify(result.state)))).toBe(true)
+  })
   it('auto-completes only a successful Service Bus handler', () => {
     const f = functionsFixture({ handler: 'raise ValueError("invalid order")' })
     const result = runMessagingFunctions(f.run, f.lab)

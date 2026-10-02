@@ -254,15 +254,22 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         const endpoint = parseEventGridFunctionEndpoint(record.endpoint)
         const handler = program.handlers.find(handler => handler.kind === 'eventgrid' && handler.functionName.toLowerCase() === endpoint?.functionName.toLowerCase())
         if (!handler) fail('Delivery requires the actual registered AzureFunction target.', loc, 'MESSAGING_CONFIG')
-        const previousDelivery = activeDelivery
+        const before = current, traceCount = trace.length, diagnosticCount = diagnostics.length, previousDelivery = activeDelivery
         activeDelivery = record
-        let successful = false
         try {
-          invoke(handler.functionId, [handle('functionevent', { event: clone(record.event) })], {}, program.functions[handler.functionId].loc)
-          successful = true
-        } catch (error) { handlerFailure(error, handler, { deliveryId: record.id, eventRecordId: record.eventRecordId, eventId: record.event.id, attempt: record.attempts + 1 }) }
+          let successful = false
+          try {
+            invoke(handler.functionId, [handle('functionevent', { event: clone(record.event) })], {}, program.functions[handler.functionId].loc)
+            successful = true
+          } catch (error) { handlerFailure(error, handler, { deliveryId: record.id, eventRecordId: record.eventRecordId, eventId: record.event.id, attempt: record.attempts + 1 }) }
+          eventGrid({ kind: 'deliver', deliveryId: record.id, status: successful ? 200 : 500 }, loc)
+        } catch (error) {
+          // Retain a callback only with its delivery outcome. Keep earlier
+          // completed siblings, but never journal an unacknowledged callback trace.
+          current = before; trace.length = traceCount; diagnostics.length = diagnosticCount
+          throw error
+        }
         finally { activeDelivery = previousDelivery }
-        eventGrid({ kind: 'deliver', deliveryId: record.id, status: successful ? 200 : 500 }, loc)
         attempts++
       }
     }

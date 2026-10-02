@@ -10,6 +10,7 @@ export function messagingResourceConfiguration(value, dataDictionary = false) {
   return value ?? null
 }
 
+/** Freshness covers each whole saved dependency file, including unused bodies. */
 export function messagingDependencies({ files = [], resources = {} } = {}) {
   return Object.fromEntries([
     ...files.map(path => [`messaging:file:${path}`, ({ project }) => ({ text: project.savedFiles[path] ?? null,

@@ -211,8 +211,11 @@ export function applyServiceBusOperation(originalState, sandbox, operation) {
           if (lease && lease.receiverId !== operation.receiverId) runtime('The session is already leased to another receiver.')
           put(entity.sessions, operation.sessionId, { receiverId: operation.receiverId, lockedUntilMs: deadline(state.timeMs, resolved.lockMs) })
         } else if (operation.sessionId !== undefined && operation.sessionId !== null) config('This entity does not use session receivers.')
-        value = entity.messages.filter(message => message.subQueue === subQueue && message.status === (subQueue === 'active' ? 'active' : 'deadletter')
-          && (!resolved.resource.requiresSession || message.sessionId === operation.sessionId)).sort((a, b) => a.sequence - b.sequence).slice(0, count).map(message => {
+        const selected = entity.messages.filter(message => message.subQueue === subQueue && message.status === (subQueue === 'active' ? 'active' : 'deadletter')
+          && (!resolved.resource.requiresSession || message.sessionId === operation.sessionId)).sort((a, b) => a.sequence - b.sequence).slice(0, count)
+        const locks = Object.values(state.entities).reduce((sum, item) => sum + item.messages.reduce((count, message) => count + message.lockHistory.length, 0), 0)
+        if (locks + selected.length > 500) reject('MESSAGING_LIMIT', 'Retained lock history exceeds 500 receipts; reset this fixture.')
+        value = selected.map(message => {
           message.status = 'locked'
           message.receiverId = operation.receiverId
           message.lockToken = allocate(state, 'lock')

@@ -127,11 +127,28 @@ function validHostRecords(hosts, timeMs) {
   return true
 }
 
+function validEffects(effects) {
+  const safe = key => !['__proto__', 'constructor', 'prototype'].includes(key)
+  const safePayload = value => value === null || typeof value !== 'object'
+    || Object.entries(value).every(([key, child]) => safe(key) && safePayload(child))
+  for (const [family, entries] of Object.entries(effects)) {
+    if (!['workByOrder', 'processed', 'notifications'].includes(family) || !plainObject(entries) || Object.keys(entries).length > 50) return false
+    for (const [key, value] of Object.entries(entries)) {
+      if (!string(key) || !safe(key) || new TextEncoder().encode(key).length > 128 * 1024) return false
+      if (family === 'workByOrder') { if (!counter(value)) return false }
+      else if (!plainObject(value) || new TextEncoder().encode(JSON.stringify(value)).length > 128 * 1024 || !safePayload(value)
+        || (family === 'processed' ? value.id !== key : Object.keys(value).sort().join(',') !== 'eventId,orderId'
+          || value.eventId !== key || !string(value.orderId) || !safe(value.orderId))) return false
+    }
+  }
+  return true
+}
+
 export function validateMessagingState(state) {
   if (!finiteJson(state) || !plainObject(state) || state.version !== 1 || !counter(state.nextId) || state.nextId < 1
     || !counter(state.timeMs) || !plainObject(state.entities) || !Array.isArray(state.deliveries)
     || state.deliveries.length > 500 || !plainObject(state.effects) || !plainObject(state.hosts)) return false
-  if (!validHostRecords(state.hosts, state.timeMs)) return false
+  if (!validHostRecords(state.hosts, state.timeMs) || !validEffects(state.effects)) return false
   let maximumId = 0
   const allocated = new Set()
   const id = (value, unique = false, eventGrid = false) => {
@@ -167,7 +184,7 @@ export function validateMessagingState(state) {
     maximumId = Math.max(maximumId, sequence)
     previousExecution = sequence
   }
-  let messageCount = 0
+  let messageCount = 0, lockCount = 0
   for (const [key, entity] of Object.entries(state.entities)) {
     if (!plainObject(entity) || entity.id !== key || key !== key.toLowerCase()
       || !/^\/subscriptions\/[^/]+\/resourcegroups\/[^/]+\/providers\/microsoft\.servicebus\/namespaces\/[^/]+\/(?:queues|topics)\/.+/.test(key)
@@ -195,6 +212,8 @@ export function validateMessagingState(state) {
         || !nullableString(message.deadLetterReason) || (message.deadLetterDescription !== null && typeof message.deadLetterDescription !== 'string')
         || !Array.isArray(message.lockHistory)) return false
       sequences.add(message.sequence)
+      lockCount += message.lockHistory.length
+      if (lockCount > 500) return false
       if (!message.lockHistory.every(lock => plainObject(lock) && id(lock.lockToken, true) && string(lock.receiverId)
         && counter(lock.lockedAtMs) && lock.lockedAtMs <= state.timeMs && counter(lock.lockedUntilMs) && lock.lockedUntilMs > lock.lockedAtMs
         && [null, 'complete', 'abandon', 'deadletter', 'expired'].includes(lock.settlement)
@@ -214,6 +233,7 @@ export function validateMessagingState(state) {
   }
   if (messageCount > 50) return false
   for (const trace of state.deliveries) {
+    if (!plainObject(trace)) return false
     if (['order-work', 'order-record'].includes(trace.kind)) {
       if (!validOrderEffectTrace(trace, state) || !id(trace.id, true)) return false
       continue

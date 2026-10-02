@@ -277,8 +277,11 @@ describe('bounded Event Grid publication and delivery', () => {
     const invalidRegistration = executeMessagingEntry(run, { messagingInput: { eventGridHandlers: { 'https://unregistered.trainer.invalid/events': 'handler.py' } } }, 'events.py')
     expect(invalidRegistration.run).toBe(run)
     expect(invalidRegistration.diagnostics[0].code).toBe('MESSAGING_CONFIG')
-    const filteredSandbox = fixture({ includedEventTypes: ['Other'] }).sandbox
+    const filteredSandbox = { ...sandbox, eventGridTopics: fixture({ includedEventTypes: ['Other'] }).sandbox.eventGridTopics }
     const filteredRun = executeMessagingEntry({ ...run, sandbox: filteredSandbox }, lab, 'events.py')
+    expect(filteredRun.diagnostics).toEqual([])
+    expect(filteredRun.run.runtime.messaging.eventGrid.events.map(row => row.event.id)).toEqual(['e1'])
+    expect(filteredRun.run.runtime.messaging.eventGrid.deliveries).toEqual([])
     const filteredHandler = executeMessagingEntry(filteredRun.run, lab, 'handler.py')
     expect(filteredHandler.diagnostics).toEqual([])
     expect(filteredHandler.run.runtime.messaging.effects).toEqual({})

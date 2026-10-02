@@ -2,7 +2,7 @@
 
 Date: 2026-10-02
 
-Status: implemented and locally verified on branch `codex/messaging-orders` on 2026-10-02; not published. All twelve Labs are registered, the focused Messaging checks pass (208 tests), the retained focused Data checks pass (21 tests), and the production Pages-path build succeeds. The build reports its large-chunk warning. Controller-owned whole-branch review and the user's integration/publication decision remain pending; CI and deployment have not run. See [simulator contract](../../messaging-simulator.md) and [verification log](../plans/2026-10-02-messaging-verification-log.md). The original written specification was approved by the user on 2026-10-02, who subsequently authorized implementation through the selected subagent workflow. This status does not authorize merge, push or publication.
+Status: implemented and locally verified on branch `codex/messaging-orders` on 2026-10-02; not published. All twelve Labs are registered, the focused Messaging checks pass (217 tests after the combined final-review fixes), the retained focused Data checks pass (21 tests), and the production Pages-path build succeeds. The build reports its large-chunk warning. Controller-owned scoped rereview and the user's integration/publication decision remain pending; CI and deployment have not run. See [simulator contract](../../messaging-simulator.md) and [verification log](../plans/2026-10-02-messaging-verification-log.md). The original written specification was approved by the user on 2026-10-02, who subsequently authorized implementation through the selected subagent workflow. This status does not authorize merge, push or publication.
 
 ## Purpose and success criteria
 
