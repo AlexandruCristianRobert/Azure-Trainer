@@ -255,7 +255,9 @@ function evalExprValue(expr, locals, ctx) {
     }
     case 'redis-helper': {
       const { values, flow } = evalFlowArgs(expr.args, locals, ctx)
-      return evalRedisHelper(expr.name, values, ctx, fail, flow)
+      const result = evalRedisHelper(expr.name, values, ctx, fail, flow)
+      if (ctx.dataTarget?.kind === 'composite' && expr.name === 'embed') recordTrainingCall(ctx, 'embed', trainingSnapshot(values), trainingSnapshot(result))
+      return result
     }
     case 'sequence-method': {
       const target = evalExpr(expr.target, locals, ctx); const targetFlow = ctx.redisFlow?.current
@@ -304,7 +306,7 @@ function evalBuiltin(expr, locals, ctx) {
   const value = evalExpr(expr.args[0], locals, ctx)
   const valueFlow = ctx.redisFlow?.current
   if (ctx.redisFlow) ctx.redisFlow.current = expr.name === 'next' ? valueFlow?.children?.[0] ?? null
-    : expr.name === 'list' && Array.isArray(value) ? { children: { ...valueFlow?.children } } : null
+    : expr.name === 'list' && Array.isArray(value) ? { ...(valueFlow?.origin?.kind === 'cosmos' ? { origin: valueFlow.origin } : {}), children: { ...valueFlow?.children } } : null
   switch (expr.name) {
     case 'training_no_match': {
       if (ctx.appSpec.data.composite?.helperProfile !== 'capstone' || !Array.isArray(value) || value.length !== 0)
@@ -513,7 +515,13 @@ function evalPgCall(expr, values, locals, ctx) {
       // Request-local identities distinguish actually used pools, including
       // pools with identical configuration; unused globals contribute nothing.
       if (conn.pool && !ctx.pgPoolIds.has(conn.pool)) ctx.pgPoolIds.set(conn.pool, ctx.pgPoolIds.size + 1)
-      const record = { call, sql: values.query, ...(ctx.dataTarget.kind === 'composite' ? { params: trainingSnapshot(adapted) } : {}), plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
+      const bound = ctx.dataTarget.kind === 'composite' && result.kind === 'select' ? bindParams(statements[index], adapted) : null
+      const relations = bound ? [bound, ...(bound.joins ?? [])] : []
+      const scopeFilters = bound?.where?.filter(condition => condition.expression?.kind === 'column'
+        && relations.some(relation => relation.table === 'documents'
+          && (condition.table === (relation.alias ?? relation.table) || !condition.table && relations.length === 1)))
+        .map(condition => ({ column: condition.column, operator: condition.operator, value: evaluatePgExpression(condition.value, { row: {}, relations: {} }) })) ?? []
+      const record = { call, sql: values.query, ...(ctx.dataTarget.kind === 'composite' ? { params: trainingSnapshot(adapted), scopeFilters: trainingSnapshot(scopeFilters) } : {}), plan: result.plan ?? null, latencyMs: (result.latencyMs ?? 0) + conn.pendingLatency, recall: result.plan?.recall ?? null, rows, connection: conn.mode,
         poolLifetime: conn.pool?.lifetime ?? null, poolMaxSize: conn.pool?.max_size ?? null,
         poolIdentity: conn.pool ? ctx.pgPoolIds.get(conn.pool) : null,
         charge: 0, source: ctx.currentSource, ...(result.error ? { error: result.error } : {}) }
@@ -555,8 +563,11 @@ function execReadItem(container, ref, argValues, ctx, receiver) {
     stale = true
   }
   const charge = pointReadCharge(item, ctx.consistency)
-  ctx.calls.push({ call: 'cosmos.container.read_item', receiver, container: receiver, charge, consistency: ctx.consistency, stale, source: ctx.currentSource })
-  return stripInternal(item)
+  const value = stripInternal(item)
+  ctx.calls.push({ call: 'cosmos.container.read_item', receiver, container: receiver, charge, consistency: ctx.consistency, stale, source: ctx.currentSource,
+    ...(ctx.dataTarget?.kind === 'composite' ? { itemId: id, partitionKey: argValues.partition_key, rows: trainingSnapshot(value) } : {}) })
+  if (ctx.dataTarget?.kind === 'composite' && ctx.redisFlow) ctx.redisFlow.current = pgRowFlow(value, { kind: 'cosmos', callIndex: ctx.calls.length - 1 })
+  return value
 }
 
 function execQueryItems(container, argValues, ctx, receiver) {
@@ -570,7 +581,20 @@ function execQueryItems(container, argValues, ctx, receiver) {
   const result = runCosmosQuery(container, query, parameters, { partitionKey })
   if (result.error) return fail(result.error.code, result.error.message)
   const charge = queryCharge(result.stats, ctx.consistency, container.logicalScale)
-  ctx.calls.push({ call: 'cosmos.container.query_items', receiver, container: receiver, charge, consistency: ctx.consistency, stale: false, stats: result.stats, source: ctx.currentSource })
+  const ast = parseCosmosQuery(query).ast
+  const parameter = name => parameters.find(entry => entry.name === name)?.value
+  const queryFacts = ctx.dataTarget?.kind === 'composite' ? {
+    where: ast.where.map(condition => ({ ...condition,
+      ...(condition.value ? { resolvedValue: condition.value.kind === 'param' ? parameter(condition.value.name) : condition.value.value } : {}),
+      ...(condition.type === 'vectorCompare' ? { vector: parameter(condition.param) } : {}) })),
+    orderBy: ast.orderBy?.type === 'vector' ? { ...ast.orderBy, vector: parameter(ast.orderBy.param) } : ast.orderBy,
+  } : null
+  ctx.calls.push({ call: 'cosmos.container.query_items', receiver, container: receiver, charge, consistency: ctx.consistency, stale: false, stats: result.stats, source: ctx.currentSource,
+    ...(queryFacts ? { queryFacts: trainingSnapshot(queryFacts), partitionKey: partitionKey ?? null, rows: trainingSnapshot(result.rows) } : {}) })
+  if (ctx.dataTarget?.kind === 'composite' && ctx.redisFlow) {
+    const origin = { kind: 'cosmos', callIndex: ctx.calls.length - 1 }
+    ctx.redisFlow.current = { origin, children: result.rows.map(row => pgRowFlow(row, origin)) }
+  }
   return result.rows
 }
 

@@ -6,7 +6,7 @@ Lab `data-knowledge-assistant-capstone` is implemented on `codex/data-capstone`,
 | --- | --- |
 | Tasks 1–6 implementation | Existing commits and task reports; controller review ledger remains authoritative |
 | Task 7 implementation | Own Solutions, controls, scratch seed and exact cleanup integration complete; exact-diff self-review complete |
-| Task 7 independent spec/quality review | Pending controller dispatch |
+| Task 7 independent spec/quality review | First reviews completed; S1/S2/S3/Q7-1 addressed in fix round 1, awaiting independent re-review; minor Q7-2 deferred to final triage |
 | Whole-branch review/final controller gate | Pending; no approval claimed |
 | Local merge | Not performed |
 | Remote push/publication | Not performed |
@@ -47,3 +47,11 @@ Controller-authorized narrow integration decisions: add the missing protected fo
 Self-review fixes: compact actual row/function dependencies to consistency hashes; durable lease dependency uses id/continuation rather than incidental no-op item metadata; API pool/config must agree with saved source; unknown zero embeddings skip semantic search/storage and still produce real PG no-match/history; duplicate precedes restart; PostgreSQL corpus grading normalizes stored timestamps; protected inventory includes AKS-generated infrastructure/default namespaces. Repair/final evidence remains current and fresh; historical mode is trusted Lab definition metadata and does not relax original record hashes/source journals/incident receipt validation.
 
 This delivery has no cloud/network validation, browser suite, real timers, installation, broad/full suite, AKS/Container Apps/legacy capstone or Data replay suite. Cosmos continuation/lease and concurrency estimates remain teaching approximations. Policy JSON files are supplied in the project; the supported simulated Cosmos CLI uses their complete inline JSON in the runnable Solutions. Whole-branch independent review and the user's integration direction remain outstanding.
+
+## Task 7 fix round 1
+
+Four blocking review findings were reproduced and fixed without a build or accepted walkthrough replay. The later history Solution preserves earlier RAG zones while retaining their saved/deployed checks. History reads require consumed actual Cosmos return identity and the full requested persisted item or vector-query result, with executed equality scope, requested-question embedding and similarity threshold/order semantics. PG empty-source proof now checks actual bound equality predicates rather than positional parameter values. PG readiness requires relevant documents scope/metadata and chunks embedding access paths; arbitrary names and equivalent column expressions are accepted.
+
+The same ignored `task-7-fix-controls.mjs` exercises detached retained snapshots with deliberate parsed captured-artifact substitution: no extra builds, actual interpreted Python/store calls, original snapshot files untouched. All **12 focused controls pass**: valid alternate RAG, actual history and relevant alternative indexes; rejection of canned/incidental history, missing scope or similarity threshold (even with identical rows), unrelated indexes, inequality no-match and incidental literal. The named SDK/core command ran once for shared runtime edits: **21/21 pass**. No permanent case was added; minor Q7-2 is not part of this fix wave.
+
+Added validation before final static check: **7.1153912s**, including setup/diagnostic failures (0.1421658 + 0.3091643 + 0.4237052 + 0.6289886 + 0.5652051), focused GREEN/final controls (0.454322 + 0.5231339), and named tests (4.0687063). Supplied pre-fix aggregate423.9989349s gives **431.1143261s** before final static check. Full commands, output summary, final static timing and commit are appended to the ignored Task 7 report. Independent re-review and whole-branch gate remain pending.

@@ -34,6 +34,7 @@ const memoryBounded = context => {
   return !!database && redisMemory(database, context.runtime.simTimeMs).usedBytes <= 65536 && database.stats.rejectedWrites === 0
 }
 const appRag = ['retrieve_passages', 'build_context', 'rag_answer']
+const indexedColumnName = column => column.name?.split('.').at(-1) ?? (column.expression?.kind === 'column' ? column.expression.name : null)
 const appHistory = [...appRag, 'cached_answer', 'semantic_lookup', 'remember_semantic', 'answer', 'save_message', 'get_session', 'remember_answer', 'find_similar_questions', 'submit_feedback']
 const workerNames = ['read_lease', 'save_lease', 'apply_change', 'process_changes', 'invalidate_product']
 const pgFields = ['pg:resource', 'pg:schema', 'pg:rows', 'pg:indexes']
@@ -115,8 +116,14 @@ export const dataCapstoneLab = {
           .some(row => row.id === expected.id && Object.entries(expected).every(([key, value]) => key === 'updated_at'
             ? Date.parse(row[key]) === Date.parse(value) : canonicalize(row[key]) === canonicalize(value)))))
         && database.tables.find(table => table.name === 'chunks')?.columns.some(column => column.name === 'embedding' && column.type === 'vector' && column.dimensions === 8)
-        && ['btree', 'gin', 'hnsw'].every(method => database.indexes.some(index => index.method === method))
-        && database.indexes.some(index => index.method === 'hnsw' && index.columns.some(column => column.opclass === 'vector_cosine_ops'))
+        && database.indexes.some(index => index.table === 'documents' && index.method === 'btree' && !index.where.length
+          && ['product', 'version'].every(name => index.columns.slice(0, 2).some(column => indexedColumnName(column) === name)))
+        && database.indexes.some(index => index.table === 'documents' && index.method === 'gin' && !index.where.length
+          && index.columns.some(column => indexedColumnName(column) === 'metadata'
+            && [undefined, 'jsonb_ops', 'jsonb_path_ops'].includes(column.opclass)))
+        && database.indexes.some(index => index.table === 'chunks' && index.method === 'hnsw' && !index.where.length
+          && index.columns.some(column => indexedColumnName(column) === 'embedding'
+            && column.opclass === 'vector_cosine_ops'))
     }, pgFields, [command('az group create -n rg-data-capstone -l eastus'), ...CAPSTONE_PG_COMMANDS.map(command),
       command(pgSqlCommand('-c "CREATE EXTENSION IF NOT EXISTS vector"')), command(pgSqlCommand('-f schema.sql')),
       file('indexes.sql', CAPSTONE_INDEX_SQL), command(pgSqlCommand('-f indexes.sql')), scenario('postgres-ready')],
@@ -152,10 +159,11 @@ export const dataCapstoneLab = {
     task('history-and-cache', 'application', 'Write Cosmos history on misses and both cache hits, and return only similar questions from the requested scope.', context => {
       const m = measured(context, 'history-and-cache')
       return correct(m) && bounded(m) && memoryBounded(context) && m.responseHits >= 1 && m.semanticHits >= 1 && m.historyWrites === 6
+        && m.requests.at(-2).historyReadValid && m.requests.at(-1).historyReadValid
         && m.requests.at(-2).body?.sessionId === 'capstone-session' && m.requests.at(-1).body?.length > 0
         && m.requests.at(-1).body.every(item => item.product === 'contoso-backup' && item.version === 'v1' && item.language === 'en')
         && capstoneFunctionsCurrent(context, 'api', appHistory)
-    }, appFields, [...release('api', 'capstone-history', [editFunctions('app.py', appHistory)]), scenario('rag-deployed'), scenario('history-and-cache'), action('data-advance-stage')],
+    }, appFields, [...release('api', 'capstone-history', [editFunctions('app.py', appHistory.filter(name => !appRag.includes(name)))]), scenario('rag-deployed'), scenario('history-and-cache'), action('data-advance-stage')],
     'A cache hit still writes the current conversation message; exact keys and vector filters use every answer scope field.'),
     task('worker-deployed', 'worker', 'Deploy a separate pull worker that persists its actual continuation after successful invalidation.', context => {
       const m = measured(context, 'worker-deployed')

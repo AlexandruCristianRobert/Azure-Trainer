@@ -109,7 +109,8 @@ function frame(run, lab, artifact, route, args) {
   const emptySourceValid = complete && origin?.noMatch === true && sourceOrigin?.kind === 'postgres'
     && sourceOrigin.callIndex === origin.callIndex && Array.isArray(sourceCall?.rows) && sourceCall.rows.length === 0
     && Array.isArray(result.value?.sources) && result.value.sources.length === 0
-    && ['product', 'version', 'language'].every((key, index) => sourceCall.params?.[index + 1] === scope[key])
+    && ['product', 'version', 'language'].every(key => sourceCall.scopeFilters?.some(filter => filter.column === key
+      && filter.operator === '=' && filter.value === scope[key]))
     && result.trainingCalls?.some(call => call.functionName === 'training_no_match' && call.result === result.value.answer
       && Array.isArray(call.args[0]) && call.args[0].length === 0)
   const returnedFrom = reads.gets.length ? 'response-cache' : reads.searches.length ? 'semantic-cache' : sourceValid || emptySourceValid ? 'postgres' : null
@@ -129,8 +130,25 @@ function frame(run, lab, artifact, route, args) {
     return item && item._version > (previous?._version ?? 0) && same({ product: item.product, version: item.version, language: item.language }, scope)
       && item.sessionId === args[4] && item.answer === result.value?.answer && same(item.sources, result.value?.sources)
   }).length : 0
+  const historyOrigin = result.returnDataProvenance?.origin
+  const historyCall = historyOrigin?.kind === 'cosmos' ? result.calls[historyOrigin.callIndex] : null
+  const consumedHistory = complete && historyCall && !historyCall.error && same(result.value, historyCall.rows)
+  const historyReadValid = route === 'GET /sessions' ? !!(consumedHistory && historyCall.call === 'cosmos.container.read_item'
+    && historyCall.container === 'sessions' && historyCall.itemId === args[1] && historyCall.partitionKey === args[0]
+    && result.value?.id === args[1] && result.value?.sessionId === args[0])
+    : route === 'GET /similar' ? !!(consumedHistory && historyCall.call === 'cosmos.container.query_items'
+      && historyCall.container === 'qa_history' && historyCall.stats.vector
+      && ['product', 'version', 'language'].every(key => historyCall.queryFacts?.where.some(filter => filter.type === 'compare'
+        && same(filter.path, [key]) && filter.op === '=' && filter.resolvedValue === scope[key]))
+      && historyCall.queryFacts?.where.some(filter => filter.type === 'vectorCompare' && same(filter.path, ['embedding'])
+        && ['>=', '>'].includes(filter.op) && filter.resolvedValue >= 0.95 && filter.resolvedValue <= 1
+        && result.trainingCalls?.some(call => call.functionName === 'embed' && call.args[0] === args[0] && same(call.result, filter.vector)))
+      && historyCall.queryFacts?.orderBy?.type === 'vector' && same(historyCall.queryFacts.orderBy.path, ['embedding'])
+      && result.trainingCalls?.some(call => call.functionName === 'embed' && call.args[0] === args[0]
+        && same(call.result, historyCall.queryFacts.orderBy.vector))
+      && Array.isArray(result.value) && result.value.every(row => same({ product: row.product, version: row.version, language: row.language }, scope))) : null
   const facts = { status: result.status, body: result.value, artifactId: artifact.id, returnedFrom, sourceIds, scope, pgCalls, cosmosCalls, redisCalls,
-    trainingCalls: result.trainingCalls ?? [], expectedAnswer, historyWrites, emptySourceValid,
+    trainingCalls: result.trainingCalls ?? [], expectedAnswer, historyWrites, emptySourceValid, historyReadValid,
     originRequests: Number(pgCalls.some(call => !call.error && /^\s*SELECT\b/i.test(call.sql))), traceComplete: complete,
     cacheEffects: cacheEffects(redisCalls, beforeKeys, redisDb(next, lab)?.keys ?? {}, run.runtime.simTimeMs, complete) }
   return { result, facts }
@@ -153,6 +171,7 @@ function recordFrame(measurements, observation, route, args, stepIndex) {
     measurements.staleAnswers += Number(!facts.expectedAnswer && facts.returnedFrom?.endsWith('cache') === true)
     measurements.scopeCorrect &&= same(facts.scope, { product: facts.body?.product ?? null, version: facts.body?.version ?? null, language: facts.body?.language ?? null })
   }
+  if (['GET /sessions', 'GET /similar'].includes(route)) measurements.provenanceValid &&= facts.historyReadValid
   const available = Math.max(0, 256 - measurements.calls.length)
   const calls = [...result.calls, ...facts.redisCalls]
   measurements.calls.push(...calls.slice(0, available).map(call => ({ ...call, stepIndex })))
