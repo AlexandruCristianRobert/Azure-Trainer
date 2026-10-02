@@ -86,3 +86,5 @@ Final scoped review approves F1/F2/F3/Q7-2 with no new blocking issue or out-of-
 Final known measured validation **481.257857s (8.02min)**; separate conservative unknown-probe allocation300s; accounted **781.257857s (13.02min)** before final documentation whitespace check. M1 existing bundle advisory remains deferred. No merge/push/publication. [Complete preserved audit, reports and chronological rulings](data-capstone-implementation-audit.md) supersedes earlier pending status entries and references to disposable ignored reports.
 
 Final documentation checks added0.1478285s including one mechanical EOF correction: known measured481.4056855s, separate300s allocation, accounted781.4056855s. Final staged whitespace check passes. No product code changed; only audit/handoff/status documentation is added after the clean final review.
+
+Disposable plan scratch cleanup was blocked by environment policy before execution. Scratch remains intact; no retry/permission request or product impact. Audit preserves all reports plus32 chronological rulings. Branch/worktree remain available for the user's integration choice.

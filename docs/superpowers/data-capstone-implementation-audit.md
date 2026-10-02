@@ -1852,3 +1852,7 @@ Focused unchanged checks: provisioning command constants and validateProof histo
 ## Final documentation record
 
 The controller archived all34 report/ledger artifacts and31 chronological rulings, updated final handoff/status, and ran documentation whitespace checks: initial0.0594831s; staged audit0.0468737s found only an extra EOF blank line; after mechanical correction final staged check passed0.0414717s. No product code changed after the clean scoped review. Total known measured validation481.4056855s; separate unknown-probe allocation300s; accounted781.4056855s. Main remains clean at36d8cbc, integration not performed. Disposable plan scratch may be removed after this record is committed; full audit and Git history preserve reports/rulings, while temporary probes are intentionally not permanent tests.
+
+Cleanup update: deletion of the exact validated disposable plan scratch was rejected by environment policy before execution. Nothing was deleted; scratch and worktree remain intact. No retry or permissions request was made. This adds the32nd chronological controller ruling:
+
+Ruling: retain the disposable plan scratch after the environment policy rejected its exact validated deletion, without retrying another deletion route — cleanup is nonessential and the audit is already committed; do not circumvent the platform block — cost if wrong: ignored temporary probes/review packages remain on disk, with no product/integration impact.
