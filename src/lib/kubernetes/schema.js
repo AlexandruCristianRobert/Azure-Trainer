@@ -212,7 +212,7 @@ export function validateKubernetesObject(input, { namespace, capabilities = {}, 
   const probes = capabilities.kubernetesProbes === true
   const resources = capabilities.kubernetesResources === true
   const rollouts = capabilities.kubernetesRollouts === true
-  const dataCosmos = capabilities.dataCosmos === true
+  const dataCosmos = capabilities.dataCosmos === true || capabilities.dataCapstone === true
   let issue = allowed(input, new Set(['apiVersion', 'kind', 'metadata', 'spec', ...(configuration ? ['data', 'type', 'stringData'] : [])]), root)
   if (issue) return { object: null, diagnostics: [issue] }
   if (!allowedKinds.has(input.kind) || (['ConfigMap', 'Secret'].includes(input.kind) && !configuration)) return { object: null, diagnostics: [diag('KUBE_UNSUPPORTED_KIND', input.kind, root)] }

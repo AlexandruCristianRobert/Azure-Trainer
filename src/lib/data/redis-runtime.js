@@ -2,6 +2,7 @@ import { getRedisCluster } from '../sandbox/redis.js'
 import { executeRedis } from './redis-store.js'
 import { executeRedisSearch, float32Blob } from './redis-search.js'
 import { redisEmbed, redisSourceAnswer } from '../../data/fixtures/data/redis.js'
+import { capstoneEmbed } from '../../data/fixtures/data/capstone.js'
 import { dataTargetFor } from './targets.js'
 
 const MAX_TRACE = 256
@@ -205,7 +206,7 @@ export function evalRedisHelper(name, args, ctx, fail, argFlow = []) {
       ctx.redisFlow.current = { children: rowFlow }
       return rows
     }
-    case 'embed': return snapshot(redisEmbed(args[0], args[1] ?? ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'), fail)
+    case 'embed': return snapshot((ctx.appSpec.data.composite?.helperProfile === 'capstone' ? capstoneEmbed : redisEmbed)(args[0], args[1] ?? ctx.appSpec.data.embeddingsDeployment ?? 'embeddings-v1'), fail)
     case 'source_answer': {
       if (!args.every(value => typeof value === 'string')) return unsupported(fail, 'source_answer string arguments')
       const [question, product, version, language] = args

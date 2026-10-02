@@ -9,6 +9,7 @@ import { parser } from '@lezer/python'
 import { lookupCall, SDK_CALLS } from './sdk-catalog.js'
 import { CONSISTENCY_ORDER } from './cosmos-cost.js'
 import { REDIS_HELPER_FILES, REDIS_HELPER_ARITIES } from '../../data/templates/data-python/redis-runtime.js'
+import { CAPSTONE_HELPER_FILES, CAPSTONE_HELPER_ARITIES } from '../../data/templates/data-python/capstone-runtime.js'
 import { dataTargetFor } from './targets.js'
 
 // A composite profile uses the protected codecs, keys and vectors only. Its
@@ -17,6 +18,7 @@ const COMPOSITE_HELPER_ARITIES = Object.freeze({ response_key: [4], semantic_key
 const HELPER_PROFILES = Object.freeze({
   redis: { files: REDIS_HELPER_FILES, arities: REDIS_HELPER_ARITIES },
   'redis-codecs': { files: REDIS_HELPER_FILES, arities: COMPOSITE_HELPER_ARITIES },
+  capstone: { files: CAPSTONE_HELPER_FILES, arities: CAPSTONE_HELPER_ARITIES },
 })
 
 const ignored = new Set(['(', ')', '[', ']', '{', '}', ',', ':', 'AssignOp', 'for', 'in', 'if', 'elif', 'else', 'return', 'raise', '\n', 'Comment'])
@@ -47,7 +49,7 @@ export function parseDataApp(files, manifest = {}) {
   const redis = manifestBackend === 'redis' || composite
   const helperProfile = HELPER_PROFILES[composite ? manifest.helperProfile : 'redis']
   const helperArities = helperProfile?.arities ?? {}
-  if (composite && (manifest.dataApp !== true || manifest.id !== 'data-python-capstone-v1' || manifest.helperProfile !== 'redis-codecs'
+  if (composite && (manifest.dataApp !== true || manifest.id !== 'data-python-capstone-v1' || !['redis-codecs', 'capstone'].includes(manifest.helperProfile)
     || manifest.dataTarget?.kind !== 'composite' || ['postgres', 'cosmos', 'redis'].some(backend => !dataTargetFor(manifest.dataTarget, backend))
     || manifest.runtimeFunctions?.includes('source_answer'))) {
     diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: composite execution requires its captured manifest, literal target and protected helper profile.', path: 'clients.py', line: 1, column: 1 })
@@ -66,6 +68,21 @@ export function parseDataApp(files, manifest = {}) {
   const filePaths = [...new Set(['app.py', ...(typeof files['worker.py'] === 'string' ? ['worker.py'] : []), 'clients.py', ...runtimeFiles])]
   const clientsTree = parser.parse(files['clients.py'])
   const trees = Object.fromEntries(filePaths.map((path) => [path, parser.parse(files[path])]))
+  // Fixed cache_lookup still lowers as ordinary Python and real Redis calls.
+  if (composite && manifest.helperProfile === 'capstone') {
+    for (const [path, definitions] of Object.entries(manifest.fixedFunctions ?? {})) for (const [name, expected] of Object.entries(definitions)) {
+      const node = funcNode(trees[path], files[path], name)
+      const rebound = filePaths.some(other => findNode(trees[other].topNode, candidate => {
+        if (other === path && candidate.name === 'FunctionDefinition' && candidate.from === node?.from && candidate.to === node?.to) return false
+        if (candidate.name === 'ImportStatement') return redisImportEntries(candidate, files[other], true).some(([local]) => local === name)
+        return rebindsRedisName(candidate, new Set([name]), files[other])
+      }))
+      if (!node || raw(node, files[path]).trim() !== expected.trim()
+        || rebound) {
+        diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: `Fixed scaffold function '${name}' must match its canonical definition.`, path, line: 1, column: 1 })
+      }
+    }
+  }
   for (const [path, tree] of filePaths.map((p) => [p, trees[p]])) {
     const bad = findNode(tree.topNode, (n) => n.name === '⚠')
     if (bad) diagnostics.push({ code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: Python syntax error', ...at(files[path], bad, path) })
@@ -124,7 +141,7 @@ export function parseDataApp(files, manifest = {}) {
   if (redis) {
     for (const path of filePaths.filter(path => !runtimeFiles.includes(path))) {
       const ctx = fileCtx[path]
-      const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(ctx.redisHelpers)])
+      const protectedNames = new Set([...Object.keys(REDIS_HELPER_ARITIES), ...Object.keys(helperArities), ...Object.keys(ctx.redisHelpers)])
       const collision = findNode(ctx.tree.topNode, node => rebindsRedisName(node, protectedNames, ctx.text))
       if (collision) diagnostics.push({ code: 'SCAFFOLD_MODIFIED', message: 'Protected Redis helpers cannot be shadowed.', ...at(ctx.text, collision, path) })
       const trustedConstructors = ['redis', 'redis.Redis', ...(composite ? ['azure.cosmos.CosmosClient', ...PG_IMPORT_IDENTITIES] : [])]
@@ -195,7 +212,7 @@ export function parseDataApp(files, manifest = {}) {
     const name = pending.shift()
     const found = locate(name)
     if (!found) continue
-    if (redis && protectedFunctions.has(name) && Object.hasOwn(REDIS_HELPER_ARITIES, name)) continue
+    if (redis && protectedFunctions.has(name) && Object.hasOwn(helperArities, name)) continue
     functions[name] = lowerFunction(found.node, { ...fileCtx[found.path], files, path: found.path, manifest, diagnostics, enqueue, locate, globalConstants, globalTypes, functionName: name, pg, redis, composite, helperArities })
   }
 
@@ -237,7 +254,7 @@ function redisImports(tree, text, composite = false) {
   for (const [name, binding] of Object.entries(importBindings)) {
     if (binding === 'redis') redisConstructors[`${name}.Redis`] = 'redis.Redis'
     if (binding === 'redis.Redis') redisConstructors[name] = 'redis.Redis'
-    if (binding.startsWith('training_runtime.') && Object.hasOwn(REDIS_HELPER_ARITIES, binding.slice(17))) redisHelpers[name] = binding.slice(17)
+    if (binding.startsWith('training_runtime.') && (Object.hasOwn(REDIS_HELPER_ARITIES, binding.slice(17)) || composite && Object.hasOwn(CAPSTONE_HELPER_ARITIES, binding.slice(17)))) redisHelpers[name] = binding.slice(17)
   }
   return { importBindings, redisConstructors, redisHelpers }
 }
@@ -541,6 +558,9 @@ function lowerCall(node, ctx) {
       const helper = ctx.redisHelpers[name]
       if (!ctx.helperArities[helper]) return unsupported(ctx, node, `'${name}(...)' is outside the protected helper profile`)
       if (args.keywords.length || !ctx.helperArities[helper].includes(args.positional.length)) return unsupported(ctx, node, `'${name}(...)' arguments`)
+      if (ctx.composite && ctx.manifest.helperProfile === 'capstone' && helper === 'training_answer') {
+        return { kind: 'builtin', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }
+      }
       return { kind: 'redis-helper', name: helper, args: args.positional.map(arg => lowerExpr(arg, ctx)) }
     }
     if (ctx.composite && name === 'source_answer') return unsupported(ctx, node, 'source_answer is forbidden for composite targets')

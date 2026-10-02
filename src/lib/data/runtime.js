@@ -18,6 +18,7 @@ import { findContainer, upsertItem, readItem } from './cosmos-store.js'
 import { embed } from '../../data/fixtures/data/knowledge.js'
 import { CORPUS, corpusQuestions } from '../../data/fixtures/data/corpus.js'
 import { SUPPORT_V3_CORPUS, SUPPORT_V3_ALL_QUESTIONS } from '../../data/fixtures/data/corpus-v3.js'
+import { capstoneTrainingAnswer } from '../../data/fixtures/data/capstone.js'
 import { executePg } from './pg-engine.js'
 import { evalRedisCall, evalRedisHelper, newRedisEvidence, redisText, redisSnapshot } from './redis-runtime.js'
 import { dataTargetFor, compositeTargetMatches } from './targets.js'
@@ -72,7 +73,7 @@ export function runDataFunction({ appSpec, sandbox, account, database, dataTarge
   const calls = []
   const composite = dataTarget?.kind === 'composite'
   if (composite && (appSpec?.data?.composite?.version !== 1 || appSpec.data.composite.fixture !== 'capstone'
-    || appSpec.data.composite.helperProfile !== 'redis-codecs' || !compositeTargetMatches(appSpec.data.composite.target, dataTarget))) {
+    || !['redis-codecs', 'capstone'].includes(appSpec.data.composite.helperProfile) || !compositeTargetMatches(appSpec.data.composite.target, dataTarget))) {
     return { sandbox, status: 500, value: null, error: { code: 'DATA_UNSUPPORTED', message: 'Not supported by the simulator: composite execution requires its captured manifest and matching target.' }, calls, totalCharge: 0 }
   }
   if (!composite && appSpec?.data?.composite) {
@@ -321,6 +322,12 @@ function evalBuiltin(expr, locals, ctx) {
       if (!['postgres', 'composite'].includes(ctx.dataTarget?.kind)) return fail('DATA_UNSUPPORTED', 'Not supported by the simulator: PostgreSQL training helper requires a PostgreSQL target')
       const context = evalExpr(expr.args[1], locals, ctx)
       const trainingArgs = trainingSnapshot([value, context])
+      if (ctx.appSpec.data.composite?.helperProfile === 'capstone') {
+        const result = capstoneTrainingAnswer(value, context)
+        recordTrainingCall(ctx, 'training_answer', trainingArgs, result)
+        if (ctx.redisFlow) ctx.redisFlow.current = null
+        return result
+      }
       const top = context?.sources?.[0]
       const v3 = ctx.appSpec.data.postgres?.fixture === 'support-v3'
       const passage = (v3 ? SUPPORT_V3_CORPUS : CORPUS).chunks.find(chunk => chunk.id === top)
