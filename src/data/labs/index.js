@@ -58,6 +58,7 @@ import { redisCacheGuidedLab } from './data-journey/redis-cache-guided.lab.js'
 import { redisTroubleshootingLab } from './data-journey/redis-troubleshooting.lab.js'
 import { redisIndependentLab } from './data-journey/redis-independent.lab.js'
 import { dataCapstoneLab } from './data-journey/capstone.lab.js'
+import { SERVICEBUS_FOUNDATION_LABS } from './messaging-journey/index.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -121,6 +122,7 @@ export const LABS = [
   redisTroubleshootingLab,
   redisIndependentLab,
   dataCapstoneLab,
+  ...SERVICEBUS_FOUNDATION_LABS,
 ]
 
 export function labById(id) {

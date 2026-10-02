@@ -174,3 +174,22 @@ Only `npm test -- tests/messaging-engine.test.js`, each complete invocation meas
 | 2026-10-02 | Static whitespace diagnostic | git diff --check; deferred LF/CRLF notices only | 0 | 0.0442256 |
 
 Fix tests **14.6113285 seconds**, static **0.0442256 seconds**. Starting cumulative including reviewer **153.8090868 seconds**; new cumulative **168.4646409 seconds (2.807744 minutes)**. All attempts measured. No broad suites/builds/cloud/browser/replay/agents/merge/push/publication. Full final stdout, exact refined receipt/evidence shape and historical/capacity limitations in task-6-report.md. Existing completed-result persistence unchanged; generic Data/whole-journey checks remain Task11. Minor line-ending cleanup deferred by controller.
+
+## Task7: independent Service Bus foundation curriculum
+
+Every test invocation used exactly `npm test -- tests/messaging-labs-servicebus.test.js`, wrapped by the full-invocation PowerShell Stopwatch:
+```powershell
+$taskWatch = [Diagnostics.Stopwatch]::StartNew(); npm test -- tests/messaging-labs-servicebus.test.js; $taskCode = $LASTEXITCODE; $taskWatch.Stop(); Write-Output "TASK7_DURATION_SECONDS=$($taskWatch.Elapsed.TotalSeconds) EXIT=$taskCode"; exit $taskCode
+```
+
+| Date | Stage | Actual relevant stdout | Exit | Seconds |
+| --- | --- | --- | ---: | ---: |
+| 2026-10-02 | Initial missing-module RED | Failed suite; missing messaging-journey/index.js; no tests collected | 1 | 1.1806133 |
+| 2026-10-02 | Behavioral RED before Task behavior checks | Tests3 failed /1 passed (4); all three Solution replays expected done true, got false | 1 | 3.1932813 |
+| 2026-10-02 | First GREEN plus changed payload negative | Test Files1 passed; Tests5 passed; bodies75ms; Vitest2.26s | 0 | 3.1736309 |
+| 2026-10-02 | Static whitespace diagnostic | git diff --check; LF/CRLF notices only | 0 | 0.0408264 |
+| 2026-10-02 | Final GREEN after fixture property cleanup | Test Files1 passed; Tests5 passed; bodies70ms; Vitest2.26s | 0 | 3.1563466 |
+
+Task7 tests **10.7038721 seconds**, measured static check **0.0408264 seconds**, combined **10.7446985 seconds**. Starting cumulative **168.4646409 seconds**; current cumulative **179.2093394 seconds**. All attempts measured. Initial missing-module RED is not behavioral evidence for individual assertions; the subsequent3 failures prove missing Task checks prevent real worked commands from completing the Labs. Five final cases exercise one compact actual Solution per Lab (with persistence), one wrong sender payload, and catalog append. No full suite, AKS/Container Apps/legacy/cloud/browser/build checks, experiment matrix or agents. Task7 report retains final raw stdout and exact APIs. Staged whitespace inspection recorded below before commit.
+
+Staged `git diff --cached --check` passed, exit0, **0.0313291 seconds**; all newly authored files included. Task7 static total **0.0721555 seconds**; Task7 combined **10.7760276 seconds**. Final cumulative **179.2406685 seconds (2.987344475 minutes)**. No executable diagnostic probes. Routine read-only source/report/skill/diff/status inspections are not test executions. Windows line-ending notices during staging are non-failing and the separate whitespace check emits no errors.
