@@ -13,6 +13,7 @@ import { createEventGridTopic, createEventGridSubscription } from '../src/lib/sa
 import { applyEventGridOperation } from '../src/lib/messaging/eventgrid.js'
 import { validSecurityJournal, validSecurityLabContext, securityResourceMetadata } from '../src/lib/security/evidence.js'
 import { messagingMeasurements } from '../src/lib/messaging/evidence.js'
+import { TRAINER_CONNECTION_STRING } from '../src/lib/observability/export.js'
 
 const runtimePath = '../src/data/templates/security-python/runtime.js'
 const runtime = await import(/* @vite-ignore */ runtimePath).catch(error => {
@@ -60,7 +61,9 @@ function fixture() {
 const config = () => ({ appId, notificationProvider: { id: 'notification-demo', acceptedKeys: [{ id: 'key-v1', value: 'demo-key-v1' }] },
   operations: [{ operationId: 'demo-o1', eventId: 'e-o1', orderId: 'o1' }] })
 const projectFiles = code => ({ ...Object.fromEntries(['clients.py', 'producer.py', 'worker.py', 'events.py', 'handler.py', 'function_app.py', 'README.md'].map(path => [path, ''])),
-  'host.json': '{"version":"2.0"}', 'local.settings.json': '{"IsEncrypted":false,"Values":{"FUNCTIONS_WORKER_RUNTIME":"python","AzureWebJobsStorage":"UseDevelopmentStorage=true"}}',
+  'host.json': '{"version":"2.0","telemetryMode":"OpenTelemetry"}',
+  'local.settings.json': JSON.stringify({ IsEncrypted: false, Values: { FUNCTIONS_WORKER_RUNTIME: 'python', AzureWebJobsStorage: 'UseDevelopmentStorage=true',
+    APPLICATIONINSIGHTS_CONNECTION_STRING: TRAINER_CONNECTION_STRING, PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY: 'false' } }),
   ...(runtime.SECURITY_RUNTIME_FILES ?? {}), 'worker.py': code })
 function run(code = source, options = {}) {
   const files = { ...(runtime.SECURITY_RUNTIME_FILES ?? {}), 'worker.py': code }
