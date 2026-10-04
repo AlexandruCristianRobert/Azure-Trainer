@@ -7,6 +7,7 @@ import { getQueue } from '../sandbox/ops.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 import { messagingExecutionEnvelope, messagingProjectOptions } from './execute.js'
 import { sanitizeSecurityDiagnostics } from '../security/sdk.js'
+import { TRAINER_CONNECTION_STRING } from '../observability/export.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const lower = value => value.toLowerCase()
@@ -37,10 +38,16 @@ export function runMessagingFunctions(run, lab) {
       if (!plainObject(value) || !finiteJson(value)) fail('Host configuration must be a JSON object.', path)
       return value
     }
-    if (readConfig('host.json').version !== '2.0') fail('host.json must use version 2.0.', 'host.json')
+    const hostConfig = readConfig('host.json')
+    if (hostConfig.version !== '2.0') fail('host.json must use version 2.0.', 'host.json')
     const settings = readConfig('local.settings.json')
     if (settings.IsEncrypted !== false || !plainObject(settings.Values) || settings.Values.FUNCTIONS_WORKER_RUNTIME !== 'python'
       || settings.Values.AzureWebJobsStorage !== 'UseDevelopmentStorage=true') fail('Use the Python worker and simulated UseDevelopmentStorage=true storage setting.', 'local.settings.json')
+    if (lab.capabilities?.securityObservability === true) {
+      if (hostConfig.telemetryMode !== 'OpenTelemetry') fail('Select telemetryMode OpenTelemetry for this teaching host.', 'host.json')
+      if (settings.Values.APPLICATIONINSIGHTS_CONNECTION_STRING !== TRAINER_CONNECTION_STRING
+        || !['false', '0'].includes(settings.Values.PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY)) fail('Select ai-orders and disable automatic Python telemetry explicitly for the manual configure_azure_monitor path.', 'local.settings.json')
+    }
     const options = messagingProjectOptions(run, lab)
     const parsed = parseMessagingProject(files, { entry, mode: 'functions', ...options })
     if (parsed.diagnostics.length) return envelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })

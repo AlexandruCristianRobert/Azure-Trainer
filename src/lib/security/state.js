@@ -1,3 +1,5 @@
+import { validTelemetryRow, validSpanLink, TELEMETRY_DESTINATION, TELEMETRY_EPOCH_MS } from '../observability/export.js'
+import { TELEMETRY_COSTS } from '../observability/sdk.js'
 // Public metadata only. Private credentials and provider caches never enter this shape.
 export const securityObject = value => !!value && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value))
@@ -48,7 +50,14 @@ export function validSecurityRecord(row, previous) {
       && selection({ key: item.key, label: item.label, revision: item.revision }))
     && Array.isArray(row.secrets) && row.secrets.length <= 10 && row.secrets.every(secretMetadata)
     && Array.isArray(row.providerKeyIds) && row.providerKeyIds.length <= 4 && row.providerKeyIds.every(item => securityText(item, 128))
-  if (row.kind === 'privacy-violation') return securityExact(row, base + 'category') && ['output', 'argument'].includes(row.category)
+  if (row.kind === 'privacy-violation') return securityExact(row, base + 'category') && ['output', 'argument', 'telemetry', 'payload'].includes(row.category)
+  if (row.kind === 'telemetry-export') return securityExact(row, base + 'rowId,destination,operationId,spanId')
+    && /^telemetry-[1-9]\d*$/.test(row.rowId) && row.destination === TELEMETRY_DESTINATION && validSpanLink({ operationId: row.operationId, spanId: row.spanId })
+  if (row.kind === 'telemetry-operation') return securityExact(row, base + 'operation,operationId,spanId,success,costMs,recordIds,traceIds')
+    && ['secretclient.get_secret', 'load', 'configprovider.refresh', 'send_notification', 'publisher.send', 'sender.send_messages', 'receiver.receive_messages', 'receiver.complete_message', 'receiver.abandon_message', 'receiver.dead_letter_message', 'perform_order_work', 'record_processed'].includes(row.operation)
+    && validSpanLink({ operationId: row.operationId, spanId: row.spanId }) && typeof row.success === 'boolean' && row.costMs === TELEMETRY_COSTS[row.operation]
+    && Array.isArray(row.recordIds) && row.recordIds.length <= 100 && row.recordIds.every(id => previous.some(record => record.id === id))
+    && Array.isArray(row.traceIds) && row.traceIds.length <= 100 && new Set(row.traceIds).size === row.traceIds.length && row.traceIds.every(id => securityText(id, 128))
   if (row.kind === 'notification-provider') {
     if (!securityExact(row, base + 'providerId,keyId,readId,principalId,secretVersion,eventId,orderId,channel,statusCode,invocation,configProviderId,configKey,configLabel,configRevision')
       || ![row.providerId, row.eventId, row.orderId].every(item => securityText(item)) || !['email', 'sms', 'console'].includes(row.channel)
@@ -67,7 +76,15 @@ export function validSecurityRecord(row, previous) {
 export function validateSecurityObservabilityState(value) {
   if (!safeSecurityJson(value) || !securityExact(value, 'version,nextId,timeMs,records,telemetry') || value.version !== 1
     || !count(value.nextId) || value.nextId < 1 || !count(value.timeMs) || !Array.isArray(value.records) || value.records.length > 500
-    || !Array.isArray(value.telemetry) || value.telemetry.length !== 0 || encoded(value) > 128 * 1024) return false
+    || !Array.isArray(value.telemetry) || value.telemetry.length > 500 || encoded(value) > 128 * 1024) return false
+  if (!value.telemetry.every((row, index) => validTelemetryRow(row) && row.id === `telemetry-${index + 1}`)) return false
+  const exports = value.records.filter(row => row.kind === 'telemetry-export')
+  if (exports.length !== value.telemetry.length || !exports.every((record, index) => {
+    const row = value.telemetry[index]
+    return record.rowId === row.id && record.destination === row._ResourceId && record.operationId === row.OperationId
+      && record.spanId === (row.Id ?? row.ParentId)
+      && Date.parse(row.TimeGenerated) === TELEMETRY_EPOCH_MS + record.timeMs
+  })) return false
   let lastTime = 0
   for (let i = 0; i < value.records.length; i++) {
     const row = value.records[i]

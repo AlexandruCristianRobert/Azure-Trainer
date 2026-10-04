@@ -1,7 +1,7 @@
 import { MESSAGING_RUNTIME_FILES } from '../messaging-python/runtime.js'
 
 export const SECURITY_RUNTIME_FILES = Object.freeze({
-  'requirements.txt': MESSAGING_RUNTIME_FILES['requirements.txt'] + 'azure-keyvault-secrets\nazure-appconfiguration-provider\n',
+  'requirements.txt': MESSAGING_RUNTIME_FILES['requirements.txt'] + 'azure-keyvault-secrets\nazure-appconfiguration-provider\nazure-monitor-opentelemetry\nopentelemetry-api\n',
   'training_runtime.py': MESSAGING_RUNTIME_FILES['training_runtime.py'] + `
 def send_notification(event_id, order_id, api_key, channel):
     """Trainer demo provider. Authorizes an actually retrieved opaque secret.

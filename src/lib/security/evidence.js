@@ -1,23 +1,27 @@
 import { emptySecurityObservabilityState, validateSecurityObservabilityState, safeSecurityJson, securityExact } from './state.js'
 import { canonicalize } from '../labEngine/evidence.js'
 import { securityReadKeyIds } from './sdk.js'
+import { validTelemetryRow } from '../observability/export.js'
 
 export function securityMeasurements(before, after) {
   const startSequence = (before ?? emptySecurityObservabilityState()).nextId
   return { version: 1, startSequence, endSequence: after.nextId,
-    records: structuredClone(after.records.slice(startSequence - 1)), telemetry: [] }
+    records: structuredClone(after.records.slice(startSequence - 1)), telemetry: structuredClone(after.telemetry.filter(row => after.records.slice(startSequence - 1).some(record => record.kind === 'telemetry-export' && record.rowId === row.id))) }
 }
 export function validSecurityMeasurement(value) {
   return safeSecurityJson(value) && securityExact(value, 'version,startSequence,endSequence,records,telemetry') && value.version === 1
     && Number.isSafeInteger(value.startSequence) && value.startSequence >= 1 && Number.isSafeInteger(value.endSequence) && value.endSequence >= value.startSequence
     && Array.isArray(value.records) && value.records.length <= 500 && value.records.length === value.endSequence - value.startSequence
     && value.records.every((row, index) => row.id === `so-${value.startSequence + index}`)
-    && Array.isArray(value.telemetry) && value.telemetry.length === 0
+    && Array.isArray(value.telemetry) && value.telemetry.length <= 500 && value.telemetry.every(validTelemetryRow)
+    && value.records.filter(row => row.kind === 'telemetry-export').length === value.telemetry.length
+    && value.records.filter(row => row.kind === 'telemetry-export').every((record, index) => record.rowId === value.telemetry[index].id)
     && new TextEncoder().encode(JSON.stringify(value)).length <= 128 * 1024
 }
 export function validSecuritySnapshot(value, state) {
   return validSecurityMeasurement(value) && validateSecurityObservabilityState(state) && value.endSequence <= state.nextId
     && canonicalize(value.records) === canonicalize(state.records.slice(value.startSequence - 1, value.endSequence - 1))
+    && canonicalize(value.telemetry) === canonicalize(state.telemetry.filter(row => value.records.some(record => record.kind === 'telemetry-export' && record.rowId === row.id)))
 }
 export function validSecurityJournal(messaging) {
   const state = messaging.securityObservability
@@ -27,6 +31,30 @@ export function validSecurityJournal(messaging) {
     const measurement = execution.measurements.securityObservability
     if (measurement === undefined) { if (state !== undefined) return false; continue }
     if (!state || measurement.startSequence !== next || !validSecuritySnapshot(measurement, state)) return false
+    const spans = measurement.telemetry.filter(row => ['AppRequests', 'AppDependencies'].includes(row.table))
+    if (new Set(spans.map(row => row.Id)).size !== spans.length) return false
+    for (const operation of measurement.records.filter(row => row.kind === 'telemetry-operation')) {
+      if (!spans.some(row => row.Id === operation.spanId && row.OperationId === operation.operationId)
+        || !operation.recordIds.every(id => measurement.records.some(row => row.id === id))
+        || !operation.traceIds.every(id => execution.measurements.trace.some(row => row.id === id))) return false
+      const linked = operation.traceIds.map(id => execution.measurements.trace.find(row => row.id === id))
+      const securityRows = operation.recordIds.map(id => measurement.records.find(row => row.id === id))
+      const expectedRecord = { 'secretclient.get_secret': 'secret-read', load: 'config-load', 'configprovider.refresh': 'config-refresh', send_notification: 'notification-provider' }[operation.operation]
+      if (expectedRecord && operation.success && !securityRows.some(row => row.kind === expectedRecord)) return false
+      if (operation.operation === 'send_notification' && securityRows.some(row => row.kind === 'notification-provider' && (row.statusCode === 202) !== operation.success)) return false
+      const expectedTrace = { perform_order_work: 'order-work', record_processed: 'order-record', 'publisher.send': 'publish',
+        'sender.send_messages': 'send', 'receiver.receive_messages': 'receive', 'receiver.complete_message': 'complete', 'receiver.abandon_message': 'abandon', 'receiver.dead_letter_message': 'deadletter' }[operation.operation]
+      const auxiliary = operation.operation === 'sender.send_messages' ? ['enqueue', 'duplicate', 'lock-expired', 'message-expired'] : ['lock-expired', 'message-expired']
+      if (expectedTrace && linked.some(row => row.kind !== expectedTrace && !auxiliary.includes(row.kind))) return false
+      if (operation.success && ['perform_order_work', 'record_processed', 'receiver.complete_message', 'receiver.abandon_message', 'receiver.dead_letter_message'].includes(operation.operation)
+        && linked.filter(row => row.kind === expectedTrace).length !== 1) return false
+      for (const trace of linked) {
+        if (trace.kind === 'order-work' && !(messaging.effects.workByOrder?.[trace.order?.id] > 0)) return false
+        if (trace.kind === 'order-record' && canonicalize(messaging.effects.processed?.[trace.order?.id] ?? null) !== canonicalize(trace.order)) return false
+        if (trace.messageRecordId && !execution.measurements.receipts.servicebus.some(row => row.id === trace.messageRecordId && row.entityId === trace.entityId)) return false
+        if (trace.kind === 'publish' && !messaging.eventGrid?.events.some(row => row.id === trace.eventRecordId && canonicalize(row.event) === canonicalize(trace.event))) return false
+      }
+    }
     const reads = new Set(), successes = new Set()
     for (const row of measurement.records) {
       if (row.kind === 'secret-read') reads.add(row.id)
@@ -55,7 +83,7 @@ export function validSecurityJournal(messaging) {
   }
   return state === undefined || validateSecurityObservabilityState(state) && next === state.nextId
 }
-export const securityActivity = measurement => measurement?.records.some(row => row.kind === 'notification-provider') === true
+export const securityActivity = measurement => measurement?.records.some(row => ['notification-provider', 'telemetry-export'].includes(row.kind)) === true
 
 export function validSecurityLabContext(messaging, input, sandbox) {
   if (!input || !messaging.securityObservability) return false
