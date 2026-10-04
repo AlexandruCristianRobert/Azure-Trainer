@@ -65,11 +65,17 @@ export function validSecurityJournal(messaging) {
       if (operation.operation === 'send_notification' && securityRows.some(row => row.kind === 'notification-provider' && (row.statusCode === 202) !== operation.success)) return false
       const expectedTrace = { perform_order_work: 'order-work', record_processed: 'order-record', 'publisher.send': 'publish',
         'sender.send_messages': 'send', 'receiver.receive_messages': 'receive', 'receiver.complete_message': 'complete', 'receiver.abandon_message': 'abandon', 'receiver.dead_letter_message': 'deadletter' }[operation.operation]
-      const auxiliary = operation.operation === 'sender.send_messages' ? ['enqueue', 'duplicate', 'lock-expired', 'message-expired'] : ['lock-expired', 'message-expired']
+      const auxiliary = operation.operation === 'sender.send_messages' ? ['enqueue', 'duplicate', 'lock-expired', 'message-expired']
+        : operation.operation === 'publisher.send' ? ['route', 'lock-expired', 'message-expired'] : ['lock-expired', 'message-expired']
       if (expectedTrace && linked.some(row => row.kind !== expectedTrace && !auxiliary.includes(row.kind))) return false
       if (operation.success && ['perform_order_work', 'record_processed', 'receiver.complete_message', 'receiver.abandon_message', 'receiver.dead_letter_message'].includes(operation.operation)
         && linked.filter(row => row.kind === expectedTrace).length !== 1) return false
       for (const trace of linked) {
+        // Publication routes synchronously. A route is auxiliary evidence only
+        // for the actual event published by this operation and its real delivery.
+        if (trace.kind === 'route' && (!messaging.eventGrid?.deliveries.some(delivery => delivery.id === trace.deliveryId
+          && delivery.eventRecordId === trace.eventRecordId)
+          || !linked.some(publish => publish.kind === 'publish' && publish.eventRecordId === trace.eventRecordId))) return false
         if (trace.kind === 'order-work' && !(messaging.effects.workByOrder?.[trace.order?.id] > 0)) return false
         if (trace.messageRecordId && !execution.measurements.receipts.servicebus.some(row => row.id === trace.messageRecordId && row.entityId === trace.entityId)) return false
         if (trace.kind === 'publish' && !messaging.eventGrid?.events.some(row => row.id === trace.eventRecordId && canonicalize(row.event) === canonicalize(trace.event))) return false
