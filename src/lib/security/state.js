@@ -30,6 +30,9 @@ export function emptySecurityObservabilityState() { return { version: 1, nextId:
 const selection = value => securityExact(value, 'key,label,revision') && securityText(value.key)
   && (value.label === null || securityText(value.label, 128)) && count(value.revision) && value.revision > 0
 const secretMetadata = value => securityExact(value, 'vaultUrl,name,version') && securityText(value.vaultUrl) && securityText(value.name, 127) && /^[a-f0-9]{32}$/.test(value.version)
+const refreshSeconds = value => Number.isSafeInteger(value) && value >= 1 && value <= 86400
+const watchKey = value => securityExact(value, 'key,label') && securityText(value.key)
+  && (value.label === null || securityText(value.label, 128))
 export function validSecurityInvocation(value) {
   return securityExact(value, 'kind,operationId') && value.kind === 'script' && securityText(value.operationId)
     || securityExact(value, 'kind,appId,functionId,deliveryId,eventRecordId,attempt') && value.kind === 'eventgrid'
@@ -41,10 +44,13 @@ export function validSecurityRecord(row, previous) {
   if (row.kind === 'secret-read') return securityExact(row, base + 'principalId,vaultUrl,name,version,configProviderId,keyIds')
     && securityText(row.principalId) && secretMetadata({ vaultUrl: row.vaultUrl, name: row.name, version: row.version }) && nullable(row.configProviderId)
     && Array.isArray(row.keyIds) && row.keyIds.length <= 16 && row.keyIds.every(id => securityText(id, 128)) && new Set(row.keyIds).size === row.keyIds.length
-  if (['config-load', 'config-refresh'].includes(row.kind)) return securityExact(row, base + 'providerId,storeId,principalId,selections,outcome')
+  if (['config-load', 'config-refresh'].includes(row.kind)) return securityExact(row, base + 'providerId,storeId,principalId,selections,outcome'
+    + (row.kind === 'config-load' ? ',watchKeys,refreshIntervalSeconds,secretRefreshIntervalSeconds' : ''))
     && [row.providerId, row.storeId, row.principalId].every(item => securityText(item))
     && Array.isArray(row.selections) && row.selections.length <= 50 && row.selections.every(selection)
     && (row.kind === 'config-load' ? row.outcome === 'loaded' : ['changed', 'unchanged', 'early', 'failed'].includes(row.outcome))
+    && (row.kind !== 'config-load' || Array.isArray(row.watchKeys) && row.watchKeys.length <= 10 && row.watchKeys.every(watchKey)
+      && refreshSeconds(row.refreshIntervalSeconds) && (row.secretRefreshIntervalSeconds === null || refreshSeconds(row.secretRefreshIntervalSeconds)))
   if (row.kind === 'fixture-advance') return securityExact(row, base + 'step,settings,secrets,providerKeyIds')
     && [1, 2, 3].includes(row.step) && Array.isArray(row.settings) && row.settings.length <= 50
     && row.settings.every(item => securityExact(item, 'storeId,key,label,revision') && securityText(item.storeId)

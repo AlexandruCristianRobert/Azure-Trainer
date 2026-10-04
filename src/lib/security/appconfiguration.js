@@ -58,7 +58,10 @@ export function createConfigurationProvider(context, options, providerId, loc) {
     provider.cache = cache; provider.selections = metadata(values); provider.watches = watchValues
   }
   function journal(kind, outcome) {
-    context.record({ kind, providerId, storeId: provider.storeId, principalId: principal.principalId, selections: structuredClone(provider.selections), outcome }, loc)
+    context.record({ kind, providerId, storeId: provider.storeId, principalId: principal.principalId, selections: structuredClone(provider.selections), outcome,
+      ...(kind === 'config-load' ? { watchKeys: watches.map(watch => ({ key: watch.key, label: watch.label })),
+        refreshIntervalSeconds: interval, secretRefreshIntervalSeconds: secretInterval } : {}),
+    }, loc)
   }
   commit(selected(), watched(), true)
   journal('config-load', 'loaded')

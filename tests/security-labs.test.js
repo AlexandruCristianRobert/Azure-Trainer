@@ -5,6 +5,7 @@ import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
 import { buildExplanationPrompt } from '../src/lib/labEngine/explanationPrompt.js'
 import { runLine } from '../src/lib/az/shell.js'
+import { validSecurityRecord } from '../src/lib/security/state.js'
 
 const modulePath = '../src/data/labs/security-journey/security.js'
 const journey = await import(/* @vite-ignore */ modulePath).catch(error => {
@@ -57,7 +58,18 @@ describe('code-first security curriculum', () => {
     expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.every(task => task.done)).toBe(true)
     expect(run.runtime.messaging.effects.notifications['e-o1']).toEqual({ eventId: 'e-o1', orderId: 'o1' })
     if (index === 2) expect(rows(run).filter(row => row.kind === 'notification-provider').map(row => row.statusCode)).toEqual([202, 401])
-    if (index === 4) expect(rows(run).filter(row => row.kind === 'notification-provider').map(row => [row.statusCode, row.channel])).toEqual([[202, 'email'], [202, 'sms'], [202, 'sms']])
+    if (index === 4) {
+      expect(rows(run).filter(row => row.kind === 'notification-provider').map(row => [row.statusCode, row.channel])).toEqual([[202, 'email'], [202, 'sms'], [202, 'sms']])
+      const load = rows(run).find(row => row.kind === 'config-load')
+      expect(load).toMatchObject({ watchKeys: [{ key: 'Orders:Sentinel', label: 'production' }], refreshIntervalSeconds: 30, secretRefreshIntervalSeconds: 60 })
+      for (const bad of [
+        { ...load, watchKeys: [{ key: 'Orders:Sentinel', label: 'production', value: 'unmodeled' }] },
+        { ...load, refreshIntervalSeconds: 0 }, { ...load, secretRefreshIntervalSeconds: 86401 },
+      ]) expect(validSecurityRecord(bad, [])).toBe(false)
+      const malformed = structuredClone(run)
+      malformed.runtime.messaging.securityObservability.records.find(row => row.kind === 'config-load').refreshIntervalSeconds = 0
+      expect(() => deserializeRun(JSON.stringify(malformed), lab)).toThrow()
+    }
     const publicProof = JSON.stringify([run.evidence, run.runtime.messaging])
     expect(publicProof).not.toContain('trainer-demo-key-v1')
     expect(publicProof).not.toContain('trainer-demo-key-v2')
@@ -79,6 +91,15 @@ describe('code-first security curriculum', () => {
   })
   it('cannot complete refresh by loading a new provider', () => {
     const lab = at(4), run = replay(lab, undefined, source => source.replaceAll('config.refresh()', 'config = load(endpoint="https://ac-orders.azconfig.io", credential=credential, selects=[SettingSelector(key_filter="Orders:*", label_filter="production")], keyvault_credential=credential)'))
+    expect(rows(run).filter(row => row.kind === 'notification-provider').every(row => row.statusCode === 202)).toBe(true)
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  it.each([
+    ['omitted watch', source => source.replace('refresh_on=[WatchKey("Orders:Sentinel", label="production")], ', '')],
+    ['wrong watch', source => source.replace('WatchKey("Orders:Sentinel", label="production")', 'WatchKey("Orders:Channel", label="production")')],
+    ['wrong intervals', source => source.replace('refresh_interval=30', 'refresh_interval=1').replace('secret_refresh_interval=60', 'secret_refresh_interval=1')],
+  ])('cannot complete refresh with %s despite successful changed consumption', (_, edit) => {
+    const lab = at(4), run = replay(lab, undefined, edit)
     expect(rows(run).filter(row => row.kind === 'notification-provider').every(row => row.statusCode === 202)).toBe(true)
     expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
   })

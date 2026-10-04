@@ -78,6 +78,8 @@ export const refreshConsumed = measurement => {
   const [before, changed, independent] = calls
   const loads = records.filter(row => row.kind === 'config-load'), refreshes = records.filter(row => row.kind === 'config-refresh'), fixtures = records.filter(row => row.kind === 'fixture-advance')
   return loads.length === 1 && loads[0].providerId === before.configProviderId && loads[0].storeId === SECURITY_STORE_ID
+    && loads[0].watchKeys.length === 1 && loads[0].watchKeys[0].key === 'Orders:Sentinel' && loads[0].watchKeys[0].label === 'production'
+    && loads[0].refreshIntervalSeconds === 30 && loads[0].secretRefreshIntervalSeconds === 60
     && loads[0].selections.every(setting => setting.label === 'production') && refreshes.length === 2 && fixtures.length === 2
     && refreshes.every(row => row.providerId === before.configProviderId && row.outcome === 'changed')
     && before.channel === 'email' && changed.channel === 'sms' && independent.channel === 'sms'
