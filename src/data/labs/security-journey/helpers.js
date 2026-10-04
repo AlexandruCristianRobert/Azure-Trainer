@@ -141,7 +141,7 @@ export function loggingObserved(m) {
     && row.Properties['app.order_id'] === call.orderId && row.Properties['app.channel'] === call.channel
     && row.Properties['app.status_code'] === call.statusCode)
 }
-export function contextObserved(m) {
+export function contextObserved(m, secretOperation = 'secretclient.get_secret') {
   const rows = telemetryRows(m), process = rows.find(row => row.Name === 'ProcessOrder'), publish = rows.find(row => row.Name === 'PublishOrder')
   const call = notification(m), notify = call && spanFor(m, call, 'NotifyOrder'), bus = m.receipts.servicebus[0], delivery = m.receipts.eventgrid[0]
   if (!privacyClean(m) || !process || !publish || !notify || !bus || !delivery) return false
@@ -152,7 +152,7 @@ export function contextObserved(m) {
     && carrier === `00-${publish.OperationId}-${publish.Id}-01`
     && notify.table === 'AppRequests' && notify.OperationId === publish.OperationId && notify.ParentId === publish.Id
     && notify.Success && linkedOperation(m, process, 'perform_order_work') && linkedOperation(m, process, 'record_processed')
-    && linkedOperation(m, publish, 'publisher.send') && linkedOperation(m, notify, 'secretclient.get_secret')
+    && linkedOperation(m, publish, 'publisher.send') && linkedOperation(m, notify, secretOperation)
     && delivery.endpointType === 'AzureFunction' && delivery.status === 'delivered' && delivery.attempts === 1
     && delivery.event.id === 'e-o1' && delivery.event.data.order_id === 'o1'
     && call.invocation.kind === 'eventgrid' && call.invocation.deliveryId === delivery.id && call.invocation.eventRecordId === delivery.eventRecordId

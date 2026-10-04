@@ -27,19 +27,25 @@ export function observabilityInput(stage) {
 }
 /** Only actual resources and an active external queue input; no telemetry/proof. */
 export function seedObservabilityStage(run, stage) {
-  const seeded = seedSecurityStage(run, 'secrets')
-  if (!['context', 'metrics'].includes(stage)) return seeded
+  const seeded = seedSecurityStage(run, stage === 'capstone' ? 'refresh' : 'secrets')
+  if (!['context', 'metrics', 'capstone'].includes(stage)) return seeded
   let sandbox = createNamespace(seeded.sandbox, { resourceGroup: SECURITY_GROUP, name: 'sb-orders', sku: 'Standard' }).sandbox
   sandbox = createQueue(sandbox, { resourceGroup: SECURITY_GROUP, namespace: 'sb-orders', name: 'orders', maxDeliveryCount: 3 }).sandbox
-  if (stage === 'context') {
+  if (['context', 'capstone'].includes(stage)) {
     sandbox = createEventGridTopic(sandbox, { resourceGroup: SECURITY_GROUP, name: 'evgt-orders', location: 'westeurope', inputSchema: 'EventGridSchema' }).sandbox
     sandbox = createEventGridSubscription(sandbox, { resourceGroup: SECURITY_GROUP, topicName: 'evgt-orders', name: 'order-notifications',
       endpointType: 'AzureFunction', endpoint: `${SECURITY_APP_ID}/functions/NotifyOrder`, includedEventTypes: ['Contoso.OrderProcessed'], subjectBeginsWith: '/orders/EU/' }).sandbox
   }
   const result = applyServiceBusOperation(seeded.runtime.messaging, sandbox, { kind: 'send', target: OBSERVABILITY_TARGET,
     message: { messageId: 'm1', body: JSON.stringify({ id: 'o1', region: 'EU', quantity: 2 }),
-      properties: stage === 'context' ? { 'Diagnostic-Id': OBSERVABILITY_CARRIER } : {} } })
+      properties: stage !== 'metrics' ? { 'Diagnostic-Id': OBSERVABILITY_CARRIER } : {} } })
   if (result.diagnostics.length) throw new Error('Observability input fixture could not be prepared.')
+  if (stage === 'capstone') {
+    const duplicate = applyServiceBusOperation(result.state, sandbox, { kind: 'send', target: OBSERVABILITY_TARGET,
+      message: { messageId: 'm1-retry', body: JSON.stringify({ id: 'o1', region: 'EU', quantity: 2 }), properties: { 'Diagnostic-Id': OBSERVABILITY_CARRIER } } })
+    if (duplicate.diagnostics.length) throw new Error('Capstone duplicate input could not be prepared.')
+    return { ...seeded, sandbox, runtime: { ...seeded.runtime, messaging: duplicate.state } }
+  }
   return { ...seeded, sandbox, runtime: { ...seeded.runtime, messaging: result.state } }
 }
 export function securityInput(stage) {
