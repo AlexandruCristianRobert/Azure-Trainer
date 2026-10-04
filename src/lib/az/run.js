@@ -73,7 +73,7 @@ export function runAz(sandbox, tokens, context) {
   try {
     const result = node.run({ sandbox, context }, values)
     const lines = []
-    if (result.output !== null && result.output !== undefined) {
+    if (values.globalOutput !== 'none' && result.output !== null && result.output !== undefined) {
       lines.push(out(typeof result.output === 'string' ? result.output : toAzJson(result.output)))
     }
     return { sandbox: result.sandbox ?? sandbox, lines, events: result.events ?? [], latencyMs: node.latencyMs, ...(result.effects ? { effects: result.effects } : {}) }

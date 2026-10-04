@@ -80,7 +80,8 @@ export function parseArgs(specs, tokens, defaults = { group: null, location: nul
     }
     if (raw === '' && !spec.allowEmpty) { fail(`argument ${displayName(spec)}: expected one argument`); continue }
     if (spec.kind === 'global-output') {
-      if (raw !== 'json' && raw !== 'jsonc') fail(`argument ${displayName(spec)}: only 'json' is available in the Sandbox Cloud Shell.`)
+      if (!['json', 'jsonc', 'none'].includes(raw)) fail(`argument ${displayName(spec)}: only 'json', 'jsonc' and 'none' are available in the Sandbox Cloud Shell.`)
+      else values[spec.dest] = raw
       continue
     }
     if (spec.kind === 'global-query') {

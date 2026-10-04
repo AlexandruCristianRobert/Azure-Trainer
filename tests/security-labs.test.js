@@ -4,6 +4,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
 import { buildExplanationPrompt } from '../src/lib/labEngine/explanationPrompt.js'
+import { runLine } from '../src/lib/az/shell.js'
 
 const modulePath = '../src/data/labs/security-journey/security.js'
 const journey = await import(/* @vite-ignore */ modulePath).catch(error => {
@@ -94,5 +95,40 @@ describe('code-first security curriculum', () => {
     expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(true)
     for (const value of ['console', 'email']) run = applyRunAction(run, { type: 'command', line: `az appconfig kv set -n ac-orders --key Orders:Channel --label production --value ${value} --yes` }, lab).run
     expect(evaluateLab(lab, run).tasks.at(-1).status).toBe('needs-verification')
+  })
+
+  // Output selection must not alter resource construction or hide diagnostics.
+  it('preserves ordinary secret-set JSON data output', () => {
+    const initial = createBehavioralRun(at(2), { attemptId: 'cli-default' })
+    const line = 'az keyvault secret set --vault-name kv-orders --name notification-api-key --value trainer-demo-key-v2'
+    for (const suffix of ['', ' --output json', ' --output jsonc']) {
+      const result = runLine(initial.sandbox, line + suffix)
+      expect(result.lines).toHaveLength(1)
+      expect(result.lines[0].kind).toBe('out')
+      expect(JSON.parse(result.lines[0].text)).toMatchObject({ value: 'trainer-demo-key-v2' })
+      expect(result.sandbox.keyVaults[0].secrets[0].versions).toHaveLength(2)
+    }
+  })
+  it('suppresses successful CLI data with none while preserving actual version and event', () => {
+    const initial = createBehavioralRun(at(2), { attemptId: 'cli-none' })
+    for (const outputOption of ['--output none', '-o none']) {
+      const result = runLine(initial.sandbox, `az keyvault secret set --vault-name kv-orders --name notification-api-key --value trainer-demo-key-v2 ${outputOption}`)
+      expect(result.lines).toEqual([])
+      const versions = result.sandbox.keyVaults[0].secrets[0].versions
+      expect(versions).toHaveLength(2)
+      expect(versions[1].value).toBe('trainer-demo-key-v2')
+      expect(versions[1].version).not.toBe(versions[0].version)
+      expect(result.events).toHaveLength(1)
+      expect(result.events[0]).toMatchObject({ type: 'created', resourceType: 'keyVaultSecret', name: 'notification-api-key', version: versions[1].version })
+    }
+  })
+  it('keeps errors and help visible with output none', () => {
+    const initial = createBehavioralRun(at(2), { attemptId: 'cli-error' })
+    const failed = runLine(initial.sandbox, 'az keyvault secret set --vault-name missing-vault --name notification-api-key --value trainer-demo-key-v2 --output none')
+    expect(failed.lines.some(row => row.kind === 'err' && row.text.includes('ResourceNotFound'))).toBe(true)
+    expect(failed.sandbox).toEqual(initial.sandbox)
+    expect(failed.events).toEqual([])
+    const help = runLine(initial.sandbox, 'az keyvault secret set --help --output none')
+    expect(help.lines.some(row => row.kind === 'out' && row.text.includes('--vault-name'))).toBe(true)
   })
 })
