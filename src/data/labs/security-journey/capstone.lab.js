@@ -12,7 +12,11 @@ export function secureOrderObserved(m) {
   const duplicate = m.receipts.servicebus.find(row => row.messageId === 'm1-retry')
   return calls.length === 1 && call.configKey === 'Orders:Channel' && call.configLabel === 'production' && call.keyId === 'key-v1'
     && records.some(load => load.kind === 'config-load' && load.providerId === call.configProviderId && load.storeId === SECURITY_STORE_ID
-      && load.selections.some(setting => setting.key === 'Orders:Channel' && setting.label === 'production' && setting.revision === call.configRevision))
+      && load.principalId === call.principalId
+      && load.selections.some(setting => setting.key === 'Orders:Channel' && setting.label === 'production' && setting.revision === call.configRevision)
+      && records.some(operation => operation.kind === 'telemetry-operation' && operation.operation === 'load'
+        && operation.spanId === notify.Id && operation.operationId === notify.OperationId
+        && operation.recordIds.includes(load.id) && operation.recordIds.includes(call.readId)))
     && records.some(read => read.kind === 'secret-read' && read.id === call.readId && read.configProviderId === call.configProviderId)
     && duplicate?.status === 'completed' && duplicate.deliveryCount === 1 && m.receipts.servicebus.length === 2
     && !m.trace.some(row => ['order-work', 'order-record'].includes(row.kind) && row.messageRecordId === duplicate.id)

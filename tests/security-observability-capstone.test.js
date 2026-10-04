@@ -61,6 +61,23 @@ describe('integrated secure and observed order capstone', () => {
     ['no duplicate guard', source => source.replace('if was_processed(order["id"]):', 'if False:')],
     ['literal query result', source => source.replace(/query = .*\n/, 'query = "AppRequests | take 1 | project Notifications=1, Failures=0, MeanMs=21"\n')],
   ])('rejects %s', (_, edit) => { expect(done(replay(edit))).toBe(false) })
+  it('rejects an unused in-span load when the consumed provider was loaded outside NotifyOrder', () => {
+    const run = replay((source, path) => path !== 'function_app.py' ? source : source.replace(
+      /^(    with tracer\.start_as_current_span\("NotifyOrder"[^\n]+\n)(        credential = DefaultAzureCredential\(\)\n        config = load\([^\n]+\n            selects=\[[^\n]+\n)/m,
+      (_, span, consumedLoad) => consumedLoad.split('\n').map(line => line.startsWith('    ') ? line.slice(4) : line).join('\n') + span
+        + '        unused = load(endpoint="https://ac-orders.azconfig.io", credential=credential, selects=[SettingSelector(key_filter="Orders:Channel", label_filter="production")])\n'))
+    const host = run.runtime.messaging.executionReceipts[0].measurements, records = host.securityObservability.records
+    const call = records.find(row => row.kind === 'notification-provider'), notify = host.securityObservability.telemetry.find(row => row.Name === 'NotifyOrder')
+    expect(call.statusCode).toBe(202)
+    expect(host.effects.after.notifications).toEqual({ 'e-o1': { eventId: 'e-o1', orderId: 'o1' } })
+    expect(records.filter(row => row.kind === 'config-load')).toHaveLength(2)
+    const consumedLoad = records.find(row => row.kind === 'config-load' && row.providerId === call.configProviderId)
+    const inSpanLoad = records.find(row => row.kind === 'telemetry-operation' && row.operation === 'load' && row.spanId === notify.Id)
+    expect(inSpanLoad).toBeDefined()
+    expect(inSpanLoad.recordIds).not.toContain(consumedLoad.id)
+    expect(inSpanLoad.recordIds).not.toContain(call.readId)
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([false, false])
+  })
   it('invalidates saved source and resource change/revert while allowing notes', () => {
     let run = replay()
     run = applyRunAction(run, { type: 'save-file', path: 'README.md', text: 'My notes' }, lab).run
