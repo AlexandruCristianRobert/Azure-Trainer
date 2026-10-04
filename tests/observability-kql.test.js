@@ -40,6 +40,49 @@ describe('bounded KQL over actual telemetry', () => {
       .toEqual([{ Text: 'a"|b', Other: "it's|ok" }])
   })
 
+  it('preserves symbol and keyword strings as literals instead of grammar', () => {
+    const literals = ['+', '-', '(', ')', '|', ',', '[', ']', '=', '==', '*', 'and', 'or', 'by', 'asc', 'desc', 'true', 'false', 'null']
+    const actual = literals.map(text => {
+      try { return run(`AppRequests | take 1 | extend Text="${text}" | project Text`).rows }
+      catch (error) { return error.message }
+    })
+    expect(actual).toEqual(literals.map(Text => [{ Text }]))
+    expect(run('AppRequests | where Properties["label"] == "a|b" | project Text=tostring("("), Plus="+"').rows)
+      .toEqual([{ Text: '(', Plus: '+' }])
+  })
+
+  it('rejects quoted pipeline, comparison, keyword, and assignment grammar tokens', () => {
+    const queries = [
+      'AppRequests "|" take 1',
+      'AppRequests | where 1 "==" 1',
+      'AppRequests | where true "and" true',
+      'AppRequests | where false "or" true',
+      'AppRequests | extend X "=" 1',
+      'AppRequests | project X "=" Name',
+      'AppRequests | project Name "," Success',
+      'AppRequests | summarize N "=" count()',
+      'AppRequests | summarize count "(" ")"',
+      'AppRequests | summarize N=count() "by" Name',
+      'AppRequests | order "by" Name',
+      'AppRequests | order by Name "asc"',
+      'AppRequests | order by Name "desc"',
+      'AppRequests | project X=tostring "(" Name ")"',
+      'AppRequests | project X=Properties "[" "label" "]"',
+      'AppRequests | project X=Properties["label" "]"',
+      'AppRequests | where "(" true ")"',
+    ]
+    const accepted = queries.filter(query => {
+      try { kql.parseQuery(query); return true }
+      catch { return false }
+    })
+    expect(accepted).toEqual([])
+  })
+
+  it('rejects quoted signs inside numeric conversion text', () => {
+    expect(run('AppRequests | take 1 | project N=toint(\'"+"3\'), D=todouble(\'"-"3\')').rows)
+      .toEqual([{ N: null, D: null }])
+  })
+
   it('applies precedence, boolean predicates, property access, and typed conversions', () => {
     expect(run('AppRequests | where Success == false or (Success == true and DurationMs >= 10 and DurationMs < 20) | project Name, N=toint(Properties["size"]), D=todouble(Properties["size"]), S=tostring(Success), Value=2+3*4-8/2').rows)
       .toEqual([

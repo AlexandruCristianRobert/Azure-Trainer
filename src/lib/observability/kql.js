@@ -84,9 +84,14 @@ class Parser {
   }
 
   current() { return this.tokens[this.index] }
-  is(value) { return this.current().value === value }
-  match(value) { if (!this.is(value)) return false; this.index++; return true }
-  take(value) { if (!this.match(value)) fail(`expected ${value} at ${this.current().start}`) }
+  // Grammar consumes token kinds as well as values: quoted punctuation and
+  // quoted keywords remain literal data even when their text matches syntax.
+  is(value, kind = 'symbol', offset = 0) {
+    const token = this.tokens[this.index + offset]
+    return token?.kind === kind && token.value === value
+  }
+  match(value, kind = 'symbol') { if (!this.is(value, kind)) return false; this.index++; return true }
+  take(value, kind = 'symbol') { if (!this.match(value, kind)) fail(`expected ${value} at ${this.current().start}`) }
   identifier() {
     const token = this.current()
     if (token.kind !== 'identifier' || FORBIDDEN_NAMES.has(token.value)) fail(`expected supported identifier at ${token.start}`)
@@ -127,7 +132,9 @@ class Parser {
     } else fail(`expected expression at ${token.start}`)
 
     const precedence = { or: 1, and: 2, '==': 3, '!=': 3, '<': 3, '<=': 3, '>': 3, '>=': 3, '+': 4, '-': 4, '*': 5, '/': 5, '%': 5 }
-    while (own(precedence, this.current().value) && precedence[this.current().value] >= minimum) {
+    while (own(precedence, this.current().value)
+      && this.is(this.current().value, ['and', 'or'].includes(this.current().value) ? 'identifier' : 'symbol')
+      && precedence[this.current().value] >= minimum) {
       const op = this.current().value
       this.index++
       const right = this.expression(precedence[op] + 1, depth + 1)
@@ -137,7 +144,7 @@ class Parser {
   }
 
   namedExpression(requireAssignment = false) {
-    if (this.current().kind === 'identifier' && this.tokens[this.index + 1].value === '=') {
+    if (this.current().kind === 'identifier' && this.is('=', 'symbol', 1)) {
       const name = this.identifier()
       this.take('=')
       return { name, expression: this.expression() }
@@ -167,7 +174,7 @@ class Parser {
 
   aggregate() {
     let name
-    if (this.current().kind === 'identifier' && this.tokens[this.index + 1].value === '=') {
+    if (this.current().kind === 'identifier' && this.is('=', 'symbol', 1)) {
       name = this.identifier()
       this.take('=')
     }
@@ -189,15 +196,15 @@ class Parser {
     }
     if (type === 'summarize') {
       const aggregates = this.list(() => this.aggregate())
-      const groups = this.match('by') ? this.list(() => this.namedExpression()) : []
+      const groups = this.match('by', 'identifier') ? this.list(() => this.namedExpression()) : []
       this.unique([...groups, ...aggregates])
       return { type, aggregates, groups }
     }
     if (type === 'order') {
-      this.take('by')
+      this.take('by', 'identifier')
       const columns = this.list(() => {
         const expression = this.expression()
-        const direction = this.match('asc') ? 'asc' : (this.match('desc'), 'desc')
+        const direction = this.match('asc', 'identifier') ? 'asc' : (this.match('desc', 'identifier'), 'desc')
         return { expression, direction }
       })
       return { type, columns }
@@ -259,7 +266,7 @@ function convert(name, value) {
       const tokens = tokenize(source)
       let index = 0
       let sign = 1
-      if (tokens[index].value === '+' || tokens[index].value === '-') sign = tokens[index++].value === '-' ? -1 : 1
+      if (tokens[index].kind === 'symbol' && (tokens[index].value === '+' || tokens[index].value === '-')) sign = tokens[index++].value === '-' ? -1 : 1
       if (tokens[index].kind !== 'number' || tokens[index + 1].kind !== 'end') return null
       value = sign * tokens[index].value
     } catch { return null }
