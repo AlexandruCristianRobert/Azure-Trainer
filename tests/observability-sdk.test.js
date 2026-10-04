@@ -313,4 +313,51 @@ def notify(event: func.EventGridEvent):
     expect(dataset.filter(row => row.table === 'AppTraces').map(row => row.Properties['app.order_id'])).toEqual(['o1'])
     expect(deserializeRun(serializeRun(result.run, lab), lab).attemptId).toBe('partial-host')
   })
+  it('preserves only category audit metadata after a Function privacy rollback', () => {
+    const code = setup + `import azure.functions as func
+from training_runtime import perform_order_work
+app = func.FunctionApp()
+@app.function_name(name="NotifyOrder")
+@app.event_grid_trigger(arg_name="event")
+def notify(event: func.EventGridEvent):
+    data = event.get_json()
+    perform_order_work({"id": data["order_id"]})
+    logger.info("attempted", extra={"app.order_id": data["order_id"]})
+    if event.id == "e2":
+        logger.info("private@example.com")
+`
+    const lab = functionsLab(code), result = applyRunAction(createBehavioralRun(lab, { attemptId: 'privacy-host' }), { type: 'command', line: 'func start' }, lab)
+    expect(result.diagnostics[0]?.code).toBe('SECURITY_PRIVACY')
+    const state = result.run.runtime.messaging, audit = state.securityObservability.records.filter(row => row.kind === 'privacy-violation')
+    expect(audit).toHaveLength(1)
+    expect(Object.keys(audit[0]).sort()).toEqual(['category', 'id', 'kind', 'timeMs'])
+    expect(audit[0].category).toBe('telemetry')
+    expect(state.effects.workByOrder).toEqual({ o1: 1 })
+    expect(telemetryDataset(state).filter(row => row.table === 'AppRequests')).toHaveLength(1)
+    expect(telemetryDataset(state).filter(row => row.table === 'AppTraces').map(row => row.Properties['app.order_id'])).toEqual(['o1'])
+    expect(state.executionReceipts.at(-1).measurements.securityObservability.records.at(-1)).toEqual(audit[0])
+    expect(JSON.stringify({ diagnostics: result.diagnostics, records: state.securityObservability, effects: state.effects })).not.toContain('private@example.com')
+    expect(deserializeRun(serializeRun(result.run, lab), lab).attemptId).toBe('privacy-host')
+  })
+  it('admits duplicate processed-order attempts without replacing the first value across restore', () => {
+    const code = setup + `from training_runtime import record_processed
+def main():
+    with tracer.start_as_current_span("RecordOrder"):
+        record_processed({"id": "o1", "quantity": 1})
+        record_processed({"id": "o1", "quantity": 2})
+`
+    const lab = functionsLab('')
+    lab.initialProjectFiles['worker.py'] = code
+    lab.messagingExercise.commands = [{ entry: 'worker.py', mode: 'script' }]
+    const initial = createBehavioralRun(lab, { attemptId: 'duplicate-order' })
+    const result = applyRunAction(initial, { type: 'command', line: 'python worker.py' }, lab)
+    expect(result.diagnostics).toEqual([])
+    expect(result.run.runtime.messaging.effects.processed.o1).toEqual({ id: 'o1', quantity: 1 })
+    expect(result.run.runtime.messaging.executionReceipts.at(-1).measurements.trace.filter(row => row.kind === 'order-record').map(row => row.changed)).toEqual([true, false])
+    const restored = deserializeRun(serializeRun(result.run, lab), lab)
+    const repeated = applyRunAction(restored, { type: 'command', line: 'python worker.py' }, lab)
+    expect(repeated.diagnostics).toEqual([])
+    expect(repeated.run.runtime.messaging.executionReceipts.at(-1).measurements.trace.filter(row => row.kind === 'order-record').map(row => row.changed)).toEqual([false, false])
+    expect(deserializeRun(serializeRun(repeated.run, lab), lab).runtime.messaging.effects.processed.o1).toEqual({ id: 'o1', quantity: 1 })
+  })
 })

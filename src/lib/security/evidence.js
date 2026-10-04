@@ -27,10 +27,31 @@ export function validSecurityJournal(messaging) {
   const state = messaging.securityObservability
   let next = 1
   const notifications = new Map()
+  // Reconstruct the attempt's baseline from recorded deltas, then replay calls.
+  // A duplicate records its attempted payload but deliberately retains the first
+  // processed value; it must not be compared as though it replaced that value.
+  const processed = new Map(Object.entries(messaging.effects?.processed ?? {}))
+  for (const execution of [...(messaging.executionReceipts ?? [])].reverse()) {
+    for (const [id, value] of Object.entries(execution.measurements.effects.before.processed ?? {})) {
+      if (value === null) processed.delete(id)
+      else processed.set(id, value)
+    }
+  }
   for (const execution of messaging.executionReceipts ?? []) {
     const measurement = execution.measurements.securityObservability
     if (measurement === undefined) { if (state !== undefined) return false; continue }
     if (!state || measurement.startSequence !== next || !validSecuritySnapshot(measurement, state)) return false
+    const processedBefore = execution.measurements.effects.before.processed ?? {}, processedAfter = execution.measurements.effects.after.processed ?? {}
+    for (const [id, value] of Object.entries(processedBefore)) if (canonicalize(processed.get(id) ?? null) !== canonicalize(value)) return false
+    for (const trace of execution.measurements.trace.filter(row => row.kind === 'order-record')) {
+      const id = trace.order?.id
+      if (typeof id !== 'string' || trace.changed !== !processed.has(id)) return false
+      if (trace.changed) {
+        if (processedBefore[id] !== null || canonicalize(processedAfter[id] ?? null) !== canonicalize(trace.order)) return false
+        processed.set(id, trace.order)
+      }
+    }
+    for (const [id, value] of Object.entries(processedAfter)) if (canonicalize(processed.get(id) ?? null) !== canonicalize(value)) return false
     const spans = measurement.telemetry.filter(row => ['AppRequests', 'AppDependencies'].includes(row.table))
     if (new Set(spans.map(row => row.Id)).size !== spans.length) return false
     for (const operation of measurement.records.filter(row => row.kind === 'telemetry-operation')) {
@@ -50,7 +71,6 @@ export function validSecurityJournal(messaging) {
         && linked.filter(row => row.kind === expectedTrace).length !== 1) return false
       for (const trace of linked) {
         if (trace.kind === 'order-work' && !(messaging.effects.workByOrder?.[trace.order?.id] > 0)) return false
-        if (trace.kind === 'order-record' && canonicalize(messaging.effects.processed?.[trace.order?.id] ?? null) !== canonicalize(trace.order)) return false
         if (trace.messageRecordId && !execution.measurements.receipts.servicebus.some(row => row.id === trace.messageRecordId && row.entityId === trace.entityId)) return false
         if (trace.kind === 'publish' && !messaging.eventGrid?.events.some(row => row.id === trace.eventRecordId && canonicalize(row.event) === canonicalize(trace.event))) return false
       }
@@ -82,6 +102,7 @@ export function validSecurityJournal(messaging) {
     next = measurement.endSequence
   }
   return state === undefined || validateSecurityObservabilityState(state) && next === state.nextId
+    && canonicalize(Object.fromEntries(processed)) === canonicalize(messaging.effects?.processed ?? {})
 }
 export const securityActivity = measurement => measurement?.records.some(row => ['notification-provider', 'telemetry-export'].includes(row.kind)) === true
 

@@ -6,6 +6,7 @@ import { createSecuritySession, SECURITY_PROFILE, sanitizeSecurityDiagnostics } 
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 import { createTelemetrySession, TELEMETRY_OPERATIONS } from '../observability/runtime.js'
 import { telemetryImport } from '../observability/sdk.js'
+import { appendSecurityRecord } from '../security/state.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const clone = value => JSON.parse(JSON.stringify(value))
@@ -211,6 +212,18 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     current = result.state; trace.push(...result.trace)
     return result.value
   }
+  function restoreCallbackState(before, securityCheckpoint, telemetryCheckpoint, error) {
+    // Preserve only audit categories observed in this failed callback. Its SDK,
+    // business, trace and exported-span effects remain part of the rollback.
+    const categories = error.diagnostic?.code === 'SECURITY_PRIVACY'
+      ? (current.securityObservability?.records ?? []).slice(before.securityObservability?.records.length ?? 0)
+        .filter(row => row.kind === 'privacy-violation').map(row => row.category) : []
+    current = before
+    if (securityCheckpoint) security.restore(securityCheckpoint)
+    if (telemetryCheckpoint) telemetry.restore(telemetryCheckpoint)
+    for (const category of categories) current = { ...current,
+      securityObservability: appendSecurityRecord(current.securityObservability, { kind: 'privacy-violation', category }).state }
+  }
   function deliverEvent(deliveryId, fnId, loc) {
     tick(loc)
     let record
@@ -225,7 +238,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       const status = invoke(fnId, [handle('event', { event: clone(record.event) })], {}, loc)
       eventGrid({ kind: 'deliver', deliveryId, status }, loc)
       return status
-    } catch (error) { current = before; trace.length = traceCount; if (securityCheckpoint) security.restore(securityCheckpoint); if (telemetryCheckpoint) telemetry.restore(telemetryCheckpoint); throw error }
+    } catch (error) { restoreCallbackState(before, securityCheckpoint, telemetryCheckpoint, error); trace.length = traceCount; throw error }
     finally { activeDelivery = previousDelivery }
   }
   function hostFunctions(loc) {
@@ -296,9 +309,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         } catch (error) {
           // Retain a callback only with its delivery outcome. Keep earlier
           // completed siblings, but never journal an unacknowledged callback trace.
-          current = before; trace.length = traceCount; diagnostics.length = diagnosticCount
-          if (securityCheckpoint) security.restore(securityCheckpoint)
-          if (telemetryCheckpoint) telemetry.restore(telemetryCheckpoint)
+          restoreCallbackState(before, securityCheckpoint, telemetryCheckpoint, error)
+          trace.length = traceCount; diagnostics.length = diagnosticCount
           throw error
         }
         finally { activeDelivery = previousDelivery }
