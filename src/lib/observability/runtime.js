@@ -2,6 +2,7 @@ import { appendSecurityRecord, validateSecurityObservabilityState, securityObjec
 import { TELEMETRY_SIGNATURES, TELEMETRY_CONSTANTS, TELEMETRY_COSTS } from './sdk.js'
 import { TRAINER_CONNECTION_STRING, TELEMETRY_DESTINATION, TELEMETRY_EPOCH_MS, validTelemetryProperties } from './export.js'
 import { sensitiveTelemetry, sensitiveTelemetryName } from './privacy.js'
+import { parseQuery, evaluateTelemetryQuery, sensitiveQuery } from './query.js'
 
 export const TELEMETRY_OPERATIONS = new Set(Object.keys(TELEMETRY_COSTS))
 const traceparent = /^00-((?!0{32})[a-f0-9]{32})-((?!0{16})[a-f0-9]{16})-(00|01)$/
@@ -97,6 +98,22 @@ export function createTelemetrySession(context) {
     call(name, owner, args, loc) {
       if (!Object.hasOwn(TELEMETRY_SIGNATURES, name)) return { handled: false }
       const result = value => ({ handled: true, value })
+      if (name === 'query_telemetry') {
+        guard(args.query, loc)
+        let query, fields
+        try { query = parseQuery(args.query) }
+        catch { fail('Unsupported or malformed bounded KQL query.', loc, 'KQL_UNSUPPORTED') }
+        if (sensitiveQuery(query)) {
+          record({ kind: 'privacy-violation', category: 'telemetry' }, loc)
+          fail('Sensitive query fields are rejected.', loc, 'SECURITY_PRIVACY')
+        }
+        guard(query, loc)
+        try { fields = evaluateTelemetryQuery(query, state()) }
+        catch { fail('The bounded KQL query exceeds evaluation limits.', loc, 'KQL_LIMIT') }
+        guard(fields, loc)
+        record(fields, loc)
+        return result({ rows: structuredClone(fields.rows) })
+      }
       if (name === 'configure_azure_monitor') {
         if (configured || args.connection_string !== TRAINER_CONNECTION_STRING) fail('Use the single pre-provisioned ai-orders trainer connection string.', loc, 'MESSAGING_CONFIG')
         role = safeText(args.logger_name, loc); configured = true; return result(null)

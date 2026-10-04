@@ -104,10 +104,17 @@ export function validSecurityJournal(messaging) {
   return state === undefined || validateSecurityObservabilityState(state) && next === state.nextId
     && canonicalize(Object.fromEntries(processed)) === canonicalize(messaging.effects?.processed ?? {})
 }
-export const securityActivity = measurement => measurement?.records.some(row => ['notification-provider', 'telemetry-export'].includes(row.kind)) === true
+export const securityActivity = measurement => measurement?.records.some(row => ['notification-provider', 'telemetry-export', 'telemetry-query'].includes(row.kind)) === true
 
 export function validSecurityLabContext(messaging, input, sandbox) {
   if (!input || !messaging.securityObservability) return false
+  const credentials = [
+    ...(input.notificationProvider?.acceptedKeys ?? []).map(key => key.value),
+    ...(input.refreshFixture ?? []).flatMap(change => [...(change.secrets ?? []).map(secret => secret.value), ...(change.acceptedKeys ?? []).map(key => key.value)]),
+    ...(sandbox?.keyVaults ?? []).flatMap(vault => vault.secrets.flatMap(secret => secret.versions.map(version => version.value))),
+  ].filter(value => typeof value === 'string' && value.length > 0)
+  const queryContainsCredential = value => typeof value === 'string' ? credentials.some(credential => value.includes(credential))
+    : value && typeof value === 'object' ? Object.values(value).some(queryContainsCredential) : false
   for (const execution of messaging.executionReceipts ?? []) {
     let accepted = input.notificationProvider?.acceptedKeys ?? [], step = 0
     const reads = new Map(), versions = new Map()
@@ -116,6 +123,7 @@ export function validSecurityLabContext(messaging, input, sandbox) {
       versions.set(versionKey({ vaultUrl: `https://${vault.name}.vault.azure.net`, name: secret.name, version: version.version }), version.value)
     }
     for (const row of execution.measurements.securityObservability?.records ?? []) {
+      if (row.kind === 'telemetry-query' && queryContainsCredential(row)) return false
       if (row.kind === 'fixture-advance') {
         const change = input.refreshFixture?.[step++]
         if (!change || row.step !== step || row.secrets.length !== (change.secrets ?? []).length) return false

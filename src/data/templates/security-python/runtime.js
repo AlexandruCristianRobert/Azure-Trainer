@@ -15,5 +15,11 @@ def advance_security_fixture():
     Configuration selectors/watch keys use lists; Python sets are unsupported.
     """
     pass
+
+def query_telemetry(query):
+    """Evaluate bounded KQL over retained ai-orders exports and return {rows}.
+    Does not require exporter configuration, access Azure, or execute Python.
+    """
+    pass
 `,
 })

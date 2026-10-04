@@ -1,4 +1,5 @@
 export const TELEMETRY_SIGNATURES = Object.freeze({
+  query_telemetry: [['query'], 1, 'data'],
   configure_azure_monitor: [['connection_string', 'logger_name'], 2, 'data', 0],
   get_tracer: [['instrumenting_module_name'], 1, 'tracer'],
   get_current_span: [[], 0, 'span'],
@@ -21,6 +22,7 @@ export const TELEMETRY_SIGNATURES = Object.freeze({
   'counter.add': [['amount', 'attributes'], 1, 'data'],
   'histogram.record': [['amount', 'attributes'], 1, 'data'],
 })
+export const TELEMETRY_HELPERS = ['query_telemetry']
 export const TELEMETRY_EXPORTS = Object.freeze({
   'azure.monitor.opentelemetry': ['configure_azure_monitor'],
   opentelemetry: ['trace', 'propagate', 'metrics'],

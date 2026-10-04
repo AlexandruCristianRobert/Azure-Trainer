@@ -1,5 +1,6 @@
 import { validTelemetryRow, validSpanLink, TELEMETRY_DESTINATION, TELEMETRY_EPOCH_MS } from '../observability/export.js'
 import { TELEMETRY_COSTS } from '../observability/sdk.js'
+import { validTelemetryQuery } from '../observability/query.js'
 // Public metadata only. Private credentials and provider caches never enter this shape.
 export const securityObject = value => !!value && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value))
@@ -53,6 +54,12 @@ export function validSecurityRecord(row, previous) {
   if (row.kind === 'privacy-violation') return securityExact(row, base + 'category') && ['output', 'argument', 'telemetry', 'payload'].includes(row.category)
   if (row.kind === 'telemetry-export') return securityExact(row, base + 'rowId,destination,operationId,spanId')
     && /^telemetry-[1-9]\d*$/.test(row.rowId) && row.destination === TELEMETRY_DESTINATION && validSpanLink({ operationId: row.operationId, spanId: row.spanId })
+  if (row.kind === 'telemetry-query') return securityExact(row, base + 'destination,generation,exportIds,inputRowIds,query,rows')
+    && row.destination === TELEMETRY_DESTINATION && count(row.generation) && row.generation <= 500
+    && Array.isArray(row.exportIds) && row.exportIds.length === row.generation && row.exportIds.every(id => previous.some(item => item.id === id && item.kind === 'telemetry-export'))
+    && Array.isArray(row.inputRowIds) && row.inputRowIds.length === row.generation && row.inputRowIds.every(id => /^telemetry-[1-9]\d*$/.test(id))
+    && securityExact(row.query, 'source,table,operators') && securityText(row.query.source, 16384) && Array.isArray(row.query.operators) && row.query.operators.length <= 16
+    && Array.isArray(row.rows) && row.rows.length <= 200
   if (row.kind === 'telemetry-operation') return securityExact(row, base + 'operation,operationId,spanId,success,costMs,recordIds,traceIds')
     && ['secretclient.get_secret', 'load', 'configprovider.refresh', 'send_notification', 'publisher.send', 'sender.send_messages', 'receiver.receive_messages', 'receiver.complete_message', 'receiver.abandon_message', 'receiver.dead_letter_message', 'perform_order_work', 'record_processed'].includes(row.operation)
     && validSpanLink({ operationId: row.operationId, spanId: row.spanId }) && typeof row.success === 'boolean' && row.costMs === TELEMETRY_COSTS[row.operation]
@@ -89,6 +96,7 @@ export function validateSecurityObservabilityState(value) {
   for (let i = 0; i < value.records.length; i++) {
     const row = value.records[i]
     if (!validSecurityRecord(row, value.records.slice(0, i)) || row.id !== `so-${i + 1}` || row.timeMs < lastTime || row.timeMs > value.timeMs) return false
+    if (row.kind === 'telemetry-query' && !validTelemetryQuery(row, value, value.records.slice(0, i))) return false
     lastTime = row.timeMs
   }
   return value.nextId === value.records.length + 1

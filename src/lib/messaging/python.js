@@ -1,6 +1,6 @@
 import { parser } from '@lezer/python'
 import { SECURITY_PROFILE, SECURITY_SIGNATURES, SECURITY_EXPORTS, SECURITY_HELPERS, SECURITY_INITIALIZERS, securityMemberType } from '../security/sdk.js'
-import { TELEMETRY_SIGNATURES, TELEMETRY_EXPORTS, TELEMETRY_INITIALIZERS, TELEMETRY_CONSTANTS, telemetryImport } from '../observability/sdk.js'
+import { TELEMETRY_SIGNATURES, TELEMETRY_EXPORTS, TELEMETRY_HELPERS, TELEMETRY_INITIALIZERS, TELEMETRY_CONSTANTS, telemetryImport } from '../observability/sdk.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const blocked = new Set(['__proto__', 'constructor', 'prototype'])
@@ -57,7 +57,7 @@ export const SDK_EXPORTS = Object.freeze({
 })
 export function messagingSdkContract(profile) {
   return profile === SECURITY_PROFILE ? { signatures: { ...SDK_SIGNATURES, ...SECURITY_SIGNATURES, ...TELEMETRY_SIGNATURES },
-    exports: { ...SDK_EXPORTS, ...SECURITY_EXPORTS, ...TELEMETRY_EXPORTS, training_runtime: [...SDK_EXPORTS.training_runtime, ...SECURITY_HELPERS] } }
+    exports: { ...SDK_EXPORTS, ...SECURITY_EXPORTS, ...TELEMETRY_EXPORTS, training_runtime: [...SDK_EXPORTS.training_runtime, ...SECURITY_HELPERS, ...TELEMETRY_HELPERS] } }
     : { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS }
 }
 export function bindArguments(names, required, args, kwargs, loc, positionalLimit = names?.length) {

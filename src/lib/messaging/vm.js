@@ -6,7 +6,7 @@ import { createSecuritySession, SECURITY_PROFILE, sanitizeSecurityDiagnostics } 
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
 import { createTelemetrySession, TELEMETRY_OPERATIONS } from '../observability/runtime.js'
 import { telemetryImport } from '../observability/sdk.js'
-import { appendSecurityRecord } from '../security/state.js'
+import { appendSecurityRecord, emptySecurityObservabilityState } from '../security/state.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const clone = value => JSON.parse(JSON.stringify(value))
@@ -79,7 +79,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
     if (typeof value === 'string') { chargeString(budget, value, loc); return value }
-    if (value === null || typeof value === 'boolean' || Number.isSafeInteger(value)) {
+    if (value === null || typeof value === 'boolean' || Number.isSafeInteger(value)
+      || program.profile === SECURITY_PROFILE && typeof value === 'number' && Number.isFinite(value)) {
       chargeBytes(budget, String(value).length, loc)
       return value
     }
@@ -707,6 +708,13 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     value = jsonValue(value, { path: program.entry, line: 1, column: 1 })
   } catch (error) {
     value = null
+    // Dynamic KQL is parsed at its actual call. A query diagnostic rejects this
+    // command atomically, retaining prior commands and no unrelated new effects.
+    if (error.diagnostic?.code?.startsWith('KQL_')) {
+      current = state.securityObservability === undefined && program.profile === SECURITY_PROFILE
+        ? { ...state, securityObservability: emptySecurityObservabilityState() } : state
+      trace.length = 0; output.length = 0; diagnostics.length = 0
+    }
     diagnostics.push(error.diagnostic ?? { code: 'MESSAGING_RUNTIME', message: 'The bounded script could not execute this value.', path: program.entry, line: 1, column: 1 })
   }
   return { state: current, value, trace, diagnostics: program.profile === SECURITY_PROFILE

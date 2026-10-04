@@ -50,3 +50,28 @@ category. This is a bounded educational policy, not a general PII detector.
 
 Host configuration reference:
 https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto?pivots=programming-language-python
+
+In saved source, `from training_runtime import query_telemetry` reads retained
+exports in the fixed ai-orders workspace, without configuring an exporter:
+
+```python
+def main():
+    return query_telemetry("AppRequests | summarize Total=count(), MeanMs=avg(DurationMs)")
+```
+
+The result is `{rows}` computed from actual selected-table exports. Supported
+operators are where, project, extend, summarize, order by and take; aggregates
+are count, countif, sum, avg, min and max. Comparisons, and/or, numeric arithmetic,
+Properties string-key access and tostring/toint/todouble conversions are bounded.
+Missing fields and invalid numeric conversions return null; division by zero
+returns null. Empty ungrouped counts/sum return 0 and avg/min/max return null;
+grouped empty input has no rows. Fractional averages and rates remain finite JSON.
+
+Queries allow 16 KiB of text, 16 operators, 500 input rows and 200 result rows.
+Unsupported syntax (including join, union and cross-workspace queries) produces
+a value-free KQL diagnostic and rolls back the whole command's new effects.
+Receipts retain actual export IDs, table generation, source/operator lineage and
+computed rows; constants do not gain aggregation lineage. New exports in the
+queried table make previous query completion require verification again. Other
+tables leave it current. Restore recomputes each query from its journal prefix.
+Sensitive query text, field names and results are rejected before persistence.
