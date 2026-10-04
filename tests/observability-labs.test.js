@@ -4,6 +4,7 @@ import { applyRunAction } from '../src/lib/labEngine/actions.js'
 import { evaluateLab } from '../src/lib/labEngine/evaluate.js'
 import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.js'
 import { validSecurityJournal } from '../src/lib/security/evidence.js'
+import { validateSecurityObservabilityState } from '../src/lib/security/state.js'
 
 const modulePath = '../src/data/labs/security-journey/observability.js'
 const journey = await import(/* @vite-ignore */ modulePath).catch(error => {
@@ -69,6 +70,24 @@ describe('observability construction Labs', () => {
     if (index === 5) {
       expect(m.receipts.servicebus[0].deliveryCount).toBe(2)
       expect(m.securityObservability.records.filter(row => row.kind === 'telemetry-query').at(-1).rows).toEqual([{ MeanMs: 20, MaxMs: 20, Attempts: 2, Retries: 1, Failures: 1, FailureRate: 0.5 }])
+      const query = m.securityObservability.records.find(row => row.kind === 'telemetry-query')
+      const metrics = m.securityObservability.telemetry.filter(row => row.Name === 'orders.duration')
+      const exports = metrics.map(metric => m.securityObservability.records.find(row => row.rowId === metric.id))
+      expect(exports.map(row => row.metricInput)).toEqual([0, 1].map(rowIndex => ({ queryId: query.id, rowIndex, column: 'DurationMs' })))
+      for (const edit of [input => { input.queryId = 'so-999' }, input => { input.rowIndex = 200 },
+        input => { input.column = 'Missing' }, input => { input.column = 'x'.repeat(129) }, input => { input.value = 20 }]) {
+        const forged = structuredClone(run)
+        for (const state of [forged.runtime.messaging.securityObservability, measurement(forged).securityObservability]) {
+          edit(state.records.find(row => row.rowId === metrics[0].id).metricInput)
+        }
+        expect(() => deserializeRun(JSON.stringify(forged), lab)).toThrow()
+      }
+      const mismatch = structuredClone(run)
+      for (const state of [mismatch.runtime.messaging.securityObservability, measurement(mismatch).securityObservability]) {
+        const metric = state.telemetry.find(row => row.id === metrics[0].id)
+        metric.Sum = metric.Min = metric.Max = 21
+      }
+      expect(() => deserializeRun(JSON.stringify(mismatch), lab)).toThrow()
     }
     expect(JSON.stringify([run.evidence, run.runtime.messaging])).not.toMatch(/trainer-demo-key-|private@example.com/)
     const changed = applyRunAction(run, { type: 'save-file', path: index === 2 ? 'function_app.py' : 'worker.py', text: '# changed\n' }, lab).run
@@ -105,5 +124,44 @@ describe('observability construction Labs', () => {
     const lab = at(5), run = replay(lab, source => source.replace(/SUMMARY_QUERY = .*\n/, 'SUMMARY_QUERY = "AppDependencies | take 1 | project MeanMs=20, MaxMs=20, Attempts=2, Retries=1, Failures=1, FailureRate=0.5"\n'))
     expect(measurement(run).securityObservability.records.filter(row => row.kind === 'telemetry-query').at(-1).rows).toEqual([{ MeanMs: 20, MaxMs: 20, Attempts: 2, Retries: 1, Failures: 1, FailureRate: 0.5 }])
     expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  it('requires histogram consumption of query cells, not equal literal values alongside an unused query', () => {
+    const lab = at(5), run = replay(lab, source => source.replace('latency.record(row["DurationMs"])', 'latency.record(20)'))
+    expect(measurement(run).securityObservability.telemetry.filter(row => row.Name === 'orders.duration').map(row => row.Sum)).toEqual([20, 20])
+    expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  it('keeps query numerics usable as numbers while binding direct metric consumption to this execution', () => {
+    const lab = at(0), source = lab.tasks[0].solution.steps[0].content.replace('return send_notification', 'send_notification') + `    rows = query_telemetry("AppDependencies | project DurationMs, Level=20, Ratio=DurationMs / 2")
+    value = rows["rows"][0]["DurationMs"]
+    if value and value == 19:
+        print(value)
+        logger = logging.getLogger("orders")
+        logger.setLevel(rows["rows"][0]["Level"])
+        logger.info("Measured", extra={"app.duration": value})
+        meter = metrics.get_meter("orders")
+        metric = meter.create_histogram("compat.duration")
+        metric.record(value)
+        metric.record(value + 0)
+        return {"value": value, "plus": value + 1, "negative": -value, "text": str(value), "ratio": rows["rows"][0]["Ratio"]}
+`
+    const run = replay(lab, () => source), m = measurement(run)
+    expect(m.value).toEqual({ value: 19, plus: 20, negative: -19, text: '19', ratio: 9.5 })
+    expect(m.securityObservability.telemetry.find(row => row.Message === 'Measured').Properties['app.duration']).toBe(19)
+    const metrics = m.securityObservability.telemetry.filter(row => row.Name === 'compat.duration')
+    const exports = metrics.map(metric => m.securityObservability.records.find(row => row.rowId === metric.id))
+    expect(exports[0].metricInput).toMatchObject({ rowIndex: 0, column: 'DurationMs' })
+    expect(exports[1].metricInput).toBeUndefined()
+    expect(deserializeRun(serializeRun(run, lab), lab).runtime.messaging.executionReceipts.at(-1).measurements.value).toEqual(m.value)
+    const again = applyRunAction(run, { type: 'command', line: 'python worker.py' }, lab).run
+    const forged = structuredClone(again.runtime.messaging), current = forged.executionReceipts.at(-1).measurements.securityObservability
+    const ownExport = current.records.find(row => row.metricInput)
+    for (const state of [forged.securityObservability, current]) state.records.find(row => row.id === ownExport.id).metricInput.queryId = exports[0].metricInput.queryId
+    expect(validateSecurityObservabilityState(forged.securityObservability)).toBe(true)
+    expect(validSecurityJournal(forged)).toBe(false)
+    // Safe query numeric handles must not relax other private-handle boundaries.
+    for (const value of ['secret.value', 'client']) {
+      const rejected = replay(lab, () => source.replace('extra={"app.duration": value}', `extra={"app.duration": ${value}}`), true)
+      expect(measurement(rejected).diagnostics.some(row => row.code === 'SECURITY_PRIVACY')).toBe(true)
+    }
   })
 })

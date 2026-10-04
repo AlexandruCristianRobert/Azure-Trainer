@@ -58,8 +58,13 @@ export function validSecurityRecord(row, previous) {
     && Array.isArray(row.secrets) && row.secrets.length <= 10 && row.secrets.every(secretMetadata)
     && Array.isArray(row.providerKeyIds) && row.providerKeyIds.length <= 4 && row.providerKeyIds.every(item => securityText(item, 128))
   if (row.kind === 'privacy-violation') return securityExact(row, base + 'category') && ['output', 'argument', 'telemetry', 'payload'].includes(row.category)
-  if (row.kind === 'telemetry-export') return securityExact(row, base + 'rowId,destination,operationId,spanId')
+  if (row.kind === 'telemetry-export') return securityExact(row, base + 'rowId,destination,operationId,spanId' + (Object.hasOwn(row, 'metricInput') ? ',metricInput' : ''))
     && /^telemetry-[1-9]\d*$/.test(row.rowId) && row.destination === TELEMETRY_DESTINATION && validSpanLink({ operationId: row.operationId, spanId: row.spanId })
+    && (!Object.hasOwn(row, 'metricInput') || securityExact(row.metricInput, 'queryId,rowIndex,column')
+      && /^so-[1-9]\d*$/.test(row.metricInput.queryId) && count(row.metricInput.rowIndex) && row.metricInput.rowIndex < 200
+      && securityText(row.metricInput.column, 128) && previous.some(query => query.kind === 'telemetry-query' && query.id === row.metricInput.queryId
+        && Object.hasOwn(query.rows[row.metricInput.rowIndex] ?? {}, row.metricInput.column)
+        && Number.isFinite(query.rows[row.metricInput.rowIndex][row.metricInput.column])))
   if (row.kind === 'telemetry-query') return securityExact(row, base + 'destination,generation,exportIds,inputRowIds,query,rows')
     && row.destination === TELEMETRY_DESTINATION && count(row.generation) && row.generation <= 500
     && Array.isArray(row.exportIds) && row.exportIds.length === row.generation && row.exportIds.every(id => previous.some(item => item.id === id && item.kind === 'telemetry-export'))
@@ -97,6 +102,10 @@ export function validateSecurityObservabilityState(value) {
     return record.rowId === row.id && record.destination === row._ResourceId && record.operationId === row.OperationId
       && record.spanId === (row.Id ?? row.ParentId)
       && Date.parse(row.TimeGenerated) === TELEMETRY_EPOCH_MS + record.timeMs
+      && (!Object.hasOwn(record, 'metricInput') || row.table === 'AppMetrics'
+        && Number.isFinite(value.records.find(query => query.kind === 'telemetry-query' && query.id === record.metricInput?.queryId)?.rows?.[record.metricInput?.rowIndex]?.[record.metricInput?.column])
+        && row.Sum === value.records.find(query => query.kind === 'telemetry-query' && query.id === record.metricInput?.queryId)?.rows?.[record.metricInput?.rowIndex]?.[record.metricInput?.column]
+        && row.Min === row.Sum && row.Max === row.Sum && row.Count === 1)
   })) return false
   let lastTime = 0
   for (let i = 0; i < value.records.length; i++) {

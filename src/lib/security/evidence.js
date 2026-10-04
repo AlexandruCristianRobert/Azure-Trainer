@@ -54,6 +54,10 @@ export function validSecurityJournal(messaging) {
     for (const [id, value] of Object.entries(processedAfter)) if (canonicalize(processed.get(id) ?? null) !== canonicalize(value)) return false
     const spans = measurement.telemetry.filter(row => ['AppRequests', 'AppDependencies'].includes(row.table))
     if (new Set(spans.map(row => row.Id)).size !== spans.length) return false
+    for (const [index, row] of measurement.records.entries()) {
+      if (row.kind === 'telemetry-export' && row.metricInput
+        && !measurement.records.slice(0, index).some(query => query.kind === 'telemetry-query' && query.id === row.metricInput.queryId)) return false
+    }
     for (const operation of measurement.records.filter(row => row.kind === 'telemetry-operation')) {
       if (!spans.some(row => row.Id === operation.spanId && row.OperationId === operation.operationId)
         || !operation.recordIds.every(id => measurement.records.some(row => row.id === id))

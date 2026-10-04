@@ -219,12 +219,18 @@ export function metricsObserved(m) {
     && same(q.rows, [{ MeanMs: spans.reduce((total, span) => total + span.DurationMs, 0) / spans.length, MaxMs: Math.max(...spans.map(span => span.DurationMs)),
       Attempts: spans.length, Retries: bus.lockHistory.length - 1, Failures: spans.filter(span => !span.Success).length,
       FailureRate: spans.filter(span => !span.Success).length / spans.length }])
-    && queries.some(query => query !== q && queryBound(m, query, 'AppDependencies')
-      && hasWhere(query, node => comparison(node, expr => field(expr, 'Name'), '==', 'NotifyAttempt'))
-      && query.query.operators.filter(op => op.type === 'project').length === 1
-      && query.query.operators.every(op => ['where', 'project', 'order'].includes(op.type))
-      && query.query.operators.find(op => op.type === 'project').columns.some(column => column.name === 'DurationMs' && field(column.expression, 'DurationMs'))
-      && same(query.rows, spans.map(span => ({ DurationMs: span.DurationMs }))))
+    && queries.some(query => {
+      const inputs = metricRows.filter(row => row.Name === 'orders.duration')
+        .map(row => securityRecords(m).find(record => record.kind === 'telemetry-export' && record.rowId === row.id)?.metricInput)
+      return query !== q && queryBound(m, query, 'AppDependencies')
+        && hasWhere(query, node => comparison(node, expr => field(expr, 'Name'), '==', 'NotifyAttempt'))
+        && query.query.operators.filter(op => op.type === 'project').length === 1
+        && query.query.operators.every(op => ['where', 'project', 'order'].includes(op.type))
+        && query.query.operators.find(op => op.type === 'project').columns.some(column => column.name === 'DurationMs' && field(column.expression, 'DurationMs'))
+        && same(query.rows, spans.map(span => ({ DurationMs: span.DurationMs })))
+        && inputs.length === query.rows.length && inputs.every(input => input?.queryId === query.id && input.column === 'DurationMs'
+          && input.rowIndex >= 0 && input.rowIndex < query.rows.length) && new Set(inputs.map(input => input.rowIndex)).size === inputs.length
+    })
 }
 export function observabilityLab({ stage, order, title, brief, text, rationale, source, starter, behavior }) {
   const context = stage === 'context', entry = context ? 'function_app.py' : 'worker.py', mode = context ? 'functions' : 'script'

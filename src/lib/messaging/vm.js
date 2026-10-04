@@ -46,7 +46,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
-  const unbox = value => ['bodytext', 'configvalue'].includes(info(value)?.type) ? info(value).value : value
+  const unbox = value => ['bodytext', 'configvalue', 'querynumber'].includes(info(value)?.type) ? info(value).value : value
   const callable = (name, owner) => handle('callable', { name, owner })
   const readonlyProperties = value => {
     const copy = clone(value)
@@ -130,7 +130,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function string(value, loc) {
     security?.guard(value, loc)
-    if (!info(value) || ['configvalue', 'bodytext', 'bytes'].includes(info(value)?.type)) telemetry?.guard(unbox(value), loc, 'payload')
+    if (!info(value) || ['configvalue', 'bodytext', 'bytes', 'querynumber'].includes(info(value)?.type)) telemetry?.guard(unbox(value), loc, 'payload')
+    if (info(value)?.type === 'querynumber') value = unbox(value)
     const object = info(value)
     if (['bodytext', 'configvalue'].includes(object?.type)) return object.value
     if (object?.type === 'receipt') return object.record.body
@@ -371,6 +372,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     const a = bindArguments(names, required, args, kwargs, loc, positionalLimit)
     const instrumented = telemetry?.call(name, owner, a, loc)
     if (instrumented?.handled) return instrumented.value
+    // Telemetry observes the original private numeric cell before ordinary SDK
+    // scalar consumers receive its number. No provenance crosses serialization.
+    for (const key of Object.keys(a)) if (info(a[key])?.type === 'querynumber') a[key] = unbox(a[key])
     const secured = security?.call(name, owner, a, loc)
     if (secured?.handled) return secured.value
     // Only scalar consumers normalize. json.loads still sees the receive binding;
@@ -553,7 +557,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       case 'attribute': return attribute(evaluate(node.object, env), node.name, node.loc)
       case 'call': return call(evaluate(node.callee, env), node.args.map(arg => evaluate(arg, env)), Object.fromEntries(Object.entries(node.kwargs).map(([name, value]) => [name, evaluate(value, env)])), node.loc)
       case 'unary': {
-        const value = evaluate(node.value, env)
+        const value = unbox(evaluate(node.value, env))
         if (node.op === 'not') return !truth(value)
         if (!Number.isSafeInteger(value)) fail('Unary arithmetic requires an integer.', node.loc)
         return node.op === '-' ? -value : value

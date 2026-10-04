@@ -132,6 +132,11 @@ never wall-clock latency, network timing, production performance or Azure SLA.
 KQL is evaluated over actual exported rows with typed query receipts. A print or
 constant total cannot establish aggregate lineage. Re-running appends telemetry;
 reset for a fresh one-command exercise. No seeded telemetry proves completion.
+For query-derived histogram credit, pass the returned numeric DurationMs cell
+directly to record(). Assignments preserve its private query/row/column linkage.
+Arithmetic and string/JSON serialization produce ordinary values and lose that
+direct-cell linkage. Public query returns remain ordinary JSON numbers. Literal
+metric values are supported, but do not establish query-derived consumption.
 `, worker)
   if (context) {
     files['README.md'] = files['README.md'].replace('Save worker.py and run python worker.py', 'Save function_app.py and run func start')

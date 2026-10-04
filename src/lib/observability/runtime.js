@@ -28,8 +28,10 @@ export function createTelemetrySession(context) {
     return value
   }
   function attributes(value, loc) {
-    const result = value == null ? {} : value
+    let result = value == null ? {} : value
     guard(result, loc)
+    if (securityObject(result)) result = Object.fromEntries(Object.entries(result).map(([key, item]) =>
+      [key, info(item)?.type === 'querynumber' ? info(item).value : item]))
     if (!validTelemetryProperties(result) || Object.keys(result).length > 32) fail('Telemetry supports at most 32 safe scalar attributes.', loc, 'MESSAGING_LIMIT')
     return structuredClone(result)
   }
@@ -38,7 +40,7 @@ export function createTelemetrySession(context) {
     const id = (BigInt(state().nextId) * 1000n + BigInt(++serial)).toString(16).padStart(16, '0')
     return { id, operationId: parent?.operationId ?? ('a'.repeat(16) + id), parentId: parent?.id ?? null }
   }
-  function exported(fields, span, loc) {
+  function exported(fields, span, loc, metricInput) {
     required(loc)
     const before = state(), id = `telemetry-${before.telemetry.length + 1}`
     const row = { id, TimeGenerated: new Date(TELEMETRY_EPOCH_MS + before.timeMs).toISOString(), OperationId: span.operationId, ParentId: span.id,
@@ -47,7 +49,8 @@ export function createTelemetrySession(context) {
     // Fields may override ParentId for actual span rows, but never simulator properties.
     row.Properties = { ...fields.Properties, 'trainer.simulated': true, 'trainer.timing': 'logical-operation-cost' }
     const record = { id: `so-${before.nextId}`, timeMs: before.timeMs, kind: 'telemetry-export', rowId: id,
-      destination: TELEMETRY_DESTINATION, operationId: row.OperationId, spanId: row.Id ?? row.ParentId }
+      destination: TELEMETRY_DESTINATION, operationId: row.OperationId, spanId: row.Id ?? row.ParentId,
+      ...(metricInput ? { metricInput } : {}) }
     const next = { ...before, nextId: before.nextId + 1, records: [...before.records, record], telemetry: [...before.telemetry, row] }
     if (!validateSecurityObservabilityState(next)) fail('Telemetry rows exceed the bounded schema or journal capacity.', loc, 'MESSAGING_LIMIT')
     update(next)
@@ -97,6 +100,8 @@ export function createTelemetrySession(context) {
     },
     call(name, owner, args, loc) {
       if (!Object.hasOwn(TELEMETRY_SIGNATURES, name)) return { handled: false }
+      const amountCell = info(args.amount)
+      args = Object.fromEntries(Object.entries(args).map(([key, value]) => [key, info(value)?.type === 'querynumber' ? info(value).value : value]))
       const result = value => ({ handled: true, value })
       if (name === 'query_telemetry') {
         guard(args.query, loc)
@@ -111,8 +116,11 @@ export function createTelemetrySession(context) {
         try { fields = evaluateTelemetryQuery(query, state()) }
         catch { fail('The bounded KQL query exceeds evaluation limits.', loc, 'KQL_LIMIT') }
         guard(fields, loc)
-        record(fields, loc)
-        return result({ rows: structuredClone(fields.rows) })
+        const receipt = record(fields, loc)
+        // Only direct numeric cells retain private consumption provenance.
+        // The authoritative receipt and public JSON remain ordinary numbers.
+        return result({ rows: structuredClone(fields.rows).map((row, rowIndex) => Object.fromEntries(Object.entries(row).map(([column, value]) =>
+          [column, typeof value === 'number' && Number.isFinite(value) ? handle('querynumber', { value, queryId: receipt.id, rowIndex, column }) : value]))) })
       }
       if (name === 'configure_azure_monitor') {
         if (configured || args.connection_string !== TRAINER_CONNECTION_STRING) fail('Use the single pre-provisioned ai-orders trainer connection string.', loc, 'MESSAGING_CONFIG')
@@ -176,7 +184,8 @@ export function createTelemetrySession(context) {
       }
       if (!Number.isFinite(args.amount) || args.amount < 0) fail('Metric measurements must be finite nonnegative numbers.', loc, 'MESSAGING_CONFIG')
       exported({ table: 'AppMetrics', Name: info(owner).name, Sum: args.amount, Min: args.amount, Max: args.amount, Count: 1,
-        Properties: attributes(args.attributes, loc) }, active ?? nextContext(null), loc)
+        Properties: attributes(args.attributes, loc) }, active ?? nextContext(null), loc,
+      amountCell?.type === 'querynumber' ? { queryId: amountCell.queryId, rowIndex: amountCell.rowIndex, column: amountCell.column } : undefined)
       return result(null)
     },
     operation(name, perform, loc) {
