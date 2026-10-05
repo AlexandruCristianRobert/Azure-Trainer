@@ -186,6 +186,17 @@ acceptance. Document these distinct transactional teaching boundaries.
 
 ## State, evidence and bounds
 
+HTTP-profile expressions combining an unparenthesized leading `not` with
+`and`/`or` fail closed with explicit guidance; parentheses or separate `if`
+statements avoid the bounded parser's ambiguity. Legacy profiles are unchanged.
+Actual input validation categories are recorded as a value-free `inputClass`
+derived only by the trusted host and mirrored in Request and Invocation.
+Distinct rejected categories plus a valid learner response are required by the
+validation Lab; repeated malformed input alone cannot complete it. Classification
+does not validate on the learner's behalf or produce an automatic response.
+Raw bodies, keys and hashes are not persisted. Journal equality catches ordinary
+single-copy category edits, not coherent wholesale rewriting of browser storage.
+
 HTTP extension version1 has nextId, localHosts, deployments, accepted and
 requests, plus currentLocal/currentPublished app-to-capture ID maps. The host
 and deployment arrays retain historical snapshots separately from current

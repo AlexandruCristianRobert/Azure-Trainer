@@ -237,6 +237,19 @@ failure as documented, and no staged binding acceptance on enqueue failure.
 `seedHttpStage(run,stage)`, `httpProjectFiles(stage)`, DTO metadata selectors,
 starter/Solution constants and provided `HTTP_WORKER_SOURCE`.
 
+**Approved prerequisite refinement:** HTTP-only parser fails closed on ambiguous
+unparenthesized `not` combined with `and`/`or`; explicit parentheses or separate
+`if` statements remain supported and the limitation is documented. The existing
+legacy profiles are unchanged. A trusted host-derived value-free `inputClass`
+is mirrored in Request and Invocation, with exact closed enum validation and
+matching journal linkage. It distinguishes actual invalid-input categories
+without retaining raw bodies, keys or hashes; it never supplies a response or
+validation success. Semantic graders require distinct rejected categories plus
+a genuine valid branch, not repeated copies of one malformed input. Minimal
+contracts/state/parser/execute/evidence hooks and impacted pure fixture fields
+are in this Task's reviewed scope. Coherent wholesale browser-storage rewriting
+is outside the simulator's noncryptographic provenance guarantees.
+
 - [ ] RED one Solution replay per Lab, unfinished baselines/persistence loop;
   compact unused-read, invalid-but-enqueued, literal202 and duplicate source
   negatives. Exact IDs start/status/validation/enqueue/retries with http-functions-
