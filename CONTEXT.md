@@ -64,6 +64,18 @@ _Avoid_: Chat log, Transcript, Memory
 The shared business example in the Messaging and Security and Observability Learning Journeys, in which orders are accepted and their processing is coordinated across application components. Successive Labs develop, secure and observe this same example.
 _Avoid_: Knowledge Assistant, unrelated per-Lab demo
 
+**Order API**:
+The HTTP-facing interface through which callers interact with the Order Processing Application. It is distinct from the background components that process queued orders and route their completion events.
+_Avoid_: New application, notification worker, unrelated API demo
+
+**Order Status**:
+The current progress of a submitted order through the Order Processing Application. Acceptance for processing is distinct from successful completion of processing.
+_Avoid_: HTTP status code, response code, notification delivery status
+
+**Order Status Repository**:
+The supplied application component that exposes actual Order Status independently of an HTTP handler's lifetime. It is the Order API's source of processing progress, rather than a canned response.
+_Avoid_: Process-global dictionary, hardcoded status, new database journey
+
 **Response Cache**:
 Stored answers reused only when a new request has exactly the same normalized question and filters.
 _Avoid_: Semantic Cache, Output cache
