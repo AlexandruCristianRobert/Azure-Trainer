@@ -4,6 +4,7 @@ import { seedHttpStage } from './seeds.js'
 
 const healthy = m => httpRequest(m)?.method === 'GET' && httpRequest(m).path === '/api/health'
   && httpRequest(m).response.statusCode === 200 && httpBody(m)?.status === 'ok'
+  && (httpRequest(m).response.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase() === 'application/json'
   && !!httpInvocation(m)?.functionId && httpNoSend(m)
 const task = httpTask({ id: 'local-http-health',
   text: 'In function_app.py, keep the Python v2 FunctionApp and register GET health with @app.route. Return a JSON HttpResponse containing status ok and application/json. Save, run func start to capture the saved project, then curl -i http://localhost:7071/api/health. Inspect the response. The supplied app/storage/broker are prerequisites; no host or HTTP evidence is prepared.',

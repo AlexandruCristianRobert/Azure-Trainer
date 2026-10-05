@@ -74,6 +74,19 @@ describe('guided HTTP API construction', () => {
     expect(evaluateLab(lab, deserializeRun(serializeRun(stale), lab)).isComplete).toBe(false)
   })
 
+  it('does not credit text/plain health JSON and accepts application/json with a charset', async () => {
+    const { HTTP_BASIC_LABS } = await load(), lab = HTTP_BASIC_LABS[0]
+    for (const [mimetype, complete] of [['text/plain', false], ['application/json; charset=utf-8', true]]) {
+      const source = lab.tasks[0].solution.steps[0].content.replace('mimetype="application/json"', `mimetype="${mimetype}"`)
+      const { run, responses } = replay(lab, source)
+      expect(responses[0].statusCode).toBe(200)
+      expect(JSON.parse(responses[0].body)).toEqual({ status: 'ok' })
+      expect(responses[0].headers['content-type']).toBe(mimetype)
+      expect(evaluateLab(lab, run).isComplete, mimetype).toBe(complete)
+      expect(evaluateLab(lab, deserializeRun(serializeRun(run), lab)).isComplete, mimetype).toBe(complete)
+    }
+  })
+
   it('does not credit an unused status read followed by a matching literal', async () => {
     const { HTTP_BASIC_LABS } = await load(), lab = HTTP_BASIC_LABS[1]
     const source = lab.tasks[0].solution.steps[0].content.replace('json.dumps({"id":record.id,"status":record.status})', '\'{"id":"o1","status":"pending"}\'')
