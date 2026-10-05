@@ -187,7 +187,10 @@ acceptance. Document these distinct transactional teaching boundaries.
 ## State, evidence and bounds
 
 HTTP extension version1 has nextId, localHosts, deployments, accepted and
-requests. Captures store reached sources/versions/routes and are capped at
+requests, plus currentLocal/currentPublished app-to-capture ID maps. The host
+and deployment arrays retain historical snapshots separately from current
+selection; replacing an active capture does not delete its referenced sources.
+Captures store reached sources/versions/routes and logical createdAtMs, and are capped at
 16 across scopes. Accepted records <=50, requests <=100, exact ordered IDs and
 finite values; total extension <=256 KiB. Captured sources per host <=64 KiB,
 request URL <=2048 chars, raw body/response <=16 KiB, headers/query/route params
@@ -199,6 +202,9 @@ Each request receipt identifies actual app/capture scope+generation, canonical
 method/path, masked authorization result, operation/read IDs, actual response,
 linked send/worker receipt IDs and command snapshot boundaries. Caller effects
 contain intent only, never success flags, records or authoritative principal.
+Accepted-send ownership is derived from these request references and the one
+execution journal; admission and grading must check the same app, capture
+generation, invocation and command, not merely the existence of a send trace.
 Relevant file/resource/capture generations stale proof, including change/revert;
 unrelated README edits do not. Restore rejects altered response, accepted payload,
 auth metadata, read-consumption links, broker linkage and crossed command

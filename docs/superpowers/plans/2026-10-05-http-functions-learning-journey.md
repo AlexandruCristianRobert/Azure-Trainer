@@ -70,18 +70,22 @@ IDs derive actual Sandbox helpers. No action supplies principal, auth success,
 receipt/proof or caller-chosen state. New HTTP mode is `http-handler`.
 
 `runtime.messaging.httpFunctions` optional extension:
-`{version:1,nextId:1,localHosts:[],deployments:[],accepted:[],requests:[]}`.
+`{version:1,nextId:1,localHosts:[],deployments:[],currentLocal:{},currentPublished:{},accepted:[],requests:[]}`.
 Absent stays absent for old saves; explicit null invalid. Unique capture/
-acceptance/request IDs hc-N/ha-N/hr-N use nextId; captures retained <=16,
+acceptance/request IDs http-capture-N/http-accepted-N/http-request-N use nextId; captures retained <=16,
 accepted <=50, requests <=100, total256 KiB. Capture source<=64 KiB each;
 URL2048chars, raw request/response16 KiB, maps<=32 entries.
 
-Capture: actual appId, local/cloud scope, generation, reached sources and file
-versions, typed routes, logical createdAtMs. Replacing active capture retains
+Capture: actual appId, local/published scope, generation, reached sources and file
+versions, typed routes, logical createdAtMs. Current app-to-capture ID maps select
+active snapshots separately from retained capture arrays. Replacing active capture retains
 history up to bound, never silently evicts referenced source. Accepted record:
-actual appId/target/canonical order, real messageRecordIds, owning requestId and
-logical acceptedAtMs. Request record: app/capture+generation, canonical request
-method/path, safe input metadata, key ID/auth outcome (never key value), operations
+actual appId/target/canonical order, real message/send receipt IDs and
+logical acceptedAtMs. Owning invocation is derived from request sendReceiptIds
+and the authoritative execution journal, never supplied by caller intent.
+Task3 must enforce app, scope, capture generation and command boundaries before
+admission or HTTP credit. Request record: app/scope+generation, canonical request
+method/decoded path, safe input metadata, auth outcome (never key value), operations
 and consumed read IDs, actual public response, genuine broker links, command
 sequence boundaries. Exact final DTO schemas belong to state.js; handoff report
 must publish them for later tasks before those tasks start.
