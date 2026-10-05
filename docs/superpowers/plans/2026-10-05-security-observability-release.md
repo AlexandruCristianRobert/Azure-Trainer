@@ -75,6 +75,12 @@ cost of being wrong; no decision is silently discarded with local scratch.
     ID, keeping production preflight and assertions intact. Cost: concealing a
     real manifest compatibility regression; the focused real-manifest Functions
     checks and unchanged Data/Messaging compatibility checks remain passing.
+16. Treat the deployment-discovered Event Grid fixture mismatch as a narrow
+    post-merge compatibility repair, not a reopened whole-branch fix wave. Supply
+    or preserve the Python manifest in five existing fixture shapes; assertions
+    and production validation remain unchanged. Cost: hiding a real manifest
+    contract regression; named RED and owning-file 18/18 GREEN plus independent
+    static review verify the legitimate fixture correction.
 
 ## Deferred review items
 
@@ -114,3 +120,15 @@ No AKS/Container Apps/full/cloud/browser suite was run. The subsequent change
 recording these results modifies only this release document, not tested code.
 Publication is through the existing main-branch Pages workflow; consult its
 commit-linked result and the live site for deployment evidence.
+
+### First deployment attempt and fixture correction
+
+Pages run 37271610116 stopped at one of 217 focused Messaging checks (216 passed);
+the Data checks passed. A handmade Event Grid test project omitted its manifest,
+selecting the default .NET protected scaffold before execution. Commit c7ae39b
+corrects only five fixture substitutions within that existing test. All assertions
+and source programs are unchanged; production and workflow code are untouched.
+Named RED reproduced the failure; owning-file GREEN passed 18/18, with all
+captured repair attempts totaling 11.719 seconds. Independent static review
+approved it. The first CI job ran 22 seconds and did not reach deployment.
+The corrected candidate will be retried through the unchanged Pages workflow.
