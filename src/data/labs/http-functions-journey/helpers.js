@@ -37,7 +37,7 @@ export function httpStatusRead(measurement, status, id = 'o1') {
   const read = invocation.reads.find(row => row.kind === 'repository' && row.orderId === id)
   if (status === null) return read?.found === false && read.record === null && request.response.statusCode === 404
   return request.response.statusCode === 200 && read?.found === true && read.record.status === status
-    && exactOrder(httpBody(measurement), { id, status })
+    && httpJsonResponse(measurement) && exactOrder(httpBody(measurement), { id, status })
     && ['id', 'status'].every(field => invocation.consumedFields.some(row => row.readId === read.id && row.field === field))
 }
 export function httpAcceptedSend(measurement, order = HTTP_ORDER, kind = 'sdk-send') {
@@ -46,7 +46,7 @@ export function httpAcceptedSend(measurement, order = HTTP_ORDER, kind = 'sdk-se
   const operation = invocation?.operations[0]
   return request?.method === 'POST' && request.path === '/api/orders' && request.response.statusCode === 202
     && request.response.headers.location === `/api/orders/${order.id}`
-    && exactOrder(httpBody(measurement), { id: order.id, status: 'pending' })
+    && httpJsonResponse(measurement) && exactOrder(httpBody(measurement), { id: order.id, status: 'pending' })
     && exactOrder(invocation.requestOrder, order) && invocation.operations.length === 1 && operation.kind === kind
     && accepted.length === 1 && accepted[0].id === operation.acceptedId && exactOrder(accepted[0].order, order)
     && accepted[0].sendReceiptId === operation.sendReceiptId && accepted[0].target.queue === ORDERS_TARGET.queue
@@ -65,7 +65,7 @@ export function httpRetryRead(measurement, statusCode, status = 'pending', order
   if (!read || !exactOrder({ id: read.record.id, region: read.record.region, quantity: read.record.quantity }, HTTP_ORDER)) return false
   if (statusCode === 409) return read.record.quantity !== order.quantity || read.record.region !== order.region
   return read.record.status === status && request.response.headers.location === `/api/orders/${order.id}`
-    && exactOrder(httpBody(measurement), { id: order.id, status })
+    && httpJsonResponse(measurement) && exactOrder(httpBody(measurement), { id: order.id, status })
     && ['id', 'status'].every(field => invocation.consumedFields.some(row => row.readId === read.id && row.field === field))
 }
 

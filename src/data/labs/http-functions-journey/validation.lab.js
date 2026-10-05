@@ -1,5 +1,5 @@
 import { HTTP_SOLUTION_SOURCES, httpProjectFiles } from '../../templates/http-functions-python/api.js'
-import { httpTask, httpLab, file, command, httpPost, httpRequest, httpInvocation, httpBody, httpNoSend, exactOrder, HTTP_ORDER } from './helpers.js'
+import { httpTask, httpLab, file, command, httpPost, httpRequest, httpInvocation, httpBody, httpNoSend, httpJsonResponse, exactOrder, HTTP_ORDER } from './helpers.js'
 import { seedHttpStage } from './seeds.js'
 
 export const HTTP_INVALID_BODIES = Object.freeze(['{', [],
@@ -12,7 +12,7 @@ export const HTTP_INVALID_CLASSES = Object.freeze(['malformed', 'nonobject', 'fi
   'quantity-bool', 'quantity-type', 'quantity-fraction', 'quantity-range'])
 const valid = m => httpRequest(m)?.method === 'POST' && httpRequest(m).path === '/api/orders'
   && httpRequest(m).response.statusCode === 200 && exactOrder(httpInvocation(m)?.requestOrder, HTTP_ORDER)
-  && exactOrder(httpBody(m), HTTP_ORDER) && httpNoSend(m)
+  && httpJsonResponse(m) && exactOrder(httpBody(m), HTTP_ORDER) && httpNoSend(m)
 const invalid = m => httpRequest(m)?.method === 'POST' && httpRequest(m).path === '/api/orders'
   && !!httpInvocation(m)?.functionId && httpRequest(m).response.statusCode === 400
   && httpRequest(m).authorization !== 'denied' && HTTP_INVALID_CLASSES.includes(httpInvocation(m).inputClass)

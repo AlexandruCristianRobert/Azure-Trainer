@@ -46,6 +46,34 @@ describe('bounded Python HTTP session', () => {
     }
     expect(run(body, { method: 'POST', raw: '{"quantity":2}' }).value.statusCode).toBe(202)
   })
+  it('alternate JSON parsing catches malformed request bytes as ValueError', () => {
+    const body = 'try:\n    order = json.loads(req.get_body().decode())\nexcept ValueError:\n    return func.HttpResponse("bad JSON", status_code=400)\nreturn func.HttpResponse(json.dumps(order), mimetype="application/json")'
+    const malformed = run(body, { method: 'POST', raw: '{' })
+    expect(malformed.diagnostics).toEqual([])
+    expect(malformed.value).toMatchObject({ statusCode: 400, body: 'bad JSON' })
+    expect(malformed.trace).toEqual([])
+    const valid = run(body, { method: 'POST', raw: JSON.stringify(order) })
+    expect(valid.diagnostics).toEqual([])
+    expect(JSON.parse(valid.value.body)).toEqual(order)
+  })
+  it.each([
+    ['privacy', 'json.loads(req.get_body().decode())', '{"password":"hidden"}', {}, 'HTTP_PRIVACY'],
+    ['limit', 'json.loads(req.get_body().decode())', 'a'.repeat(64), { valueBytes: 32 }, 'MESSAGING_LIMIT'],
+    ['unsupported', 'json.loads(req.get_body().decode("ascii"))', '{}', {}, 'MESSAGING_UNSUPPORTED'],
+    ['argument type', 'json.loads(1)', '{}', {}, 'MESSAGING_RUNTIME'],
+  ])('alternate JSON parsing does not catch %s errors as ValueError', (_name, expression, raw, limits, code) => {
+    const result = run(`try:\n    order = ${expression}\nexcept ValueError:\n    return func.HttpResponse("caught", status_code=400)\nreturn func.HttpResponse("ok")`, { method: 'POST', raw, limits })
+    expect(result.value).toBeNull()
+    expect(result.diagnostics[0].code).toBe(code)
+    expect(result.diagnostics[0].errorType).toBeUndefined()
+  })
+  it('alternate JSON parsing preserves the legacy malformed JSON diagnostic', () => {
+    const parsed = parseMessagingProject({ 'producer.py': 'import json\ndef main():\n    return json.loads("{")\n' }, { entry: 'producer.py' })
+    expect(parsed.diagnostics).toEqual([])
+    const result = executeMessagingProgram({ program: parsed.program, state: emptyMessagingState(), sandbox: fixture() })
+    expect(result.diagnostics[0]).toMatchObject({ code: 'MESSAGING_RUNTIME', message: 'Invalid JSON payload.' })
+    expect(result.diagnostics[0].errorType).toBeUndefined()
+  })
   it('retains only consumed repository and environment field read IDs through JSON', () => {
     const sent = applyServiceBusOperation(emptyMessagingState(), fixture(), { kind: 'send', target, message: { body: JSON.stringify(order), messageId: 'o1', properties: {} } })
     const result = run('record = store.get(req.route_params["id"])\nreturn func.HttpResponse(json.dumps({"id":record.id,"status":record.status,"env":os.getenv("ENVIRONMENT")}), mimetype="application/json")', { state: sent.state, settings: { ENVIRONMENT: 'local' } })

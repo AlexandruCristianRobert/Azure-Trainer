@@ -150,6 +150,17 @@ describe('guided HTTP hosting, access and output binding', () => {
     expect(evaluateLab(lab, run).isComplete).toBe(false)
   })
 
+  it('one canonical unauthorized POST plus authorized acceptance and local retry earns key proof', async () => {
+    const { HTTP_HOSTING_LABS } = await load(), lab = HTTP_HOSTING_LABS[1]
+    const { run, responses } = replay(lab, step => step.kind === 'command'
+      && step.line.includes('deliberately-wrong-demo-key') ? null : step)
+    expect(responses.map(row => row.statusCode)).toEqual([401, 202, 200])
+    expect(run.runtime.messaging.httpFunctions.requests.map(row => row.authorization)).toEqual(['denied', 'granted', 'not-required'])
+    expect(messages(run)).toHaveLength(1)
+    expect(evaluateLab(lab, run).isComplete).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run), lab)).isComplete).toBe(true)
+  })
+
   it('failed output flush produces 503 with no acceptance or queue message', async () => {
     const { HTTP_HOSTING_LABS } = await load(), lab = HTTP_HOSTING_LABS[2]
     let run = createBehavioralRun(lab, { attemptId: 'failed-flush' })

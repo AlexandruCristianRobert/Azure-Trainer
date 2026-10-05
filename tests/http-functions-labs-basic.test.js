@@ -87,6 +87,30 @@ describe('guided HTTP API construction', () => {
     }
   })
 
+  it.each([[1, 'status'], [2, 'validation'], [3, 'enqueue'], [4, 'retries']])('requires JSON MIME for %s %s successful responses and accepts charset', async (index) => {
+    const { HTTP_BASIC_LABS } = await load(), lab = HTTP_BASIC_LABS[index]
+    const { httpAcceptedSend, httpStatusRead, httpRetryRead } = await import('../src/data/labs/http-functions-journey/helpers.js')
+    for (const [mimetype, complete] of [['text/plain', false], ['application/json; charset=utf-8', true]]) {
+      const source = lab.tasks[0].solution.steps[0].content.replaceAll('mimetype="application/json"', `mimetype="${mimetype}"`)
+      const { run, responses } = replay(lab, source)
+      expect(responses.map(row => row.statusCode)).toEqual(statuses[index])
+      const successes = responses.filter(row => row.statusCode < 400)
+      expect(successes.length).toBeGreaterThan(0)
+      for (const response of successes) {
+        expect(response.headers['content-type']).toBe(mimetype)
+        expect(JSON.parse(response.body)).toBeTypeOf('object')
+      }
+      for (const receipt of run.runtime.messaging.executionReceipts.filter(row => row.mode === 'http-handler' && row.measurements.httpFunctions.requests.length === 1)) {
+        const measurement = receipt.measurements, request = measurement.httpFunctions.requests[0]
+        if (request.method === 'POST' && request.response.statusCode === 202) expect(httpAcceptedSend(measurement)).toBe(complete)
+        if (request.method === 'GET' && request.response.statusCode === 200) expect(httpStatusRead(measurement, JSON.parse(request.response.body).status)).toBe(complete)
+        if (index === 4 && request.method === 'POST' && request.response.statusCode === 200) expect(httpRetryRead(measurement, 200)).toBe(complete)
+      }
+      expect(evaluateLab(lab, run).isComplete, mimetype).toBe(complete)
+      expect(evaluateLab(lab, deserializeRun(serializeRun(run), lab)).isComplete, mimetype).toBe(complete)
+    }
+  })
+
   it('does not credit an unused status read followed by a matching literal', async () => {
     const { HTTP_BASIC_LABS } = await load(), lab = HTTP_BASIC_LABS[1]
     const source = lab.tasks[0].solution.steps[0].content.replace('json.dumps({"id":record.id,"status":record.status})', '\'{"id":"o1","status":"pending"}\'')

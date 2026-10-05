@@ -522,7 +522,11 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         const order = jsonValue(JSON.parse(source), loc)
         if (body?.record && order && typeof order === 'object') orderOrigins.set(order, body.record)
         return order
-      } catch (error) { if (error.diagnostic) throw error; fail('Invalid JSON payload.', loc) }
+      } catch (error) {
+        if (error.diagnostic) throw error
+        fail('Invalid JSON payload.', loc, 'MESSAGING_RUNTIME',
+          program.profile === HTTP_PROFILE && error instanceof SyntaxError ? { errorType: 'ValueError' } : {})
+      }
     }
     if (name === 'str') {
       const object = info(a.object)

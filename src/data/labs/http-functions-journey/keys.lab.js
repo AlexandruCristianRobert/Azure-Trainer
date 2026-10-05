@@ -15,9 +15,9 @@ const granted = measurement => httpRequest(measurement)?.scope === 'published'
   && httpRequest(measurement).authorization === 'granted' && !!httpInvocation(measurement)?.keyId
   && httpJsonResponse(measurement) && httpAcceptedSend(measurement)
 const task = httpTask({ id: 'protect-published-orders',
-  text: 'Set auth_level=func.AuthLevel.FUNCTION on the POST orders route, preserving supplied validation, retry, settings and status behavior. Save, capture the local host and publish func-orders. Submit the same valid order to the published route with no key, then a deliberately wrong dummy header: both must return 401 before repository reads or queue work. Use the supplied demo-only x-functions-key header from the hidden Solution for one accepted 202. Submit the same body locally with no key: ordinary local Core Tools authentication is disabled and the actual accepted record returns 200 without another send. Inspect value-free authorization outcomes; do not put keys in response bodies or explanation prompts.',
+  text: 'Set auth_level=func.AuthLevel.FUNCTION on the POST orders route, preserving supplied validation, retry, settings and status behavior. Save, capture the local host and publish func-orders. Demonstrate one unauthorized published POST of the valid o1/EU/2 order, using no key or a deliberately wrong dummy header: it must return 401 before repository reads or queue work. The Solution shows both denial examples, but only one canonical unauthorized submission is required for completion. Use the supplied demo-only x-functions-key header from the hidden Solution for one accepted 202. Submit the same body locally with no key: ordinary local Core Tools authentication is disabled and the actual accepted record returns 200 without another send. Inspect value-free authorization outcomes; do not put keys in response bodies or explanation prompts.',
   rationale: { concept: 'Function-level access at the published host boundary',
-    what: 'Protects a published route with a dummy function-key header before handler execution, then contrasts ordinary local host behavior.',
+    what: 'Demonstrates one canonical unauthorized published submission blocked before handler execution, genuine authorized acceptance, and a keyless local retry. Missing and wrong headers are walkthrough examples of the same value-free denied outcome.',
     why: 'The Order API must make its chosen access boundary explicit before accepting broker work.',
     without: 'An anonymous published route permits the submission regardless of the header; a handler-side response label does not prove authorization blocked effects.',
     csharp: 'A C# isolated worker uses [HttpTrigger(AuthorizationLevel.Function, "post", Route = "orders")]. Python v2 uses func.AuthLevel.FUNCTION on @app.route. Ordinary Core Tools local execution disables key enforcement; this browser model supports only the authored header-key boundary, not identity/RBAC or secret management.' },
@@ -26,7 +26,7 @@ const task = httpTask({ id: 'protect-published-orders',
     httpCloudPost(HTTP_ORDER), httpCloudPost(HTTP_ORDER, 'deliberately-wrong-demo-key'),
     httpCloudPost(HTTP_ORDER, HTTP_INPUT.httpFunctions.functionKeys[0].value), httpPost(HTTP_ORDER)] },
   currentCheck: localReuse,
-  episodeCheck: (observations, context) => observations.filter(denied).length >= 2 && observations.some(granted)
+  episodeCheck: (observations, context) => observations.some(denied) && observations.some(granted)
     && observations.some(localReuse) && context.runtime.messaging.httpFunctions?.accepted.length === 1,
 })
 export const httpKeysLab = httpLab({ stage: 'keys', order: 7, title: 'Simulated: Protect published orders with a function key',
