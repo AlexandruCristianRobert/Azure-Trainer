@@ -8,6 +8,7 @@ import { deleteFunctionResourcesInGroup } from './functions.js'
 import { deleteEventGridTopicsInGroup } from './eventgrid.js'
 import { deleteRegistriesInGroup } from './registry.js'
 import { deleteIdentitiesInGroup } from './identity.js'
+import { deleteAppConfigurationsInGroup } from './appconfiguration.js'
 import { deleteFoundryAccountsInGroup } from './foundry.js'
 import { deleteAksClustersInGroup } from './aks.js'
 
@@ -105,6 +106,7 @@ export function deleteResourceGroup(sb, { name }) {
   next.postgresServers = (next.postgresServers ?? []).filter(server => server.resourceGroup.toLowerCase() !== name.toLowerCase())
   next.redisClusters = (next.redisClusters ?? []).filter(cluster => cluster.resourceGroup.toLowerCase() !== name.toLowerCase())
   next = deleteKeyVaultsInGroup(next, name)
+  next = deleteAppConfigurationsInGroup(next, name)
   next = deleteFunctionResourcesInGroup(next, name)
   next = deleteEventGridTopicsInGroup(next, name)
   next = deleteRegistriesInGroup(next, name)

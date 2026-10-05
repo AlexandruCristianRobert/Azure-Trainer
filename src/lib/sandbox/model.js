@@ -1,5 +1,6 @@
 import { normalizeLocation } from './locations.js'
 import { isValidEventGridWebhookEndpoint, parseEventGridFunctionEndpoint, parseEventGridDeadLetterDestination, validRetryValue, validBlobContainer } from './eventgrid-validation.js'
+import { validAppConfigurationStores } from './appconfiguration.js'
 
 export const SUBSCRIPTION_ID = '7f3c9a2e-4b81-4d6a-9c05-2e8f5b1d4a37'
 export const SUBSCRIPTION_NAME = 'Sandbox'
@@ -18,7 +19,7 @@ export const POSTGRES_SKUS = {
 }
 
 export function createSandbox() {
-  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], postgresServers: [], redisClusters: [], keyVaults: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
+  return { resourceGroups: [], namespaces: [], storageAccounts: [], functionApps: [], containerAppEnvironments: [], containerApps: [], containerRegistries: [], managedIdentities: [], roleAssignments: [], foundryAccounts: [], cosmosAccounts: [], postgresServers: [], redisClusters: [], keyVaults: [], appConfigurationStores: [], eventGridTopics: [], aksClusters: [], defaults: { group: null, location: null } }
 }
 
 function object(value) {
@@ -262,24 +263,25 @@ const ROLE_NAMES = {
 }
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 
-function validKeyVaultRoleAssignment(assignment, vault) {
+function validKeyVaultRoleAssignment(assignment, vault, sandbox) {
   const roleName = ROLE_NAMES[String(assignment?.roleDefinitionId).toLowerCase()]
   return object(assignment)
     && typeof assignment.id === 'string' && UUID_RE.test(assignment.id)
-    && assignment.principalId === USER_OBJECT_ID && assignment.principalType === 'User'
+    && (assignment.principalId === USER_OBJECT_ID && assignment.principalType === 'User'
+      || assignment.principalType === 'ServicePrincipal' && sandbox.managedIdentities?.some(identity => identity.principalId === assignment.principalId))
     && roleName === assignment.roleName
     && typeof assignment.scope === 'string'
     && assignment.scope === `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${vault.resourceGroup}/providers/Microsoft.KeyVault/vaults/${vault.name}`
 }
 
-function validKeyVault(vault) {
+function validKeyVault(vault, sandbox) {
   return object(vault)
     && typeof vault.name === 'string' && KEY_VAULT_NAME_RE.test(vault.name) && typeof vault.resourceGroup === 'string'
     && typeof vault.location === 'string' && (vault.sku === 'standard' || vault.sku === 'premium')
     && vault.enableRbacAuthorization === true && typeof vault.enablePurgeProtection === 'boolean'
     && Number.isInteger(vault.softDeleteRetentionInDays) && vault.softDeleteRetentionInDays >= 7 && vault.softDeleteRetentionInDays <= 90 && tagsOrNull(vault.tags)
     && iso(vault.createdAt)
-    && Array.isArray(vault.roleAssignments) && vault.roleAssignments.every((assignment) => validKeyVaultRoleAssignment(assignment, vault))
+    && Array.isArray(vault.roleAssignments) && vault.roleAssignments.every((assignment) => validKeyVaultRoleAssignment(assignment, vault, sandbox))
     && new Set(vault.roleAssignments.map((assignment) => assignment.id)).size === vault.roleAssignments.length
     && new Set(vault.roleAssignments.map((assignment) => `${assignment.principalId.toLowerCase()}/${assignment.roleDefinitionId.toLowerCase()}/${assignment.scope.toLowerCase()}`)).size === vault.roleAssignments.length
     && Array.isArray(vault.secrets) && vault.secrets.every(validKeyVaultSecret)
@@ -287,8 +289,8 @@ function validKeyVault(vault) {
     && new Set(vault.secrets.map((secret) => secret.name.toLowerCase())).size === vault.secrets.length
 }
 
-function validKeyVaultCollection(vaults) {
-  return Array.isArray(vaults) && vaults.every(validKeyVault)
+function validKeyVaultCollection(vaults, sandbox) {
+  return Array.isArray(vaults) && vaults.every(vault => validKeyVault(vault, sandbox))
     && new Set(vaults.map((vault) => vault.name.toLowerCase())).size === vaults.length
 }
 
@@ -382,6 +384,9 @@ function validFunctionResources(sb) {
     || new Set(apps.map((app) => app.name.toLowerCase())).size !== apps.length) return false
   return apps.every((app) => {
     if (!groups.has(app.resourceGroup.toLowerCase())) return false
+    const assigned = app.userAssignedIdentityIds === undefined ? [] : app.userAssignedIdentityIds
+    if (!Array.isArray(assigned) || assigned.length > 32 || assigned.some(id => typeof id !== 'string'
+      || !sb.managedIdentities?.some(identity => identity.id === id)) || new Set(assigned).size !== assigned.length) return false
     const account = storage.find((item) => item.name.toLowerCase() === app.storageAccount.toLowerCase())
     return !!account && account.resourceGroup.toLowerCase() === app.storageResourceGroup.toLowerCase()
       && account.resourceGroup.toLowerCase() === app.resourceGroup.toLowerCase() && account.location === app.location
@@ -404,7 +409,8 @@ export function isSandboxShape(sb) {
     && (!Object.hasOwn(sb, 'postgresServers') || (Array.isArray(sb.postgresServers) && sb.postgresServers.every(server => validPostgresServer(server)
       && sb.resourceGroups.some(group => same(group.name, server.resourceGroup)))
       && new Set(sb.postgresServers.map(server => server.name)).size === sb.postgresServers.length))
-    && (!Object.hasOwn(sb, 'keyVaults') || validKeyVaultCollection(sb.keyVaults))
+    && (!Object.hasOwn(sb, 'keyVaults') || validKeyVaultCollection(sb.keyVaults, sb))
+    && (!Object.hasOwn(sb, 'appConfigurationStores') || validAppConfigurationStores(sb))
     && validFoundryAccounts(sb)
     && (!Object.hasOwn(sb, 'eventGridTopics') || validEventGridTopics(sb.eventGridTopics, sb.resourceGroups))
     && validAcaPrerequisites(sb)
@@ -428,6 +434,7 @@ export function normalizeSandbox(sb) {
   if (!Object.hasOwn(next, 'postgresServers')) next.postgresServers = []
   if (!Object.hasOwn(next, 'redisClusters')) next.redisClusters = []
   if (!Object.hasOwn(next, 'keyVaults')) next.keyVaults = []
+  if (!Object.hasOwn(next, 'appConfigurationStores')) next.appConfigurationStores = []
   if (!Object.hasOwn(next, 'eventGridTopics')) next.eventGridTopics = []
   if (!Object.hasOwn(next, 'aksClusters')) next.aksClusters = []
   if (!Object.hasOwn(next, 'containerRegistries')) next.containerRegistries = []

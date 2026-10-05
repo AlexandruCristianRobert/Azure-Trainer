@@ -8,6 +8,7 @@ import { containerappGroup } from './containerapp.js'
 import { cosmosdbGroup } from './cosmosdb.js'
 import { cosmosdbSqlGroup } from './cosmosdb-sql.js'
 import { keyvaultGroup } from './keyvault.js'
+import { appconfigGroup } from './appconfig.js'
 import { roleGroup } from './role.js'
 import { storageGroup } from './storage.js'
 import { functionappGroup } from './functionapp.js'
@@ -28,6 +29,7 @@ export function buildTree() {
     account: accountGroup,
     aks: aksGroup,
     acr: acrGroup,
+    appconfig: appconfigGroup,
     configure: configureCommand,
     containerapp: containerappGroup,
     cognitiveservices: cognitiveservicesGroup,

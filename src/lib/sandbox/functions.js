@@ -170,6 +170,36 @@ export function deleteFunctionApp(sb, { resourceGroup, name }) {
   return { sandbox: next, resource: app }
 }
 
+export function assignFunctionAppIdentity(sb, { resourceGroup, name, identities }) {
+  const app = getFunctionApp(sb, resourceGroup, name)
+  if (!Array.isArray(identities) || !identities.length || identities.length > 32) throw new AzError('InvalidArgumentValue', 'Specify 1-32 actual user-assigned identity ARM IDs.')
+  const selected = identities.map(id => (sb.managedIdentities ?? []).find(identity => typeof id === 'string' && same(identity.id, id)))
+  if (selected.some(identity => !identity)) throw new AzError('PrincipalNotFound', 'Every attached identity must exist in the Sandbox.')
+  const assigned = [...new Set([...(app.userAssignedIdentityIds ?? []), ...selected.map(identity => identity.id)])]
+  if (assigned.length > 32) throw new AzError('InvalidArgumentValue', 'An application supports at most 32 attached identities.')
+  const next = cloneSandbox(sb)
+  const resource = appByName(next, app.name)
+  resource.userAssignedIdentityIds = assigned
+  return { sandbox: next, resource }
+}
+
+export function removeFunctionAppIdentity(sb, { resourceGroup, name, identities }) {
+  const app = getFunctionApp(sb, resourceGroup, name)
+  if (!Array.isArray(identities) || !identities.length || identities.length > 32 || identities.some(id => typeof id !== 'string'))
+    throw new AzError('InvalidArgumentValue', 'Specify 1-32 attached user-assigned identity ARM IDs.')
+  if (identities.some(id => !(app.userAssignedIdentityIds ?? []).some(assigned => same(assigned, id))))
+    throw new AzError('PrincipalNotFound', 'The requested identity is not attached to this application.')
+  const next = cloneSandbox(sb)
+  const resource = appByName(next, app.name)
+  resource.userAssignedIdentityIds = (resource.userAssignedIdentityIds ?? []).filter(id => !identities.some(selected => same(selected, id)))
+  return { sandbox: next, resource }
+}
+
+export function detachIdentityFromFunctionApps(sb, identityIds) {
+  for (const app of sb.functionApps ?? []) if (app.userAssignedIdentityIds !== undefined)
+    app.userAssignedIdentityIds = app.userAssignedIdentityIds.filter(id => !identityIds.some(removed => same(removed, id)))
+}
+
 export function setFunctionAppSettings(sb, { resourceGroup, name, settings }) {
   const pairs = parseSettings(settings)
   getFunctionApp(sb, resourceGroup, name)

@@ -1,6 +1,7 @@
 import { SUBSCRIPTION_ID, USER_NAME, USER_OBJECT_ID, cloneSandbox, nowIso } from './model.js'
 import { normalizeLocation } from './locations.js'
 import { AzError } from './errors.js'
+import { validateRuntimePrincipal } from '../security/identity.js'
 
 export const SECRETS_OFFICER_ROLE_ID = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 export const SECRETS_USER_ROLE_ID = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -167,9 +168,14 @@ export function deleteKeyVaultsInGroup(sb, resourceGroup) {
   return next
 }
 
-export function resolveRolePrincipal({ assignee, assigneeObjectId, assigneePrincipalType }) {
+export function resolveRolePrincipal({ assignee, assigneeObjectId, assigneePrincipalType }, sandbox) {
   if (assignee !== undefined && assigneeObjectId !== undefined) throw new AzError('InvalidArgumentValue', 'Specify either --assignee or --assignee-object-id, not both.', { kind: 'cli' })
   const supplied = assigneeObjectId ?? assignee
+  const identity = sandbox?.managedIdentities?.find(item => typeof supplied === 'string' && same(item.principalId, supplied))
+  if (identity) {
+    if (assigneePrincipalType !== undefined && assigneePrincipalType !== 'ServicePrincipal') throw new AzError('InvalidArgumentValue', 'Managed identities require ServicePrincipal.', { kind: 'cli' })
+    return { principalId: identity.principalId, principalType: 'ServicePrincipal' }
+  }
   const known = assigneeObjectId !== undefined ? same(assigneeObjectId, USER_OBJECT_ID) : same(assignee, USER_NAME) || same(assignee, USER_OBJECT_ID)
   if (!supplied || !known) throw new AzError('PrincipalNotFound', `The principal '${supplied ?? ''}' was not found in the Sandbox.`)
   if (assigneePrincipalType !== undefined && assigneePrincipalType !== 'User') throw new AzError('InvalidArgumentValue', 'Only assignee principal type User is supported.', { kind: 'cli' })
@@ -179,13 +185,16 @@ export function resolveRolePrincipal({ assignee, assigneeObjectId, assigneePrinc
 export function createRoleAssignment(sb, { scope, role, principalId, principalType = 'User' }) {
   const vault = sb.keyVaults.find((item) => exactScope(item, scope))
   if (!vault) throw new AzError('ResourceNotFound', `The Key Vault scope '${scope}' was not found or is not a vault-level scope.`)
-  if (!same(principalId, USER_OBJECT_ID) || principalType !== 'User') throw new AzError('PrincipalNotFound', 'Only the Sandbox learner User can receive Key Vault roles.')
+  if (!(same(principalId, USER_OBJECT_ID) && principalType === 'User')
+    && !(principalType === 'ServicePrincipal' && sb.managedIdentities?.some(identity => same(identity.principalId, principalId))))
+    throw new AzError('PrincipalNotFound', 'Key Vault roles require the learner User or an actual managed identity ServicePrincipal.')
+  principalId = principalType === 'User' ? USER_OBJECT_ID : sb.managedIdentities.find(identity => same(identity.principalId, principalId)).principalId
   const roleInfo = roleFrom(role)
-  const existing = vault.roleAssignments.find((assignment) => same(assignment.principalId, USER_OBJECT_ID) && same(assignment.roleDefinitionId, roleInfo.roleDefinitionId) && exactScope(vault, assignment.scope))
+  const existing = vault.roleAssignments.find((assignment) => same(assignment.principalId, principalId) && same(assignment.roleDefinitionId, roleInfo.roleDefinitionId) && exactScope(vault, assignment.scope))
   if (existing) return { sandbox: cloneSandbox(sb), resource: cloneSandbox(existing), vault: cloneSandbox(vault), existed: true }
   const next = cloneSandbox(sb)
   const storedVault = next.keyVaults.find((item) => exactScope(item, scope))
-  const resource = { id: assignmentId(), principalId: USER_OBJECT_ID, principalType: 'User', roleName: roleInfo.roleName, roleDefinitionId: roleInfo.roleDefinitionId, scope: keyVaultId(storedVault) }
+  const resource = { id: assignmentId(), principalId, principalType, roleName: roleInfo.roleName, roleDefinitionId: roleInfo.roleDefinitionId, scope: keyVaultId(storedVault) }
   storedVault.roleAssignments.push(resource)
   return { sandbox: next, resource, vault: storedVault, existed: false }
 }
@@ -248,6 +257,22 @@ export function showSecret(sb, values) {
   const resolved = resolveSecret(sb, values, requireRead)
   if (!resolved.version.enabled) throw new AzError('SecretDisabled', `Secret '${resolved.secret.name}' version '${resolved.version.version}' is disabled.`)
   return resolved
+}
+
+/** Internal secret-bearing result; SDK consumers must keep its value private. */
+export function readSecretAsPrincipal(sb, { vaultUrl, name, version }, principal) {
+  const actual = validateRuntimePrincipal(sb, principal)
+  const match = typeof vaultUrl === 'string' && /^https:\/\/([a-z0-9-]+)\.vault\.azure\.net\/?$/i.exec(vaultUrl)
+  if (!match) throw new AzError('InvalidArgumentValue', 'Use the exact supported Key Vault HTTPS endpoint.')
+  requireSecretName(name)
+  const resolved = resolveSecret(sb, { vaultName: match[1], name, version }, vault => {
+    if (!vault.enableRbacAuthorization || !vault.roleAssignments.some(assignment => assignment.principalType === 'ServicePrincipal'
+      && same(assignment.principalId, actual.principalId) && exactScope(vault, assignment.scope)
+      && [SECRETS_USER_ROLE_ID, SECRETS_OFFICER_ROLE_ID].some(role => same(assignment.roleDefinitionId, role))))
+      throw new AzError('Forbidden', 'The application identity does not have secret read permission at this vault scope.')
+  })
+  if (!resolved.version.enabled) throw new AzError('SecretDisabled', 'The selected secret version is disabled.')
+  return { vaultUrl: `https://${resolved.vault.name}.vault.azure.net/`, name: resolved.secret.name, version: resolved.version.version, value: resolved.version.value }
 }
 
 export function listSecrets(sb, { vaultName }) {

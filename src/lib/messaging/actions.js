@@ -5,6 +5,7 @@ import { messagingMeasurements, messagingDiagnosticsExpected } from './evidence.
 import { recordVerification } from '../labEngine/evidence.js'
 import { cloneJson, isJsonValue } from '../labEngine/run.js'
 import { fail } from '../labEngine/errors.js'
+import { securityActivity, validSecurityJournal, validSecurityLabContext } from '../security/evidence.js'
 
 /** Internal adapter: only an engine-validated intent may reach saved source execution. */
 export function applyMessagingAction(run, action, lab) {
@@ -24,13 +25,15 @@ export function applyMessagingAction(run, action, lab) {
     next = { ...next, runtime: { ...next.runtime, messaging: { ...state, nextId: state.nextId + 1,
       executionReceipts: [...(state.executionReceipts ?? []), receipt] } } }
     measurements.executionId = executionId
+    if (!validSecurityJournal(next.runtime.messaging)) fail('INVALID_EFFECT', 'Security operation journal boundaries are malformed.')
+    if (lab.capabilities?.securityObservability === true && !validSecurityLabContext(next.runtime.messaging, lab.messagingInput?.securityObservability, next.sandbox)) fail('INVALID_EFFECT', 'Security authorization provenance is malformed.')
     const safeDiagnostics = messagingDiagnosticsExpected(measurements, lab.messagingExercise)
     for (const declaration of lab.messagingExercise.tasks.filter(item => item.entry === action.entry && item.mode === action.mode)) {
       const task = lab.tasks.find(task => task.id === declaration.taskId)
       // Every reached source must be a freshness dependency, including protected helpers.
       const sourcesCovered = result.execution.sourcePaths.every(path => Object.hasOwn(task.dependencies ?? {}, `messaging:file:${path}`))
       let passed = false
-      try { passed = safeDiagnostics && sourcesCovered && measurements.trace.some(row => row.kind !== 'advance')
+      try { passed = safeDiagnostics && sourcesCovered && (lab.capabilities?.securityObservability === true ? securityActivity(measurements.securityObservability) : measurements.trace.some(row => row.kind !== 'advance'))
         && declaration.check(cloneJson(measurements)) === true } catch { /* failed behavior */ }
       next = recordVerification(next, lab, task.id, { scenarioId: declaration.scenarioId, scenarioVersion: declaration.scenarioVersion,
         outcome: passed ? 'passed' : 'failed', completed: true, startedAtMs: run.runtime.simTimeMs,

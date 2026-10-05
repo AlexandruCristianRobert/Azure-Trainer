@@ -6,6 +6,8 @@ A static browser app for hands-on preparation for exam AI-200 (Developing AI Clo
 
 ## Language
 
+Security and Observability journey: twelve implemented browser-only Labs continue the Order Processing Application. Labs 1–11 are progressive Guided Labs; Lab 12 combines secure notification, correlated Functions callbacks and a final computed telemetry query. Each Lab starts independently with disclosed prerequisite resources and fresh inputs, without prior completion proof. Publication remains subject to the journey's integration/review gates. See [simulator contract](docs/security-observability-simulator.md).
+
 **Portal**:
 The simulated Azure-portal-like frame the whole app lives in, including navigation, resource lists, Blades, and the tools used to complete Labs.
 _Avoid_: Dashboard, Console, Simulator, Fake portal
@@ -59,7 +61,7 @@ The Knowledge Assistant's record of sessions, the questions asked, the answers r
 _Avoid_: Chat log, Transcript, Memory
 
 **Order Processing Application**:
-The shared business example in the Messaging Learning Journey, in which orders are accepted and their processing is coordinated across application components. Successive Labs develop this same example.
+The shared business example in the Messaging and Security and Observability Learning Journeys, in which orders are accepted and their processing is coordinated across application components. Successive Labs develop, secure and observe this same example.
 _Avoid_: Knowledge Assistant, unrelated per-Lab demo
 
 **Response Cache**:

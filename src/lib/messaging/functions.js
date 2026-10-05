@@ -5,8 +5,9 @@ import { SUBSCRIPTION_ID, isSandboxShape } from '../sandbox/model.js'
 import { getFunctionApp, getStorageAccount } from '../sandbox/functions.js'
 import { getQueue } from '../sandbox/ops.js'
 import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.js'
-import { MESSAGING_RUNTIME_FILES } from '../../data/templates/messaging-python/runtime.js'
-import { messagingExecutionEnvelope } from './execute.js'
+import { messagingExecutionEnvelope, messagingProjectOptions } from './execute.js'
+import { sanitizeSecurityDiagnostics } from '../security/sdk.js'
+import { TRAINER_CONNECTION_STRING } from '../observability/export.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const lower = value => value.toLowerCase()
@@ -15,6 +16,8 @@ const appIdentity = app => `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${a
 
 /** One synchronous, bounded host start. Captured source is evidence data, never executable persisted IR. */
 export function runMessagingFunctions(run, lab) {
+  const envelope = (run, entry, result, paths) => messagingExecutionEnvelope(run, entry, { ...result,
+    diagnostics: lab.capabilities?.securityObservability === true ? sanitizeSecurityDiagnostics(result.diagnostics, run.sandbox, lab.messagingInput?.securityObservability) : result.diagnostics }, paths)
   let entry = 'function_app.py'
   try {
     const config = lab.messagingInput?.functions
@@ -35,12 +38,19 @@ export function runMessagingFunctions(run, lab) {
       if (!plainObject(value) || !finiteJson(value)) fail('Host configuration must be a JSON object.', path)
       return value
     }
-    if (readConfig('host.json').version !== '2.0') fail('host.json must use version 2.0.', 'host.json')
+    const hostConfig = readConfig('host.json')
+    if (hostConfig.version !== '2.0') fail('host.json must use version 2.0.', 'host.json')
     const settings = readConfig('local.settings.json')
     if (settings.IsEncrypted !== false || !plainObject(settings.Values) || settings.Values.FUNCTIONS_WORKER_RUNTIME !== 'python'
       || settings.Values.AzureWebJobsStorage !== 'UseDevelopmentStorage=true') fail('Use the Python worker and simulated UseDevelopmentStorage=true storage setting.', 'local.settings.json')
-    const parsed = parseMessagingProject(files, { entry, mode: 'functions', fixedFiles: MESSAGING_RUNTIME_FILES })
-    if (parsed.diagnostics.length) return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })
+    if (lab.capabilities?.securityObservability === true) {
+      if (hostConfig.telemetryMode !== 'OpenTelemetry') fail('Select telemetryMode OpenTelemetry for this teaching host.', 'host.json')
+      if (settings.Values.APPLICATIONINSIGHTS_CONNECTION_STRING !== TRAINER_CONNECTION_STRING
+        || !['false', '0'].includes(settings.Values.PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY)) fail('Select ai-orders and disable automatic Python telemetry explicitly for the manual configure_azure_monitor path.', 'local.settings.json')
+    }
+    const options = messagingProjectOptions(run, lab)
+    const parsed = parseMessagingProject(files, { entry, mode: 'functions', ...options })
+    if (parsed.diagnostics.length) return envelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: parsed.diagnostics })
     const program = parsed.program, appId = appIdentity(app), bindings = []
     for (const handler of program.handlers) {
       if (handler.kind !== 'servicebus') continue
@@ -59,7 +69,7 @@ export function runMessagingFunctions(run, lab) {
       if (lower(endpoint.resourceGroup) !== lower(app.resourceGroup) || lower(endpoint.app) !== lower(app.name)) continue
       if (!program.handlers.some(handler => handler.kind === 'eventgrid' && lower(handler.functionName) === lower(endpoint.functionName))) fail('AzureFunction subscription target must name an actual registered Event Grid Function.', entry)
     }
-    const paths = [...new Set([...program.sourcePaths, ...Object.keys(MESSAGING_RUNTIME_FILES), 'host.json', 'local.settings.json'])].sort()
+    const paths = [...new Set([...program.sourcePaths, ...Object.keys(options.fixedFiles), 'host.json', 'local.settings.json'])].sort()
     const sources = Object.fromEntries(paths.map(path => [path, files[path]]))
     const sourceVersions = Object.fromEntries(paths.map(path => [path, run.project.fileVersions?.[path] ?? 0]))
     const previous = run.runtime.messaging.hosts[appId]
@@ -69,9 +79,9 @@ export function runMessagingFunctions(run, lab) {
     if (!validateMessagingState(state)) fail('Captured host source/revision metadata is invalid.', entry)
     program.host = { appId, bindings }
     const result = executeMessagingProgram({ program, state, sandbox: run.sandbox, input: lab.messagingInput ?? {} })
-    return messagingExecutionEnvelope(run, entry, result, paths)
+    return envelope(run, entry, result, paths)
   } catch (error) {
     const diagnostic = error.diagnostic ?? { code: 'MESSAGING_CONFIG', message: error.message, path: entry, line: 1, column: 1 }
-    return messagingExecutionEnvelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: [diagnostic] })
+    return envelope(run, entry, { state: run.runtime.messaging, trace: [], output: [], diagnostics: [diagnostic] })
   }
 }

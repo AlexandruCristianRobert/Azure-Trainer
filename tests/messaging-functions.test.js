@@ -31,7 +31,7 @@ function functionsFixture({ handler = success, events = false, runtime = 'python
   let messaging = applyServiceBusOperation(emptyMessagingState(), sandbox, { kind: 'send', target, message: { body: '{"id":"o7","region":"EU"}', messageId: 'm7', properties: {} } }).state
   if (events) messaging = applyEventGridOperation(messaging, sandbox, { kind: 'publish', target: { resourceGroup: 'rg-messaging', topic: 'evgt-orders' }, events: [{ id: 'e7', subject: '/orders/eu/o7', eventType: 'Contoso.OrderProcessed', data: { order_id: 'o7' }, dataVersion: '1.0' }] }).state
   const savedFiles = { ...MESSAGING_RUNTIME_FILES, 'function_app.py': source(handler) + (events ? eventHandler : ''), 'host.json': '{"version":"2.0"}', 'local.settings.json': '{"IsEncrypted":false,"Values":{"FUNCTIONS_WORKER_RUNTIME":"python","AzureWebJobsStorage":"UseDevelopmentStorage=true","ServiceBusConnection__fullyQualifiedNamespace":"sb-orders.servicebus.windows.net"}}' }
-  return { run: { sandbox, project: { savedFiles, draftFiles: { ...savedFiles }, fileVersions: { 'function_app.py': 1 } }, runtime: { messaging }, evidence: { history: [] } }, lab: { messagingInput: { functions: { appId } } } }
+  return { run: { sandbox, project: { manifestId: 'messaging-python-v1', savedFiles, draftFiles: { ...savedFiles }, fileVersions: { 'function_app.py': 1 } }, runtime: { messaging }, evidence: { history: [] } }, lab: { messagingInput: { functions: { appId } } } }
 }
 const messages = result => Object.values(result.run.runtime.messaging.entities).flatMap(entity => entity.messages)
 const host = result => result.run.runtime.messaging.hosts[appId.toLowerCase()]

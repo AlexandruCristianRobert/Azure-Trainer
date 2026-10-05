@@ -4,6 +4,7 @@ import { fail } from './errors.js'
 import { capstoneStages } from './stages.js'
 import { isAksCapstone, getAksSealedTaskIds, aksCleanupReady, isAksTaskSourceCurrent } from '../kubernetes/capstone/stages.js'
 import { isDataCapstone, dataSealedTaskIds, dataEvidenceCurrent } from './data-capstone/stages.js'
+import { telemetryQueriesCurrent } from '../observability/query.js'
 
 function safelyCheck(task, argument) {
   try { return task.check(argument) === true } catch { return false }
@@ -50,6 +51,7 @@ function evidenceHasTaskIdentity(run, lab, task, id, record) {
 function evidenceIsCurrent(run, lab, task, id, record) {
   return evidenceHasTaskIdentity(run, lab, task, id, record)
     && record.completed === true && record.outcome === 'passed' && dependencyMatches(run, task, record)
+    && (lab.capabilities?.securityObservability !== true || telemetryQueriesCurrent(record.measurements.securityObservability, run.runtime.messaging.securityObservability))
 }
 
 function behavioralTaskState(lab, run, task, index) {
