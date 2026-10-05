@@ -14,7 +14,7 @@ const reference = (value, prefix) => typeof value === 'string' && new RegExp(`^$
 const references = (value, prefix) => Array.isArray(value) && value.length <= HTTP_LIMITS.accepted
   && new Set(value).size === value.length && value.every(item => reference(item, prefix))
 const sourcePath = value => typeof value === 'string' && value.length <= 256
-  && /^(?:[A-Za-z_][A-Za-z0-9_]*\/)*[A-Za-z_][A-Za-z0-9_]*\.(?:py|json|txt)$/.test(value)
+  && (value === 'local.settings.json' || /^(?:[A-Za-z_][A-Za-z0-9_]*\/)*[A-Za-z_][A-Za-z0-9_]*\.(?:py|json|txt)$/.test(value))
 
 export function validateHttpResponse(value) {
   if (!closedHttpObject(value, ['statusCode', 'headers', 'body']) || !Number.isInteger(value.statusCode)

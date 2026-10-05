@@ -19,7 +19,8 @@ export function validateMessagingExercise(lab) {
   for (const command of exercise.commands) {
     if (!finiteJson(command) || !plainObject(command) || Object.keys(command).length !== 2
       || !entries.includes(command.entry) || !['entry', 'mode'].every(key => Object.hasOwn(command, key))
-      || !(command.mode === 'script' && command.entry !== 'function_app.py' || command.mode === 'functions' && command.entry === 'function_app.py')) return false
+      || !(command.mode === 'script' && command.entry !== 'function_app.py' || command.mode === 'functions' && command.entry === 'function_app.py'
+        || lab.capabilities?.httpFunctions === true && command.mode === 'http-handler' && command.entry === 'function_app.py')) return false
     const key = `${command.mode}:${command.entry}`
     if (commands.has(key)) return false
     commands.add(key)

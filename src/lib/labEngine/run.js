@@ -16,6 +16,7 @@ import { dataProtectedRefs } from './data-capstone/ownership.js'
 import { emptyMessagingState, validateMessagingState } from '../messaging/state.js'
 import { emptySecurityObservabilityState } from '../security/state.js'
 import { validSecurityLabContext } from '../security/evidence.js'
+import { validHttpJournal } from '../http-functions/evidence.js'
 import { validateMessagingExercise } from '../messaging/shell.js'
 import { validMessagingEvidence, validMessagingExecutionReceipts } from '../messaging/evidence.js'
 
@@ -236,6 +237,8 @@ export function validateBehavioralRun(run, lab = null) {
     }
     if (lab.capabilities?.messaging === true && (!validateMessagingState(run.runtime.messaging)
       || !validMessagingExecutionReceipts(run.runtime.messaging)
+      || !validHttpJournal(run.runtime.messaging, lab.messagingInput?.httpFunctions, run.sandbox)
+      || lab.capabilities?.httpFunctions !== true && run.runtime.messaging.httpFunctions !== undefined
       || (lab.capabilities?.securityObservability === true) !== (run.runtime.messaging.securityObservability !== undefined)
       || lab.capabilities?.securityObservability === true && !validSecurityLabContext(run.runtime.messaging, lab.messagingInput?.securityObservability, run.sandbox))) {
       fail('INVALID_RUN', 'The messaging runtime state is missing or malformed.')

@@ -1,6 +1,7 @@
 import { canonicalize } from '../labEngine/evidence.js'
 import { finiteJson, plainObject, validateMessagingState } from './state.js'
 import { securityMeasurements, validSecuritySnapshot, validSecurityJournal, securityActivity } from '../security/evidence.js'
+import { validHttpJournal, validHttpMeasurement, httpActivity } from '../http-functions/evidence.js'
 
 /** Select Sandbox configuration only; broker records and clocks are never dependencies. */
 export function messagingResourceConfiguration(value, dataDictionary = false) {
@@ -77,7 +78,8 @@ export function validMessagingEvidence(record, run, lab) {
   const declaration = lab.messagingExercise?.tasks.find(item => item.taskId === record.taskId)
   if (!declaration) return !lab.messagingExercise || !lab.tasks.find(task => task.id === record.taskId)?.verification
   const m = record.measurements, state = run.runtime.messaging
-  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).filter(key => key !== 'securityObservability').sort().join(',') !== 'diagnostics,effects,entry,executionId,mode,receipts,sourcePaths,trace,value'
+  if (!plainObject(m) || !finiteJson(m) || Object.keys(m).filter(key => !['securityObservability', 'httpFunctions'].includes(key)).sort().join(',') !== 'diagnostics,effects,entry,executionId,mode,receipts,sourcePaths,trace,value'
+    || Object.hasOwn(m, 'httpFunctions') && (lab.capabilities?.httpFunctions !== true || !validHttpMeasurement(m.httpFunctions))
     || (lab.capabilities?.securityObservability === true ? !validSecuritySnapshot(m.securityObservability, state.securityObservability) : Object.hasOwn(m, 'securityObservability'))
     || m.entry !== declaration.entry || m.mode !== declaration.mode
     || !Array.isArray(m.sourcePaths) || m.sourcePaths.length < 1 || m.sourcePaths.length > 20
@@ -121,7 +123,7 @@ export function validMessagingEvidence(record, run, lab) {
   if (record.outcome !== 'passed') return true
   const task = lab.tasks.find(task => task.id === record.taskId)
   try {
-    return (lab.capabilities?.securityObservability === true ? securityActivity(m.securityObservability) : m.trace.some(row => row.kind !== 'advance')) && messagingDiagnosticsExpected(m, lab.messagingExercise)
+    return (m.mode === 'http-handler' ? httpActivity(m.httpFunctions) : lab.capabilities?.securityObservability === true ? securityActivity(m.securityObservability) : m.trace.some(row => row.kind !== 'advance')) && messagingDiagnosticsExpected(m, lab.messagingExercise)
       && m.sourcePaths.every(path => Object.hasOwn(task.dependencies ?? {}, `messaging:file:${path}`))
       && declaration.check(JSON.parse(JSON.stringify(m))) === true
   } catch { return false }
@@ -129,7 +131,7 @@ export function validMessagingEvidence(record, run, lab) {
 
 /** Actual latest boundaries anchor runtime; older snapshots remain their prior outcomes. */
 export function validMessagingExecutionReceipts(state) {
-  if (!validSecurityJournal(state)) return false
+  if (!validSecurityJournal(state) || !validHttpJournal(state)) return false
   const effects = new Map(), bus = new Map(), grid = new Map()
   for (const execution of state.executionReceipts ?? []) {
     const m = execution.measurements

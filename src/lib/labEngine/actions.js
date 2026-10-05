@@ -39,6 +39,8 @@ import { isDataCapstone, advanceDataStage, freezeDataCleanup, dataStageFrozenAct
 import { dataCommandAllowed, captureDataOwnership, dataOwnedDeletionEffect, dataProtectedRefs } from './data-capstone/ownership.js'
 import { applyMessagingAction } from '../messaging/actions.js'
 import { refreshMessagingDependencies } from '../messaging/evidence.js'
+import { applyHttpEffect } from '../http-functions/execute.js'
+import { refreshHttpDependencies } from '../http-functions/evidence.js'
 
 const diagnostic = (code, message, path = '') => ({ code, message, path, line: 1, column: 1 })
 const envelope = (run, lines = [], portalEvents = [], diagnostics = []) => ({ run, lines, portalEvents, diagnostics })
@@ -122,8 +124,15 @@ export function applyCommandEffects(run, effects, lab) {
   const events = []
   const diagnostics = []
   const lines = []
+  let httpResponse = null
   for (const effect of effects) {
-    if (effect?.type === 'messaging-execution') {
+    if (effect?.type === 'http-functions') {
+      if (lab.capabilities?.httpFunctions !== true || !isJsonValue(effect) || Object.keys(effect).sort().join(',') !== 'intent,type') fail('INVALID_EFFECT', 'HTTP execution accepts intent only.')
+      const result = applyHttpEffect(next, effect.intent, lab)
+      next = result.run; httpResponse = result.httpResponse
+      lines.push(...result.lines.map(text => ({ text, kind: 'out' })))
+      diagnostics.push(...result.diagnostics)
+    } else if (effect?.type === 'messaging-execution') {
       if (!isJsonValue(effect) || Object.keys(effect).length !== 3
         || Object.keys(effect).some(key => !['type', 'entry', 'mode'].includes(key))) fail('INVALID_EFFECT', 'Messaging execution accepts intent only.')
       const result = applyMessagingAction(next, { type: 'messaging-run', entry: effect.entry, mode: effect.mode }, lab)
@@ -268,7 +277,7 @@ export function applyCommandEffects(run, effects, lab) {
     } else fail('INVALID_EFFECT', `Unknown command effect '${effect.type}'.`)
   }
   if (ownedDeletion && !diagnostics.length) next = captureDataOwnership(run, next, ownedDeletion, lab)
-  return { run: next, events, diagnostics, lines }
+  return { run: next, events, diagnostics, lines, httpResponse }
 }
 
 function commandAction(run, action, lab) {
@@ -298,6 +307,7 @@ function commandAction(run, action, lab) {
       app === current ? { ...app, incidentDrift: cloneJson(previous.incidentDrift) } : app) } }
   }
   next = refreshMessagingDependencies(run, next, lab)
+  next = refreshHttpDependencies(run, next, lab)
   const appliedEffects = applyCommandEffects(next, result.effects ?? [], lab)
   result.lines.push(...appliedEffects.lines)
   next = appliedEffects.run
@@ -387,7 +397,8 @@ function commandAction(run, action, lab) {
   }
   if (isDataCapstone(lab)) next = captureDataOwnership(run, next, { ...result, command: action.line }, lab)
   next = appendOutput(next, result.clear ? [] : [{ kind: 'cmd', text: action.line }, ...result.lines], action.line, result.clear === true)
-  return envelope(next, result.lines, [...(result.events ?? []), ...appliedEffects.events], diagnostics)
+  return { ...envelope(next, result.lines, [...(result.events ?? []), ...appliedEffects.events], diagnostics),
+    ...(appliedEffects.httpResponse ? { httpResponse: appliedEffects.httpResponse } : {}) }
 }
 
 function cpuFixture(lab, scenarioId) {
@@ -785,6 +796,7 @@ export function applyRunAction(run, action, lab) {
   if (lab.capabilities?.kubernetesRollouts && !result.diagnostics.length && ['command', 'save-file'].includes(action.type)) result.run = observeReleaseTimestamp(result.run, result.run.runtime.simTimeMs, lab)
   result.run = refreshKubernetesDependencies(run, result.run, lab)
   result.run = refreshMessagingDependencies(run, result.run, lab)
+  result.run = refreshHttpDependencies(run, result.run, lab)
   result.run = finalizeAksVerification(run, result.run, lab)
   validateBehavioralRun(result.run, lab)
   return result

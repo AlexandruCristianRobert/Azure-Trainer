@@ -1,6 +1,8 @@
 import { SUBSCRIPTION_ID } from '../sandbox/model.js'
 import { validateSecurityObservabilityState } from '../security/state.js'
 import { validSecurityMeasurement, validSecuritySnapshot } from '../security/evidence.js'
+import { validateHttpFunctionsState } from '../http-functions/state.js'
+import { validHttpMeasurement } from '../http-functions/evidence.js'
 import { isValidEventGridWebhookEndpoint, parseEventGridFunctionEndpoint, parseEventGridDeadLetterDestination, validRetryValue } from '../sandbox/eventgrid-validation.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
@@ -75,10 +77,12 @@ export function validEventGridApplicationTrace(trace, state, inFlight = false) {
 
 /** Immutable command-boundary data; not executable IR or a grading outcome. */
 function validExecutionMeasurement(value) {
-  if (!plainObject(value) || Object.keys(value).filter(key => key !== 'securityObservability').sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+  if (!plainObject(value) || Object.keys(value).filter(key => !['securityObservability', 'httpFunctions'].includes(key)).sort().join(',') !== 'diagnostics,effects,entry,mode,receipts,sourcePaths,trace,value'
+    || Object.hasOwn(value, 'httpFunctions') && !validHttpMeasurement(value.httpFunctions)
     || Object.hasOwn(value, 'securityObservability') && !validSecurityMeasurement(value.securityObservability)
     || !['producer.py', 'worker.py', 'events.py', 'handler.py', 'function_app.py'].includes(value.entry)
-    || !(value.mode === 'functions' ? value.entry === 'function_app.py' : value.mode === 'script' && value.entry !== 'function_app.py')
+    || !(['functions', 'http-handler'].includes(value.mode) ? value.entry === 'function_app.py' : value.mode === 'script' && value.entry !== 'function_app.py')
+    || value.mode === 'http-handler' && value.httpFunctions === undefined
     || !Array.isArray(value.sourcePaths) || value.sourcePaths.length < 1 || value.sourcePaths.length > 20
     || !value.sourcePaths.includes(value.entry) || new Set(value.sourcePaths).size !== value.sourcePaths.length
     || value.sourcePaths.some(path => typeof path !== 'string' || path.length > 256)
@@ -153,6 +157,7 @@ export function validateMessagingState(state) {
     || state.deliveries.length > 500 || !plainObject(state.effects) || !plainObject(state.hosts)) return false
   if (!validHostRecords(state.hosts, state.timeMs) || !validEffects(state.effects)) return false
   if (Object.hasOwn(state, 'securityObservability') && !validateSecurityObservabilityState(state.securityObservability)) return false
+  if (Object.hasOwn(state, 'httpFunctions') && !validateHttpFunctionsState(state.httpFunctions)) return false
   let maximumId = 0
   const allocated = new Set()
   const id = (value, unique = false, eventGrid = false) => {

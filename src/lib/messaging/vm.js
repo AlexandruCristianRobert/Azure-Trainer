@@ -32,7 +32,7 @@ const scalarStringArguments = Object.freeze({
 })
 
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
-export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {}, httpInvocation }) {
+export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {}, httpInvocation, httpProtectedValues = [] }) {
   const { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS } = messagingSdkContract(program.profile)
   let security = null, telemetry = null, http = null
   let current = state, steps = 0, depth = 0, receiverSequence = 0, eventSequence = 0, draining = false, activeDelivery = null
@@ -740,7 +740,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   try {
     if (!validateMessagingState(state) || !finiteJson(input)) fail('Invalid messaging state or fixture input.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
     if (httpInvocation && (program.profile !== HTTP_PROFILE || program.mode !== 'http-handler')) fail('HTTP invocation requires the explicit HTTP handler profile.', null, 'HTTP_CONFIG')
-    if (program.profile === HTTP_PROFILE) http = createHttpSession({ handle, info, fail, jsonValue, program, invocation: httpInvocation,
+    if (program.profile === HTTP_PROFILE) http = createHttpSession({ handle, info, fail, jsonValue, program, invocation: httpInvocation, protectedValues: httpProtectedValues,
       getState: () => current, setState: next => { current = next } })
     if (program.profile === SECURITY_PROFILE) security = createSecuritySession({ sandbox, input: input.securityObservability, entry: program.entry, mode: program.mode,
       handle, info, fail, getState: () => current, setState: next => { current = next },

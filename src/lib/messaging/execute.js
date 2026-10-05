@@ -20,8 +20,10 @@ export function executeMessagingEntry(run, lab, entry, mode = 'script', internal
   }
   const parsed = parseMessagingProject(run.project.savedFiles, { entry, mode, ...messagingProjectOptions(run, lab) })
   if (lab.capabilities?.securityObservability === true) parsed.diagnostics = sanitizeSecurityDiagnostics(parsed.diagnostics, run.sandbox, lab.messagingInput?.securityObservability)
+  if (lab.capabilities?.httpFunctions === true) parsed.diagnostics = parsed.diagnostics.map(row => ({ ...row, message: 'Saved HTTP-profile source cannot execute.' }))
   if (parsed.diagnostics.length) return { run, lines: parsed.diagnostics.map(d => `${d.path}:${d.line}:${d.column} ${d.code}: ${d.message}`), portalEvents: [], diagnostics: parsed.diagnostics, execution: null }
-  const result = executeMessagingProgram({ program: parsed.program, state: run.runtime.messaging, sandbox: run.sandbox, input: { ...(lab.messagingInput ?? {}), ...internalInput } })
+  const result = executeMessagingProgram({ program: parsed.program, state: run.runtime.messaging, sandbox: run.sandbox, input: { ...(lab.messagingInput ?? {}), ...internalInput },
+    httpProtectedValues: lab.capabilities?.httpFunctions === true ? (lab.messagingInput?.httpFunctions?.functionKeys ?? []).map(row => row.value) : [] })
   return messagingExecutionEnvelope(run, entry, result, parsed.program.sourcePaths)
 }
 

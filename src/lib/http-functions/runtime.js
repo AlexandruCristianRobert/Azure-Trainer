@@ -6,16 +6,16 @@ import { sensitiveTelemetryName } from '../observability/privacy.js'
 
 export function createHttpSession(context) {
   const { handle, info, fail, jsonValue, getState, setState, invocation, program } = context
-  const privateValues = [...(invocation?.protectedValues ?? []), ...Object.entries(invocation?.request.headers ?? {}).filter(([key]) => ['x-functions-key', 'authorization'].includes(key)).map(([, value]) => value)]
+  const privateValues = [...(context.protectedValues ?? []), ...(invocation?.protectedValues ?? []), ...Object.entries(invocation?.request.headers ?? {}).filter(([key]) => ['x-functions-key', 'authorization'].includes(key)).map(([, value]) => value)]
   const values = createHttpValues({ handle, info, fail, protectedValues: privateValues })
   const reads = [], operations = []
   let response = null, consumed = [], staged = null
   const handled = value => ({ handled: true, value })
   const bound = loc => { if (!invocation) fail('HTTP invocation context is required.', loc, 'HTTP_CONFIG') }
   const read = (fields, loc) => {
-    if (reads.length >= 50) fail('HTTP read limit reached.', loc, 'HTTP_LIMIT')
+    if (reads.length >= 50 || jsonBytes(reads) + jsonBytes(fields) > 64 * 1024) fail('HTTP read limit reached.', loc, 'HTTP_LIMIT')
     values.guard(fields, loc)
-    const row = { id: `http-read-${reads.length + 1}`, ...fields }; reads.push(row); return row
+    const row = { id: `http-read-${reads.length + 1}`, atNextId: getState().nextId, ...fields }; reads.push(row); return row
   }
   function call(name, owner, args, loc) {
     if (name === 'OrderStatusRepository') return handled(handle('orderrepository'))
@@ -94,6 +94,7 @@ export function createHttpSession(context) {
     if (operation.message) values.guard(operation.message, loc)
     if (!invocation || operation.kind !== 'send') return null
     if (operations.length >= 50) fail('HTTP operation limit reached.', loc, 'HTTP_LIMIT')
+    if (invocation.request.method !== 'POST') return null
     let requestOrder, sentOrder
     try { requestOrder = normalizeOrder(JSON.parse(invocation.request.body)); sentOrder = normalizeOrder(JSON.parse(operation.message.body)) } catch { return null }
     const target = normalizeHttpTarget(operation.target)
