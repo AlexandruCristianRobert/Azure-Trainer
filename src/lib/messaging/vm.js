@@ -130,12 +130,12 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function string(value, loc) {
     security?.guard(value, loc)
+    let object = info(value)
+    if (object?.type === 'receipt') { guardServiceBusBody(object.record.body, loc); return object.record.body }
+    if (['bodytext', 'bytes'].includes(object?.type)) { guardServiceBusBody(object.value, loc); return object.value }
     if (!info(value) || ['configvalue', 'bodytext', 'bytes', 'querynumber'].includes(info(value)?.type)) telemetry?.guard(unbox(value), loc, 'payload')
-    if (info(value)?.type === 'querynumber') value = unbox(value)
-    const object = info(value)
-    if (['bodytext', 'configvalue'].includes(object?.type)) return object.value
-    if (object?.type === 'receipt') return object.record.body
-    if (object?.type === 'bytes') return object.value
+    if (object?.type === 'querynumber') { value = unbox(value); object = info(value) }
+    if (object?.type === 'configvalue') return object.value
     if (object) fail('This SDK resource cannot be converted to a string.', loc)
     if (typeof value === 'string') return value
     if (value === null) return 'None'
@@ -194,10 +194,33 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (own(SDK_SIGNATURES, method)) return callable(method, value)
     fail(`Unsupported member '${name}' on ${object.type}.`, loc, 'MESSAGING_UNSUPPORTED')
   }
+  function guardServiceBusBody(body, loc) {
+    if (!telemetry) return
+    telemetry.guard(body, loc, 'payload')
+    let parsed
+    try { parsed = JSON.parse(body) } catch { return } // Plain string bodies remain supported.
+    telemetry.guard(parsed, loc, 'payload')
+  }
+  function guardServiceBusMessage(message, loc) {
+    if (!telemetry) return
+    guardServiceBusBody(message.body, loc)
+    // Only application fields cross this boundary; broker lock tokens are internal.
+    telemetry.guard({ messageId: message.messageId, sessionId: message.sessionId, properties: message.properties,
+      deadLetterReason: message.deadLetterReason, deadLetterDescription: message.deadLetterDescription }, loc, 'payload')
+  }
   function broker(operation, loc) {
     tick(loc)
+    if (operation.message) guardServiceBusMessage(operation.message, loc)
+    telemetry?.guard({ sessionId: operation.sessionId, reason: operation.reason, description: operation.description }, loc, 'payload')
     const result = applyServiceBusOperation(current, sandbox, operation)
     if (result.diagnostics.length) throw messagingError(result.diagnostics[0].code, result.diagnostics[0].message, loc)
+    if (telemetry) {
+      // The broker returns a private candidate clone. Validate every touched receipt
+      // before committing its state or publishing any of its trace/evidence.
+      const touched = new Set(result.trace.map(row => row.messageRecordId).filter(Boolean))
+      for (const entity of Object.values(result.state.entities)) for (const message of entity.messages)
+        if (touched.has(message.id)) guardServiceBusMessage(message, loc)
+    }
     if (trace.length + result.trace.length > maximumTraces) fail(`Execution exceeds ${maximumTraces} trace records.`, loc, 'MESSAGING_LIMIT')
     // Retained receipt history is also bounded across repeated script invocations.
     const locks = Object.values(result.state.entities).reduce((sum, entity) => sum + entity.messages.reduce((count, message) => count + message.lockHistory.length, 0), 0)
@@ -452,6 +475,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
         if (info(item)?.type !== 'outgoing') fail('send_messages requires ServiceBusMessage values.', loc)
         return info(item).message
       })
+      for (const message of payloads) guardServiceBusMessage(message, loc)
       for (const message of payloads) broker({ kind: 'send', target: sender.target, message }, loc)
       return null
     }
@@ -471,6 +495,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (name === 'bytes.decode') {
       if (a.encoding !== undefined && !['utf-8', 'utf8'].includes(a.encoding)) fail('Only UTF-8 decoding is supported.', loc, 'MESSAGING_UNSUPPORTED')
       const bytes = info(owner)
+      guardServiceBusBody(bytes.value, loc)
       return bytes.record ? handle('bodytext', { value: bytes.value, record: bytes.record }) : bytes.value
     }
     if (name === 'json.dumps') return stringify(a.obj, loc)

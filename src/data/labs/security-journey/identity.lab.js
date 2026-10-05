@@ -1,5 +1,18 @@
 import { SECRET_SOLUTION_SOURCE } from '../../templates/security-python/security.js'
-import { securityLab, securityTask, securityPaths, file, command, consumed, SECURITY_IDENTITY, SECURITY_VAULT_ID } from './helpers.js'
+import { securityLab, securityTask, securityPaths, securityReady, securityVault, file, command, consumed, SECURITY_IDENTITY, SECURITY_VAULT_ID } from './helpers.js'
+import { SECRETS_USER_ROLE_ID, SECRETS_OFFICER_ROLE_ID } from '../../../lib/sandbox/keyvault.js'
+import { resolveRuntimePrincipal } from '../../../lib/security/identity.js'
+import { SECURITY_APP_ID } from './seeds.js'
+
+function leastPrivilegeVaultRead(context) {
+  if (!securityReady(context)) return false
+  const principal = resolveRuntimePrincipal(context.sandbox, { appId: SECURITY_APP_ID })
+  const roles = securityVault(context.sandbox).roleAssignments.filter(role => role.principalType === 'ServicePrincipal'
+    && role.principalId.toLowerCase() === principal.principalId.toLowerCase()
+    && role.scope.toLowerCase() === SECURITY_VAULT_ID.toLowerCase())
+  return roles.some(role => role.roleDefinitionId === SECRETS_USER_ROLE_ID)
+    && !roles.some(role => role.roleDefinitionId === SECRETS_OFFICER_ROLE_ID)
+}
 
 const attach = securityTask({ id: 'attach-runtime-identity', stage: 'identity',
   text: 'Attach the supplied id-orders user-assigned managed identity to func-orders. Select the application identity, independently of your learner provisioning session.',
@@ -8,6 +21,7 @@ const attach = securityTask({ id: 'attach-runtime-identity', stage: 'identity',
   solution: { steps: [command(`az functionapp identity assign -g rg-messaging -n func-orders --identities ${SECURITY_IDENTITY.id}`)] },
 })
 const grant = securityTask({ id: 'grant-vault-read', stage: 'identity',
+  check: leastPrivilegeVaultRead,
   text: 'Grant Key Vault Secrets User to the actual id-orders principal at the exact kv-orders vault scope. Save the supplied compact read-and-notify consumer and run python worker.py to verify runtime authorization.',
   rationale: { concept: 'Least-privilege runtime authorization', what: 'Grants vault read authority to the attached application principal and consumes its retrieved key.', why: 'Learner Secrets Officer authority does not authorize the notification worker.', without: 'An attached identity without the exact vault role cannot read; a lookup without consumption cannot demonstrate authorized notification.', csharp: 'SecretClient.GetSecret with DefaultAzureCredential follows the same principal and RBAC scope rules as Python get_secret.' },
   paths: securityPaths, solution: { steps: [command(`az role assignment create --scope ${SECURITY_VAULT_ID} --role "Key Vault Secrets User" --assignee-object-id ${SECURITY_IDENTITY.principalId} --assignee-principal-type ServicePrincipal`), file('worker.py', SECRET_SOLUTION_SOURCE), command('python worker.py')] },

@@ -147,7 +147,7 @@ export function validAppConfigurationStores(sandbox) {
     || new Set(stores.map(store => store.name.toLowerCase())).size !== stores.length) return false
   return stores.every(store => exact(store, 'name,resourceGroup,location,sku,tags,endpoint,revision,settings,roleAssignments,createdAt')
     && typeof store.name === 'string' && NAME.test(store.name) && typeof store.resourceGroup === 'string'
-    && sandbox.resourceGroups.some(group => same(group.name, store.resourceGroup)) && normalizeLocation(store.location) === store.location
+    && sandbox.resourceGroups.some(group => same(group.name, store.resourceGroup)) && typeof store.location === 'string' && normalizeLocation(store.location) === store.location
     && ['Free', 'Standard'].includes(store.sku) && (store.tags === null || exactTags(store.tags))
     && store.endpoint === `https://${store.name.toLowerCase()}.azconfig.io` && Number.isSafeInteger(store.revision) && store.revision >= 0
     && typeof store.createdAt === 'string' && /^\d{4}-\d\d-\d\dT/.test(store.createdAt) && Number.isFinite(Date.parse(store.createdAt))

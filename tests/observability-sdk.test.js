@@ -34,6 +34,13 @@ function run(code, options = {}) {
     input: { ...options.input, securityObservability: options.security ?? { appId: '/training/func-orders', notificationProvider: { id: 'demo', acceptedKeys: [{ id: 'v1', value: 'demo-key-v1' }] } } }, limits: options.limits })
 }
 const rows = result => result.state.securityObservability?.telemetry ?? []
+const busSource = `from azure.identity import DefaultAzureCredential
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+def main():
+    bus = ServiceBusClient("sb-orders.servicebus.windows.net", DefaultAzureCredential())
+    sender = bus.get_queue_sender("orders")
+    receiver = bus.get_queue_receiver("orders")
+`
 const root = `/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/rg-telemetry/providers`
 const appId = `${root}/Microsoft.Web/sites/func-orders`
 const security = { appId, notificationProvider: { id: 'demo', acceptedKeys: [{ id: 'v1', value: 'demo-key-v1' }] }, operations: [{ operationId: 'o1', eventId: 'e1', orderId: 'o1' }] }
@@ -70,6 +77,76 @@ function functionsLab(code, settings = {}) {
 }
 
 describe('bounded telemetry source SDK', () => {
+  // Break: an unsafe later message commits an earlier safe message in the batch.
+  it.each([
+    ['secret body', '"demo-key-v1"', '', 'demo-key-v1'],
+    ['email body', '"private@example.com"', '', 'private@example.com'],
+    ['JSON field', `'{"password":"private-value"}'`, '', 'private-value'],
+    ['nested JSON field', `'{"order":{"customer":"private-value"}}'`, '', 'private-value'],
+    ['message ID', '"order"', ', message_id="private@example.com"', 'private@example.com'],
+    ['session ID', '"order"', ', session_id="demo-key-v1"', 'demo-key-v1'],
+    ['property value', '"order"', ', application_properties={"routing": "private@example.com"}', 'private@example.com'],
+    ['property name', '"order"', ', application_properties={"token": "private-value"}', 'private-value'],
+  ])('rejects Service Bus %s before committing any send in the batch', (_, body, options, sensitive) => {
+    const before = emptyMessagingState()
+    const result = run(busSource + `    safe = ServiceBusMessage("safe", message_id="safe")
+    unsafe = ServiceBusMessage(${body}${options})
+    sender.send_messages([safe, unsafe])
+`, { sandbox: fixture(), security, state: before })
+    expect(result.diagnostics[0]?.code).toBe('SECURITY_PRIVACY')
+    expect(result.state.entities).toEqual(before.entities)
+    expect(result.state.nextId).toBe(before.nextId)
+    expect(result.trace).toEqual([])
+    expect(result.output).toEqual([])
+    const measurements = messagingMeasurements(before, result.state, { ...result, sourcePaths: ['worker.py'] }, 'worker.py', 'script', result.diagnostics)
+    expect(measurements.receipts.servicebus).toEqual([])
+    expect(JSON.stringify([result, measurements])).not.toContain(sensitive)
+  })
+  // Break: receive publishes an unsafe pre-existing body before print/conversion rejects it.
+  it.each(['print(message)', 'print(str(message))', 'print(message.body.decode("utf-8"))'])('guards incoming receipt data before %s can publish it', expression => {
+    const sandbox = fixture()
+    const seeded = run(busSource + '    sender.send_messages(ServiceBusMessage(\'{"password":"private-value"}\', message_id="incoming"))\n', { sandbox, profile: 'messaging-v1' })
+    expect(seeded.diagnostics).toEqual([])
+    const before = seeded.state
+    const result = run(busSource + `    for message in receiver.receive_messages(max_message_count=1):
+        ${expression}
+`, { sandbox, security, state: before })
+    expect(result.diagnostics[0]?.code).toBe('SECURITY_PRIVACY')
+    expect(result.state.entities).toEqual(before.entities)
+    expect(result.state.deliveries).toEqual(before.deliveries)
+    expect(result.trace).toEqual([])
+    expect(result.output).toEqual([])
+    const measurements = messagingMeasurements(before, result.state, { ...result, sourcePaths: ['worker.py'] }, 'worker.py', 'script', result.diagnostics)
+    expect(measurements.receipts.servicebus).toEqual([])
+    expect(JSON.stringify([result.trace, result.output, result.diagnostics, measurements])).not.toContain('private-value')
+  })
+  // Break: settlement metadata is retained in the broker and execution evidence.
+  it.each([
+    ['reason="private@example.com"', 'private@example.com'],
+    ['error_description="demo-key-v1"', 'demo-key-v1'],
+  ])('rejects sensitive dead-letter metadata: %s', (argumentsText, sensitive) => {
+    const before = emptyMessagingState()
+    const result = run(busSource + `    sender.send_messages(ServiceBusMessage("safe", message_id="safe"))
+    for message in receiver.receive_messages(max_message_count=1):
+        receiver.dead_letter_message(message, ${argumentsText})
+`, { sandbox: fixture(), security, state: before })
+    expect(result.diagnostics[0]?.code).toBe('SECURITY_PRIVACY')
+    const message = Object.values(result.state.entities).flatMap(entity => entity.messages)[0]
+    expect(message).toMatchObject({ status: 'locked', deadLetterReason: null, deadLetterDescription: null })
+    expect(result.trace.some(row => row.kind === 'deadletter')).toBe(false)
+    const measurements = messagingMeasurements(before, result.state, { ...result, sourcePaths: ['worker.py'] }, 'worker.py', 'script', result.diagnostics)
+    expect(JSON.stringify([result, measurements])).not.toContain(sensitive)
+  })
+  it.each(['security-observability-v1', 'messaging-v1'])('preserves safe plain and JSON Service Bus sends, receipt print and settlement for %s', profile => {
+    const result = run(busSource + `    sender.send_messages([ServiceBusMessage("safe", message_id="plain"), ServiceBusMessage('{"order_id":"o1"}', message_id="json")])
+    for message in receiver.receive_messages(max_message_count=2):
+        print(message)
+        receiver.dead_letter_message(message, reason="Handled", error_description="bounded")
+`, { sandbox: fixture(), security, profile })
+    expect(result.diagnostics).toEqual([])
+    expect(result.output).toEqual(['safe', '{"order_id":"o1"}'])
+    expect(Object.values(result.state.entities).flatMap(entity => entity.messages).every(message => message.status === 'deadletter')).toBe(true)
+  })
   // Break: spans fail to activate or a return leaks its child context.
   it('exports configured nested spans and restores the parent after a local return', () => {
     const result = run(setup + `def child():

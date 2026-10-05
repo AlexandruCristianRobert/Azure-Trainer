@@ -6,6 +6,8 @@ import { serializeRun, deserializeRun } from '../src/lib/labEngine/persistence.j
 import { buildExplanationPrompt } from '../src/lib/labEngine/explanationPrompt.js'
 import { runLine } from '../src/lib/az/shell.js'
 import { validSecurityRecord } from '../src/lib/security/state.js'
+import { SECRETS_OFFICER_ROLE_ID, SECRETS_USER_ROLE_ID } from '../src/lib/sandbox/keyvault.js'
+import { USER_OBJECT_ID } from '../src/lib/sandbox/model.js'
 
 const modulePath = '../src/data/labs/security-journey/security.js'
 const journey = await import(/* @vite-ignore */ modulePath).catch(error => {
@@ -78,6 +80,30 @@ describe('code-first security curriculum', () => {
   it('cannot complete with an unused actual secret lookup', () => {
     const lab = at(1), run = replay(lab, undefined, source => source.replace('return send_notification("e-o1", "o1", secret.value, "email")', 'return None'))
     expect(evaluateLab(lab, run).tasks.at(-1).done).toBe(false)
+  })
+  // Break: successful Officer reads satisfy the Lab's least-privilege User task.
+  it.each([false, true])('rejects application Officer grants even when Secrets User is also present: %s', withUser => {
+    const lab = at(0)
+    const edited = { ...lab, tasks: lab.tasks.map(task => task.id !== 'grant-vault-read' ? task : {
+      ...task, solution: { steps: task.solution.steps.flatMap(step => step.kind === 'command' && step.line.includes('role assignment create')
+        ? [{ ...step, line: step.line.replace('Key Vault Secrets User', 'Key Vault Secrets Officer') }, ...(withUser ? [step] : [])] : [step]) },
+    }) }
+    const run = replay(edited)
+    expect(rows(run).some(row => row.kind === 'secret-read')).toBe(true)
+    expect(rows(run).some(row => row.kind === 'notification-provider' && row.statusCode === 202)).toBe(true)
+    expect(run.sandbox.keyVaults[0].roleAssignments.some(role => role.principalId === USER_OBJECT_ID && role.roleDefinitionId === SECRETS_OFFICER_ROLE_ID)).toBe(true)
+    expect(evaluateLab(lab, run).tasks.find(task => task.id === 'grant-vault-read').done).toBe(false)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).tasks.find(task => task.id === 'grant-vault-read').done).toBe(false)
+  })
+  it('requires Secrets User metadata at the exact vault for the actual attached application', () => {
+    const lab = at(0), run = replay(lab)
+    const grant = lab.tasks.find(task => task.id === 'grant-vault-read')
+    expect(grant.check(run)).toBe(true)
+    for (const changed of [{ scope: '/training/wrong-vault' }, { principalId: USER_OBJECT_ID }]) {
+      const malformed = structuredClone(run)
+      Object.assign(malformed.sandbox.keyVaults[0].roleAssignments.find(role => role.roleDefinitionId === SECRETS_USER_ROLE_ID), changed)
+      expect(grant.check(malformed)).toBe(false)
+    }
   })
   it('cannot complete rotation while consuming the pinned retired version', () => {
     const lab = at(2), run = replay(lab, undefined, source => source.replace('latest = client.get_secret("notification-api-key")', 'latest = client.get_secret("notification-api-key", version=old_version)'))

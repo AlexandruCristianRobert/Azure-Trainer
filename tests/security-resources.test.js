@@ -156,6 +156,8 @@ describe('scoped Security resource foundation', () => {
     expect(isSandboxShape(invalid)).toBe(false)
     const malformedRole = structuredClone(sb); malformedRole.appConfigurationStores[0].roleAssignments = [null]
     expect(isSandboxShape(malformedRole)).toBe(false)
+    const malformedLocation = structuredClone(sb); malformedLocation.appConfigurationStores[0].location = null
+    expect(isSandboxShape(malformedLocation)).toBe(false)
   })
   // Break: retaining Function attachments or nested vault/store assignments after identity/group deletion.
   it.each(['identity', 'group'])('cleans cross-group attachments and nested roles on %s deletion', kind => {
