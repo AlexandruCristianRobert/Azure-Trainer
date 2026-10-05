@@ -78,6 +78,13 @@ it. No Python global dictionary, fake database or Azure SDK is presented as
 production storage. Requests are serialized synchronous teaching invocations;
 no production distributed transaction/concurrent idempotency guarantee is made.
 
+An accepted record owns its app+target+order tuple. If any HTTP acceptance exists
+for a target/order, another app cannot bypass that ownership through a raw queue
+lookup. Raw queue fallback is allowed only when no acceptance exists for that
+target/order, supporting disclosed earlier Messaging prerequisites. Successful
+processing needs matching target/order work provenance, not the global processed
+flag alone; this view is not seeded HTTP completion proof.
+
 ## Curriculum
 
 | Order | ID suffix | New learner construction |
