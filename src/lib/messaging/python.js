@@ -171,6 +171,16 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       }
       case 'UnaryExpression': {
         const op = text(c[0], path); if (!['not', '-', '+'].includes(op)) unsupported(`Operator '${op}' is not supported.`, at)
+        if (profile === HTTP_PROFILE && op === 'not') {
+          // Lezer groups this ambiguous form as not(A or B). Fail closed on
+          // HTTP rather than silently executing different Python precedence.
+          let operand = c[1]
+          while (operand?.name === 'UnaryExpression' && text(children(operand)[0], path) === 'not') operand = children(operand)[1]
+          if (operand?.name === 'BinaryExpression') {
+            const parts = children(operand), operator = parts.slice(1, -1).map(n => text(n, path)).join(' ')
+            if (['and', 'or'].includes(operator)) unsupported('Use explicit parentheses around not or separate if statements before and/or.', at)
+          }
+        }
         return { kind: 'unary', op, value: lower(c[1]), loc: at }
       }
       default: unsupported(`Unsupported expression: ${node.name}.`, at)

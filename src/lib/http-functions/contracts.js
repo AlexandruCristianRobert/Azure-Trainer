@@ -26,6 +26,24 @@ export function normalizeOrder(value) {
     || !Number.isInteger(value.quantity) || value.quantity < 1 || value.quantity > 100) httpError('Order must contain valid id, region and integer quantity only.')
   return { id: value.id, region: value.region, quantity: value.quantity }
 }
+export const HTTP_INPUT_CLASSES = Object.freeze(['none', 'malformed', 'nonobject', 'fields', 'id', 'region',
+  'quantity-bool', 'quantity-type', 'quantity-fraction', 'quantity-range', 'valid', 'protected'])
+export const validHttpInputClass = value => HTTP_INPUT_CLASSES.includes(value)
+/** Value-free observation of actual input; never an automatic handler response. */
+export function classifyHttpOrderInput(method, body) {
+  if (method === 'GET') return 'none'
+  let value
+  try { value = JSON.parse(body) } catch { return 'malformed' }
+  if (!plainObject(value)) return 'nonobject'
+  if (Object.keys(value).length !== 3 || !['id', 'region', 'quantity'].every(key => Object.hasOwn(value, key))) return 'fields'
+  if (typeof value.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id)) return 'id'
+  if (!['EU', 'US'].includes(value.region)) return 'region'
+  if (typeof value.quantity === 'boolean') return 'quantity-bool'
+  if (typeof value.quantity !== 'number' || !Number.isFinite(value.quantity)) return 'quantity-type'
+  if (!Number.isInteger(value.quantity)) return 'quantity-fraction'
+  if (value.quantity < 1 || value.quantity > 100) return 'quantity-range'
+  return 'valid'
+}
 // Repository DTOs carry private metadata. Identity projects only the business fields.
 export function sameCanonicalOrder(a, b) {
   if (!plainObject(a) || !finiteJson(a) || !plainObject(b) || !finiteJson(b)) return false

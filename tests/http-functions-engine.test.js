@@ -53,7 +53,7 @@ function fixture(code = source) {
       sandbox = createStorageAccount(sandbox, { resourceGroup: target.resourceGroup, name: 'sthttporders' }).sandbox
       return createFunctionApp(sandbox, { resourceGroup: target.resourceGroup, name: 'func-orders', storageAccount: 'sthttporders', runtime: 'python', runtimeVersion: '3.12' }).sandbox
     },
-    messagingExercise: { commands: [{ entry: 'function_app.py', mode: 'http-handler' }, { entry: 'worker.py', mode: 'script' }],
+    messagingExercise: { commands: [{ entry: 'function_app.py', mode: 'http-handler' }, { entry: 'worker.py', mode: 'script' }, { entry: 'producer.py', mode: 'script' }],
       tasks: [{ taskId: 'http', scenarioId: 'http-request', scenarioVersion: 1, entry: 'function_app.py', mode: 'http-handler',
         check: m => m.httpFunctions?.requests.some(r => r.response.statusCode === 200) === true }] },
     tasks: [{ id: 'http', check: () => true, verification: { scenarioId: 'http-request', scenarioVersion: 1 },
@@ -201,14 +201,14 @@ def submit(req: func.HttpRequest, output: func.Out[str]) -> func.HttpResponse:
     expect(validHttpJournal(altered.runtime.messaging, f.lab.messagingInput.httpFunctions, altered.sandbox)).toBe(false)
     expect(() => deserializeRun(JSON.stringify(altered), f.lab)).toThrow()
   })
-  it('guards known demo keys in ordinary worker output and diagnostics', () => {
+  it('guards known demo keys in ordinary script output and diagnostics', () => {
     const f = fixture(); command(f, 'func start')
-    save(f, 'worker.py', 'def main():\n    print("demo-http-private-key")\n')
-    const printed = command(f, 'python worker.py')
+    save(f, 'producer.py', 'def main():\n    print("demo-http-private-key")\n')
+    const printed = command(f, 'python producer.py')
     expect(printed.diagnostics[0]?.code).toBe('HTTP_PRIVACY')
     expect(JSON.stringify(printed.lines)).not.toContain('demo-http-private-key')
-    save(f, 'worker.py', 'def main():\n    raise ValueError("demo-http-private-key")\n')
-    const raised = command(f, 'python worker.py')
+    save(f, 'producer.py', 'def main():\n    raise ValueError("demo-http-private-key")\n')
+    const raised = command(f, 'python producer.py')
     expect(JSON.stringify(raised.diagnostics)).not.toContain('demo-http-private-key')
   })
   it('invalidates resource change/revert, rejects missing app and retains SDK send on oversized response', () => {

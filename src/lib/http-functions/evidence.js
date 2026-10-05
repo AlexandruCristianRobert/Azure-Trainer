@@ -1,6 +1,6 @@
 import { canonicalize } from '../labEngine/evidence.js'
 import { messagingResourceConfiguration } from '../messaging/evidence.js'
-import { closedHttpObject, httpCounter, normalizeOrder, sameCanonicalOrder, normalizeHttpTarget, matchHttpRoute, jsonBytes, HTTP_LIMITS } from './contracts.js'
+import { closedHttpObject, httpCounter, normalizeOrder, sameCanonicalOrder, normalizeHttpTarget, matchHttpRoute, jsonBytes, HTTP_LIMITS, validHttpInputClass } from './contracts.js'
 import { emptyHttpFunctionsState, validateHttpFunctionsState, validateHttpCapture, validateHttpAcceptedRecord, validateHttpRequestRecord, validateHttpResponse } from './state.js'
 import { sensitiveTelemetry, sensitiveTelemetryName } from '../observability/privacy.js'
 import { parseMessagingProject } from '../messaging/python.js'
@@ -62,10 +62,11 @@ function validRead(row) {
     && (r.origin.workerReceiptId === null || id(r.origin.workerReceiptId, 'trace')) && httpPublicSafe(row)
 }
 function validInvocation(row) {
-  return exact(row, 'executionId,requestId,captureId,functionId,keyId,requestOrder,resourceStamp,resourceGeneration,reads,operations,consumedReadIds,consumedFields,response')
+  return exact(row, 'executionId,requestId,captureId,functionId,keyId,requestOrder,inputClass,resourceStamp,resourceGeneration,reads,operations,consumedReadIds,consumedFields,response')
     && id(row.executionId, 'execution') && id(row.requestId, 'http-request') && id(row.captureId, 'http-capture')
     && (row.functionId === null || typeof row.functionId === 'string') && (row.keyId === null || typeof row.keyId === 'string')
     && (row.requestOrder === null || (() => { try { normalizeOrder(row.requestOrder); return true } catch { return false } })())
+    && validHttpInputClass(row.inputClass) && (row.inputClass === 'valid') === (row.requestOrder !== null)
     && /^[a-f0-9]{8}$/.test(row.resourceStamp) && httpCounter(row.resourceGeneration)
     && list(row.reads) && row.reads.every(validRead) && unique(row.reads.map(r => r.id))
     && list(row.operations) && row.operations.every(op => exact(op, 'id,kind,target,sendReceiptId,acceptedId') && id(op.id, 'http-operation')
@@ -138,6 +139,7 @@ function checkHttpJournal(messaging, labInput, sandbox) {
       if (!invocation || invocation.executionId !== execution.id || request.executionId !== execution.id || request.afterNextId !== end
         || request.beforeNextId <= previousCommand || request.beforeNextId > number(execution.id)
         || !capture || capture.appId !== request.appId || capture.scope !== request.scope || capture.generation !== request.generation
+        || request.inputClass !== invocation.inputClass
         || !same(request.response, invocation.response) || !same(execution.measurements.value, request.response)
         || !same(request.operationIds, invocation.operations.map(row => row.id)) || !same(request.readIds, invocation.consumedReadIds)) return false
       const match = matchHttpRoute(capture.routes, request.method, request.path), route = match.route

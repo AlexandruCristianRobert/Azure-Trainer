@@ -39,7 +39,7 @@ const routes = [
   { route: 'orders/latest', methods: ['POST'], authLevel: 'function', functionId: 'function_app.py:latest', functionName: 'Latest', path: 'function_app.py' },
 ]
 const requestRecord = path => ({ id: 'http-request-3', appId: appId.toLowerCase(), scope: 'local', generation: 1, method: 'GET',
-  path, authorization: 'not-required', operationIds: [], readIds: ['http-read-1'],
+  path, authorization: 'not-required', inputClass: 'none', operationIds: [], readIds: ['http-read-1'],
   response: { statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{"status":"pending"}' },
   sendReceiptIds: [], workerReceiptIds: [], executionId: 'execution-9', beforeNextId: 4, afterNextId: 10 })
 
@@ -200,7 +200,7 @@ describe('closed bounded HTTP state', () => {
     const capture = { id: 'http-capture-1', appId: appId.toLowerCase(), scope: 'local', generation: 1, status: 'captured', createdAtMs: 0,
       entry: 'function_app.py', sources: { 'function_app.py': '# handler' }, sourceVersions: { 'function_app.py': 1 }, routes }
     const request = { id: 'http-request-2', appId: appId.toLowerCase(), scope: 'local', generation: 1, method: 'GET',
-      path: '/api/orders/O_A', authorization: 'not-required', operationIds: [], readIds: ['http-read-1'],
+      path: '/api/orders/O_A', authorization: 'not-required', inputClass: 'none', operationIds: [], readIds: ['http-read-1'],
       response: { statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{"id":"O_A","status":"pending"}' },
       sendReceiptIds: [], workerReceiptIds: [], executionId: 'execution-9', beforeNextId: 4, afterNextId: 10 }
     const extension = { ...empty, nextId: 3, localHosts: [capture], currentLocal: { [capture.appId]: capture.id }, requests: [request] }

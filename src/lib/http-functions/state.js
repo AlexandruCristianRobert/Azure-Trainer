@@ -1,6 +1,6 @@
 import { plainObject } from '../messaging/state.js'
 import { HTTP_LIMITS, closedHttpObject, httpCounter, jsonBytes, normalizeOrder,
-  normalizeHttpAppId, normalizeHttpTarget, normalizeHttpHeaders, normalizeHttpPath, validateHttpRoutes } from './contracts.js'
+  normalizeHttpAppId, normalizeHttpTarget, normalizeHttpHeaders, normalizeHttpPath, validateHttpRoutes, validHttpInputClass } from './contracts.js'
 
 export function emptyHttpFunctionsState() {
   return { version: 1, nextId: 1, localHosts: [], deployments: [], currentLocal: {}, currentPublished: {}, accepted: [], requests: [] }
@@ -47,9 +47,10 @@ export function validateHttpCapture(value) {
 }
 export function validateHttpRequestRecord(value) {
   if (!closedHttpObject(value, ['id', 'appId', 'scope', 'generation', 'method', 'path', 'authorization', 'operationIds', 'readIds',
-    'response', 'sendReceiptIds', 'workerReceiptIds', 'executionId', 'beforeNextId', 'afterNextId'])
+    'response', 'sendReceiptIds', 'workerReceiptIds', 'executionId', 'beforeNextId', 'afterNextId', 'inputClass'])
     || !reference(value.id, 'http-request') || !canonicalApp(value.appId) || !['local', 'published'].includes(value.scope)
     || !positive(value.generation) || !['GET', 'POST'].includes(value.method)
+    || !validHttpInputClass(value.inputClass) || (value.method === 'GET') !== (value.inputClass === 'none')
     || !['not-required', 'granted', 'denied'].includes(value.authorization)
     || !references(value.operationIds, 'http-operation') || !references(value.readIds, 'http-read')
     || !references(value.sendReceiptIds, 'trace') || !references(value.workerReceiptIds, 'trace')

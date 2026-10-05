@@ -1,4 +1,4 @@
-import { HTTP_LIMITS, HTTP_PROFILE, closedHttpObject, normalizeHttpAppId, normalizeHttpTarget, normalizeOrder, sameCanonicalOrder, parseHttpRequest, matchHttpRoute, jsonBytes, httpError } from './contracts.js'
+import { HTTP_LIMITS, HTTP_PROFILE, closedHttpObject, normalizeHttpAppId, normalizeHttpTarget, normalizeOrder, sameCanonicalOrder, parseHttpRequest, matchHttpRoute, jsonBytes, httpError, classifyHttpOrderInput } from './contracts.js'
 import { emptyHttpFunctionsState, validateHttpFunctionsState, validateHttpResponse } from './state.js'
 import { recordAcceptedOrder, classifySubmission } from './orders.js'
 import { httpMeasurements, httpPublicSafe, httpResourceStamp, validHttpJournal, httpEvidenceIsCurrent } from './evidence.js'
@@ -115,7 +115,11 @@ export function runHttpFunctionsRequest(run, lab, intent) {
     let actualResponse = !route ? response(match.status, match.status === 404 ? 'Not found.' : 'Method not allowed.', match.status === 405 ? { allow: match.allow.join(', ') } : {})
       : authorization === 'denied' ? response(401, 'Function key required.') : null
     let requestOrder = null
-    if (request.method === 'POST') { try { requestOrder = normalizeOrder(JSON.parse(request.body)); if (!httpPublicSafe(requestOrder, ctx.secrets)) requestOrder = null } catch { /* invalid raw body is never persisted */ } }
+    let inputClass = classifyHttpOrderInput(request.method, request.body)
+    if (inputClass === 'valid') {
+      requestOrder = normalizeOrder(JSON.parse(request.body))
+      if (!httpPublicSafe(requestOrder, ctx.secrets)) { requestOrder = null; inputClass = 'protected' }
+    }
     if (!actualResponse) {
       const executed = executeMessagingProgram({ program: parsed.program, state, sandbox: run.sandbox, input: lab.messagingInput ?? {},
         httpInvocation: { request, route, params: match.params, appId: ctx.appId, target: ctx.target, generation: capture.generation, settings: env, protectedValues: ctx.secrets } })
@@ -142,13 +146,13 @@ export function runHttpFunctionsRequest(run, lab, intent) {
       }
     }
     const current = state.httpFunctions ?? extension, executionId = `execution-${state.nextId}`, requestId = `http-request-${current.nextId}`
-    const record = { id: requestId, appId: ctx.appId, scope: request.scope, generation: capture.generation, method: request.method, path: request.path, authorization,
+    const record = { id: requestId, appId: ctx.appId, scope: request.scope, generation: capture.generation, method: request.method, path: request.path, authorization, inputClass,
       operationIds: http.operations.map(row => row.id), readIds: http.consumedReadIds, response: actualResponse,
       sendReceiptIds: http.operations.map(row => row.sendReceiptId), workerReceiptIds: [...new Set(http.reads.filter(row => row.kind === 'repository' && row.found).map(row => row.record.origin.workerReceiptId).filter(Boolean))],
       executionId, beforeNextId: run.runtime.messaging.nextId, afterNextId: state.nextId + 1 }
     const httpFunctions = { ...current, nextId: current.nextId + 1, requests: [...current.requests, record] }
     if (!validateHttpFunctionsState(httpFunctions)) httpError('Request snapshot exceeds supported bounds.', 'HTTP_LIMIT')
-    const invocation = { requestId, captureId: capture.id, functionId: route?.functionId ?? null, keyId: key?.id ?? null, requestOrder,
+    const invocation = { requestId, captureId: capture.id, functionId: route?.functionId ?? null, keyId: key?.id ?? null, requestOrder, inputClass,
       resourceStamp: httpResourceStamp(run, lab), resourceGeneration: run.dependencyGenerations['http:resources'] ?? 0,
       reads: http.reads, operations: http.operations, consumedReadIds: http.consumedReadIds, consumedFields: http.consumedFields, response: actualResponse }
     const next = journal(run, withState(run, { ...state, httpFunctions }), lab,
