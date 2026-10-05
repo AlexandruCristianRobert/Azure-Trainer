@@ -1,7 +1,7 @@
 # Security and Observability release record
 
-Status: reviewed release candidate; publication remains subject to merged checks
-and GitHub Pages deployment. Implementation fix HEAD 8beca30.
+Status: reviewed and merged release candidate; deployment status is recorded by
+the GitHub Pages workflow and final handoff. Implementation fix HEAD 8beca30.
 All twelve Labs are implemented; this candidate record does not claim deployment.
 
 The user chose to finish the existing monitoring portion, not add App Service or
@@ -99,3 +99,18 @@ No additional journey or duplicate monitoring Labs were introduced.
 Pending when this candidate record was prepared: merge into main, merged
 verification, push, Pages deployment and live catalog verification. Preserve
 local scratch/worktree until records are durable and integration is recoverable.
+
+### Merged verification
+
+Merge commit 16bc2e5 combines the reviewed feature, separate width fix and history
+documentation. Fresh merged checks all passed:
+
+- Nine-file journey aggregate: 140/140, 8.4202532 seconds.
+- Four-file compatibility: 101/101, 8.7176261 seconds.
+- Pages-base build: exit 0, 8.8133898 seconds; existing chunk-size advisory.
+
+The scoped final fix review approved all three findings with no new breakage.
+No AKS/Container Apps/full/cloud/browser suite was run. The subsequent change
+recording these results modifies only this release document, not tested code.
+Publication is through the existing main-branch Pages workflow; consult its
+commit-linked result and the live site for deployment evidence.
