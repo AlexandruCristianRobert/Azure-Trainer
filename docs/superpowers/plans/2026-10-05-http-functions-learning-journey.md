@@ -10,6 +10,11 @@
 
 ## Global Constraints
 
+Execution status: all six tasks completed and independently approved. Final
+whole-branch findings were resolved in `0426501` and the original reviewer
+approved the scoped correction. See `2026-10-05-http-functions-handoff.md` for
+verification evidence, rulings, limits and remaining integration choice.
+
 - Exactly nine Labs, journeyId http-functions-orders, skillAreaId connect;
   orders 1–8 guided and order 9 capstone. Maximum 15 is not a target to fill.
 - Continue the Order Processing Application; Python v2 decorators with useful
