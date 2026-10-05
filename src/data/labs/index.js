@@ -60,6 +60,7 @@ import { redisIndependentLab } from './data-journey/redis-independent.lab.js'
 import { dataCapstoneLab } from './data-journey/capstone.lab.js'
 import { MESSAGING_LABS } from './messaging-journey/index.js'
 import { SECURITY_OBSERVABILITY_LABS } from './security-journey/index.js'
+import { HTTP_FUNCTIONS_LABS } from './http-functions-journey/index.js'
 
 // Catalog order = Home card order (design artboard 1).
 export const LABS = [
@@ -125,6 +126,7 @@ export const LABS = [
   dataCapstoneLab,
   ...MESSAGING_LABS,
   ...SECURITY_OBSERVABILITY_LABS,
+  ...HTTP_FUNCTIONS_LABS,
 ]
 
 export function labById(id) {

@@ -12,7 +12,7 @@ export function seedHttpStage(run, stage) {
   sandbox = createQueue(sandbox, { ...ORDERS_TARGET, name: 'orders', maxDeliveryCount: 5, deadLetteringOnMessageExpiration: true }).sandbox
   sandbox = createStorageAccount(sandbox, { resourceGroup: 'rg-messaging', name: 'stmessagingorders', location: 'westeurope', kind: 'StorageV2', sku: 'Standard_LRS' }).sandbox
   sandbox = createFunctionApp(sandbox, { resourceGroup: 'rg-messaging', name: 'func-orders', storageAccount: 'stmessagingorders', flexconsumptionLocation: 'westeurope', runtime: 'python', runtimeVersion: '3.12', functionsVersion: '4', osType: 'Linux' }).sandbox
-  if (stage === 'keys' || stage === 'binding') sandbox = setFunctionAppSettings(sandbox, {
+  if (stage === 'keys' || stage === 'binding' || stage === 'capstone') sandbox = setFunctionAppSettings(sandbox, {
     resourceGroup: 'rg-messaging', name: 'func-orders',
     settings: Object.entries(HTTP_CLOUD_SETTINGS).map(([name, value]) => `${name}=${value}`),
   }).sandbox

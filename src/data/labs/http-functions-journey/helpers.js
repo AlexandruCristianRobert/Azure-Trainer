@@ -85,7 +85,7 @@ export const httpExerciseTask = (task, check) => ({ taskId: task.id, ...task.ver
   entry: 'function_app.py', mode: 'http-handler', check })
 export const httpGet = path => command(`curl -i http://localhost:7071/api/${path}`)
 export const httpPost = body => command(`curl -i -X POST -H "Content-Type: application/json" -d '${typeof body === 'string' ? body : JSON.stringify(body)}' http://localhost:7071/api/orders`)
-export const httpCloudGet = path => command(`curl -i https://func-orders.azurewebsites.net/api/${path}`)
+export const httpCloudGet = (path, key) => command(`curl -i ${key ? `-H "x-functions-key: ${key}" ` : ''}https://func-orders.azurewebsites.net/api/${path}`)
 export const httpCloudPost = (body, key) => command(`curl -i -X POST -H "Content-Type: application/json" ${key ? `-H "x-functions-key: ${key}" ` : ''}-d '${typeof body === 'string' ? body : JSON.stringify(body)}' https://func-orders.azurewebsites.net/api/orders`)
 export function httpLab({ stage, order, title, brief, files, task, currentCheck, initialize }) {
   return { ...HTTP_METADATA, id: `http-functions-${stage}`, journeyOrder: order, title, minutes: 25,

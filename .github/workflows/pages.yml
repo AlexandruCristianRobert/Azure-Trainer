@@ -36,6 +36,8 @@ jobs:
         run: npm run test:messaging
       - name: Run focused Security and Observability checks
         run: npm run test:security-observability
+      - name: Run focused HTTP Functions checks
+        run: npm run test:http-functions
       - name: Build for project Pages path
         run: npm run build -- --base=/Azure-Trainer/
       - name: Configure Pages

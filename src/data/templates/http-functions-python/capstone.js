@@ -1,0 +1,22 @@
+import { HTTP_PREFIX, HTTP_HEALTH_SOURCE } from './api.js'
+import { HTTP_BINDING_SOURCE, httpHostingProjectFiles } from './hosting.js'
+
+// Both order routes are protected explicitly; the health/settings routes may remain anonymous.
+export const HTTP_CAPSTONE_SOURCE = HTTP_BINDING_SOURCE.replace('route="orders/{id}", methods=["GET"]',
+  'route="orders/{id}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION')
+export const HTTP_CAPSTONE_STARTER_SOURCE = HTTP_PREFIX + HTTP_HEALTH_SOURCE + `@app.route(route="orders/{id}", methods=["GET"])
+def get_order(req: func.HttpRequest) -> func.HttpResponse:
+    # Construct protected status routing and consume the actual repository record.
+    raise ValueError("Finish the order status API")
+
+@app.route(route="orders", methods=["POST"])
+def post_order(req: func.HttpRequest) -> func.HttpResponse:
+    # Construct JSON validation, protected access, repository-first retries and queue output.
+    raise ValueError("Finish the order submission API")
+`
+export function httpCapstoneProjectFiles() {
+  const files = httpHostingProjectFiles('binding')
+  return { ...files, 'function_app.py': HTTP_CAPSTONE_STARTER_SOURCE,
+    'README.md': `# HTTP Order API capstone\n\nReplace the unfinished order handlers with a validated published API. Both POST orders and GET orders/{id} must explicitly use function-level access. Construct an actual Service Bus output binding; repository-first same-payload reuse must return its actual current status without another send, while changed payload returns 409 and preserves the original. Malformed JSON and boolean quantity must return 400 without work.\n\nThe empty queue, Function App, storage, cloud ENVIRONMENT=published/ServiceBusConnection__fullyQualifiedNamespace=sb-orders.servicebus.windows.net settings, SDK client, read-only teaching repository and protected worker are supplied independently. Validation, order routes/responses, access annotations, output binding and retry handling are unfinished. No HTTP proof is supplied. Publish once, reject unauthorized POST/GET and malformed/boolean input, accept one order, GET pending, explicitly run python worker.py, GET processed, retry unchanged, then conflict. The only non-curl commands in this episode are publish and python worker.py.\n\nfunc start and func azure functionapp publish func-orders capture saved sources; edits need another capture. The only modeled addresses are http://localhost:7071/api/... and https://func-orders.azurewebsites.net/api/.... curl supports GET/POST, -X/--request, -H/--header, -d/--data and -i/--include. This is browser-only: no HTTP network, Azure deployment, OS server, Python process or installed SDK is used. Local keys are disabled; published function-level access checks only the demo x-functions-key header before effects. The fixture key is private to trusted Lab input, guarded from public evidence/responses/broker data and explanation prompts. Authored demo-only Solution commands show the dummy key deliberately.\n\nThe supplied repository persists browser-modeled queue/worker lineage across host captures and restores. Sequential synchronous requests demonstrate payload-bound idempotency; concurrent production callers need atomic storage/outbox design. A literal matching status after an unused repository read earns no read credit: return record.id/status directly. A completed SDK send survives later handler failure; staged binding output flushes only on a normal validated response and rolls back on response/flush failure. Security, unsupported-syntax and limit diagnostics cannot be caught by the supported ValueError-only except arm. Python v2 decorators are executable here; C# isolated-worker comparisons in Task Rationale are explanatory only.\n\nHTTP expressions with unparenthesized leading not combined with and/or are diagnosed; use explicit parentheses or separate if statements. Legacy profile parsing is unchanged. Version 1 request inputClass is mandatory value-free input classification, mirrored in the invocation; no raw body or body hash is journaled. Browser storage evidence is not cryptographic protection against coherent wholesale rewriting. Only 50 executions, 100 requests, 16 captures and 50 accepted orders are retained; HTTP state is bounded to 256 KiB, each capture to 64 KiB source, request/response bodies to 16 KiB. See docs/http-functions-simulator.md in the trainer source for the exact SDK subset, remaining bounds and official references.\n`,
+  }
+}
