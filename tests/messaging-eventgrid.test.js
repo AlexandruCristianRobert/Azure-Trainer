@@ -236,7 +236,7 @@ describe('bounded Event Grid publication and delivery', () => {
     sandbox = createNamespace(sandbox, { resourceGroup: 'rg-messaging', name: 'sb-orders' }).sandbox
     sandbox = createQueue(sandbox, { resourceGroup: 'rg-messaging', namespace: 'sb-orders', name: 'orders' }).sandbox
     const files = { ...EVENTGRID_SOLUTION_FILES, 'events.py': `from azure.eventgrid import EventGridEvent as Fact\nfrom clients import publisher as sender\ndef main():\n    sender.send(Fact(subject="/orders/eu/o1", event_type="Contoso.OrderProcessed", data={"order_id":"o1"}, data_version="1.0", id="e1"))\n` }
-    const run = { project: { savedFiles: files, files: { 'handler.py': 'invalid unsaved draft' } }, sandbox, runtime: { messaging: emptyMessagingState() } }
+    const run = { project: { manifestId: 'messaging-python-v1', savedFiles: files, files: { 'handler.py': 'invalid unsaved draft' } }, sandbox, runtime: { messaging: emptyMessagingState() } }
     const lab = { messagingInput: { eventGridHandlers: { [endpoint]: 'handler.py' } } }
     const published = executeMessagingEntry(run, lab, 'events.py')
     expect(published.diagnostics).toEqual([])
@@ -250,7 +250,7 @@ describe('bounded Event Grid publication and delivery', () => {
     expect(denied.run).toBe(published.run)
     expect(denied.diagnostics[0].code).toBe('MESSAGING_CONFIG')
     const transientFiles = { ...files, 'handler.py': 'def handle_event(event):\n    if event.event_type == "Contoso.OrderProcessed":\n        return 503\n    return 400\n' }
-    const transient = executeMessagingEntry({ ...published.run, project: { savedFiles: transientFiles } }, lab, 'handler.py', 'eventgrid-handler', { deliveryId })
+    const transient = executeMessagingEntry({ ...published.run, project: { ...published.run.project, savedFiles: transientFiles } }, lab, 'handler.py', 'eventgrid-handler', { deliveryId })
     expect(transient.run.runtime.messaging.eventGrid.deliveries[0]).toMatchObject({ status: 'retrying', lastStatus: 503 })
     const driven = executeMessagingEntry(published.run, lab, 'handler.py')
     expect(driven.diagnostics).toEqual([])
@@ -271,7 +271,7 @@ describe('bounded Event Grid publication and delivery', () => {
     expect(forbiddenOverride.run).toBe(published.run)
     expect(forbiddenOverride.diagnostics[0].code).toBe('MESSAGING_CONFIG')
     const unsupportedCallback = { ...files, 'handler.py': 'from training_runtime import deliver_events\ndef handle_event(event):\n    open("secret")\n    return 200\ndef main():\n    deliver_events(handle_event)\n' }
-    const rejectedCallback = executeMessagingEntry({ ...published.run, project: { savedFiles: unsupportedCallback } }, lab, 'handler.py')
+    const rejectedCallback = executeMessagingEntry({ ...published.run, project: { ...published.run.project, savedFiles: unsupportedCallback } }, lab, 'handler.py')
     expect(rejectedCallback.run.runtime.messaging).toBe(published.run.runtime.messaging)
     expect(rejectedCallback.diagnostics[0].code).toBe('MESSAGING_UNSUPPORTED')
     const invalidRegistration = executeMessagingEntry(run, { messagingInput: { eventGridHandlers: { 'https://unregistered.trainer.invalid/events': 'handler.py' } } }, 'events.py')
@@ -292,11 +292,11 @@ describe('bounded Event Grid publication and delivery', () => {
     expect(old.diagnostics).toEqual([])
     let busSandbox = createNamespace({ ...sandbox, eventGridTopics: [] }, { resourceGroup: 'rg-messaging', name: 'sb-orders' }).sandbox
     busSandbox = createQueue(busSandbox, { resourceGroup: 'rg-messaging', namespace: 'sb-orders', name: 'orders' }).sandbox
-    const oldRun = executeMessagingEntry({ project: { savedFiles: SERVICEBUS_STARTER_FILES }, sandbox: busSandbox, runtime: { messaging: emptyMessagingState() } }, { messagingInput: {} }, 'producer.py')
+    const oldRun = executeMessagingEntry({ project: { manifestId: 'messaging-python-v1', savedFiles: SERVICEBUS_STARTER_FILES }, sandbox: busSandbox, runtime: { messaging: emptyMessagingState() } }, { messagingInput: {} }, 'producer.py')
     expect(oldRun.diagnostics).toEqual([])
     expect(Object.values(oldRun.run.runtime.messaging.entities)[0].messages[0].messageId).toBe('m1')
     expect(oldRun.run.runtime.messaging).not.toHaveProperty('eventGrid')
-    const cumulativeRun = { ...run, project: { savedFiles: { ...files, 'worker.py': SERVICEBUS_SOLUTION_FILES['worker.py'] } } }
+    const cumulativeRun = { ...run, project: { ...run.project, savedFiles: { ...files, 'worker.py': SERVICEBUS_SOLUTION_FILES['worker.py'] } } }
     const cumulativeProducer = executeMessagingEntry(cumulativeRun, lab, 'producer.py')
     expect(cumulativeProducer.diagnostics).toEqual([])
     const cumulativeWorker = executeMessagingEntry(cumulativeProducer.run, lab, 'worker.py')
