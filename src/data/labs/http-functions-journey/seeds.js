@@ -1,7 +1,8 @@
 import { createResourceGroup, createNamespace, createQueue } from '../../../lib/sandbox/ops.js'
-import { createStorageAccount, createFunctionApp } from '../../../lib/sandbox/functions.js'
+import { createStorageAccount, createFunctionApp, setFunctionAppSettings } from '../../../lib/sandbox/functions.js'
 import { applyServiceBusOperation } from '../../../lib/messaging/servicebus.js'
 import { ORDERS_TARGET, HTTP_ORDER } from './helpers.js'
+import { HTTP_CLOUD_SETTINGS } from '../../templates/http-functions-python/hosting.js'
 
 /** Genuine prerequisites only; no HTTP extension, request or execution proof. */
 export function seedHttpStage(run, stage) {
@@ -11,6 +12,10 @@ export function seedHttpStage(run, stage) {
   sandbox = createQueue(sandbox, { ...ORDERS_TARGET, name: 'orders', maxDeliveryCount: 5, deadLetteringOnMessageExpiration: true }).sandbox
   sandbox = createStorageAccount(sandbox, { resourceGroup: 'rg-messaging', name: 'stmessagingorders', location: 'westeurope', kind: 'StorageV2', sku: 'Standard_LRS' }).sandbox
   sandbox = createFunctionApp(sandbox, { resourceGroup: 'rg-messaging', name: 'func-orders', storageAccount: 'stmessagingorders', flexconsumptionLocation: 'westeurope', runtime: 'python', runtimeVersion: '3.12', functionsVersion: '4', osType: 'Linux' }).sandbox
+  if (stage === 'keys' || stage === 'binding') sandbox = setFunctionAppSettings(sandbox, {
+    resourceGroup: 'rg-messaging', name: 'func-orders',
+    settings: Object.entries(HTTP_CLOUD_SETTINGS).map(([name, value]) => `${name}=${value}`),
+  }).sandbox
   let messaging = run.runtime.messaging
   if (stage === 'status') {
     const result = applyServiceBusOperation(messaging, sandbox, { kind: 'send', target: ORDERS_TARGET,

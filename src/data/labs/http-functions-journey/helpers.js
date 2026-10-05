@@ -18,6 +18,16 @@ export const httpInvocation = measurement => measurement.httpFunctions?.invocati
 export const httpBody = measurement => {
   try { return JSON.parse(httpRequest(measurement)?.response.body) } catch { return null }
 }
+export const httpJsonResponse = measurement => (httpRequest(measurement)?.response.headers['content-type'] ?? '')
+  .split(';', 1)[0].trim().toLowerCase() === 'application/json'
+export function httpEnvironmentRead(measurement, scope, value) {
+  const request = httpRequest(measurement), invocation = httpInvocation(measurement)
+  const read = invocation?.reads.find(row => row.kind === 'environment' && row.name === 'ENVIRONMENT' && row.value === value)
+  return request?.method === 'GET' && request.path === '/api/environment' && request.scope === scope
+    && request.response.statusCode === 200 && !!invocation?.functionId && !!read && httpNoSend(measurement)
+    && httpJsonResponse(measurement) && exactOrder(httpBody(measurement), { environment: value })
+    && invocation.consumedFields.some(row => row.readId === read.id && row.field === 'value')
+}
 export const httpNoSend = measurement => httpInvocation(measurement)?.operations.length === 0
   && measurement.trace.filter(row => row.kind === 'enqueue').length === 0
   && httpRequest(measurement)?.sendReceiptIds.length === 0
@@ -75,6 +85,8 @@ export const httpExerciseTask = (task, check) => ({ taskId: task.id, ...task.ver
   entry: 'function_app.py', mode: 'http-handler', check })
 export const httpGet = path => command(`curl -i http://localhost:7071/api/${path}`)
 export const httpPost = body => command(`curl -i -X POST -H "Content-Type: application/json" -d '${typeof body === 'string' ? body : JSON.stringify(body)}' http://localhost:7071/api/orders`)
+export const httpCloudGet = path => command(`curl -i https://func-orders.azurewebsites.net/api/${path}`)
+export const httpCloudPost = (body, key) => command(`curl -i -X POST -H "Content-Type: application/json" ${key ? `-H "x-functions-key: ${key}" ` : ''}-d '${typeof body === 'string' ? body : JSON.stringify(body)}' https://func-orders.azurewebsites.net/api/orders`)
 export function httpLab({ stage, order, title, brief, files, task, currentCheck, initialize }) {
   return { ...HTTP_METADATA, id: `http-functions-${stage}`, journeyOrder: order, title, minutes: 25,
     brief, initialProjectFiles: files, initializeSimulation: initialize, messagingInput: HTTP_INPUT,
