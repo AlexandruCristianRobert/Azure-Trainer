@@ -1,8 +1,8 @@
 # Security and Observability release record
 
-Status: reviewed and merged release candidate; deployment status is recorded by
-the GitHub Pages workflow and final handoff. Implementation fix HEAD 8beca30.
-All twelve Labs are implemented; this candidate record does not claim deployment.
+Status: reviewed, merged and published. Implementation fix HEAD 8beca30.
+All twelve Labs are deployed through GitHub Pages. Deployment ad94b6c and live
+verification are recorded below; subsequent record updates do not change app code.
 
 The user chose to finish the existing monitoring portion, not add App Service or
 duplicate the already planned OpenTelemetry/KQL Labs. The existing merge and
@@ -132,3 +132,31 @@ Named RED reproduced the failure; owning-file GREEN passed 18/18, with all
 captured repair attempts totaling 11.719 seconds. Independent static review
 approved it. The first CI job ran 22 seconds and did not reach deployment.
 The corrected candidate will be retried through the unchanged Pages workflow.
+
+### Successful deployment and live verification
+
+[Pages run 37272354536](https://github.com/AlexandruCristianRobert/Azure-Trainer/actions/runs/37272354536)
+succeeded for ad94b6cc6aae74ecd1b763bf41aadf0907a53043. Its complete job ran
+33 seconds, including focused Data, Messaging, Security/Observability, build and
+deployment steps. No AKS or Container Apps suite ran.
+
+The [published site](https://alexandrucristianrobert.github.io/Azure-Trainer/)
+returned HTTP 200. Its index-Cyhq8TpX.js, vendor-BmSn0oGt.js and
+index-6aPh-jT6.css assets returned 200. All twelve journey titles and the journey
+heading were present; the removed 440-pixel journey constraint was absent.
+Local registry verification also established 84 total Labs and twelve unique,
+ordered Security/Observability Labs.
+
+The first live marker check incorrectly required complete literal lab IDs, which
+the bundle generates from stage names. This was a verification-method error,
+not a deployment defect. A local-bundle check confirmed the generated-ID shape;
+the corrected live check verified all twelve distinct authored titles, heading,
+assets and width rule. The failed first check's final timer was not emitted;
+its reported tool wait was about ten seconds. Subsequent live checks were timed
+(38.4215619 and 7.5732527 seconds). Together with the earlier first-RED capture
+gap, this prevents an exact all-attempt elapsed-time claim; disclosures remain.
+
+Both Important final-review issues, the malformed-location minor and the
+deployment fixture compatibility issue are addressed and independently reviewed.
+Only the disclosed capture limitations, ordinary CRLF notices and existing
+bundle-size advisory remain; no functional blocker is deferred.
