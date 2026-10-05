@@ -52,16 +52,24 @@ export function normalizeHttpHeaders(value = {}) {
 function decode(value) {
   try { return decodeURIComponent(value) } catch { httpError('Malformed URI encoding.') }
 }
+// Validate an already-decoded path. Percent signs, '?' and '#' are parameter data.
 export function normalizeHttpPath(value) {
+  if (!httpText(value, HTTP_LIMITS.urlChars) || !value.startsWith('/') || /\\/.test(value)) httpError('Unsupported HTTP path.')
+  const segments = value.split('/').slice(1)
+  if (segments.some(segment => !segment || /%(?:2f|5c|00)/i.test(segment)
+    || ['.', '..'].includes(segment) || /^(?:%2e){1,2}$/i.test(segment))) httpError('Unsupported HTTP path segment.')
+  if (segments[0]?.toLowerCase() !== 'api' || segments.length < 2) httpError('HTTP routes use the /api prefix.')
+  return '/' + segments.join('/')
+}
+// Decode only at the raw URL boundary, before the URL class can erase dot segments.
+export function parseHttpPath(value) {
   if (!httpText(value, HTTP_LIMITS.urlChars) || !value.startsWith('/') || /[\\?#]/.test(value)) httpError('Unsupported HTTP path.')
   const segments = value.split('/').slice(1).map(segment => {
     const decoded = decode(segment)
-    if (!decoded || /[\/\\\x00-\x1f\x7f]/.test(decoded) || /%(?:2f|5c|00)/i.test(decoded)
-      || ['.', '..'].includes(decoded)) httpError('Unsupported HTTP path segment.')
+    if (/[\/\\\x00-\x1f\x7f]/.test(decoded)) httpError('Unsupported HTTP path segment.')
     return decoded
   })
-  if (segments[0]?.toLowerCase() !== 'api' || segments.length < 2) httpError('HTTP routes use the /api prefix.')
-  return '/' + segments.join('/')
+  return normalizeHttpPath('/' + segments.join('/'))
 }
 export function parseHttpRequest(intent, { appId } = {}) {
   if (!closedHttpObject(intent, ['method', 'url'], ['headers', 'body']) || typeof intent.method !== 'string') httpError('HTTP request accepts method, URL, headers and body intent only.')
@@ -71,7 +79,7 @@ export function parseHttpRequest(intent, { appId } = {}) {
   // Validate the unnormalized path first: URL would otherwise erase dot segments.
   const raw = /^(https?):\/\/([^/?]+)(\/[^?]*)(?:\?(.*))?$/i.exec(intent.url)
   if (!raw) httpError('Unsupported HTTP URL.')
-  const path = normalizeHttpPath(raw[3])
+  const path = parseHttpPath(raw[3])
   let url
   try { url = new URL(intent.url) } catch { httpError('Unsupported HTTP URL.') }
   const host = identity.split('/').at(-1) + '.azurewebsites.net'

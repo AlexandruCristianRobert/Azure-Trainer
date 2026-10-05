@@ -38,6 +38,10 @@ const routes = [
   { route: 'orders/{id}', methods: ['GET'], authLevel: 'anonymous', functionId: 'function_app.py:get_order', functionName: 'GetOrder', path: 'function_app.py' },
   { route: 'orders/latest', methods: ['POST'], authLevel: 'function', functionId: 'function_app.py:latest', functionName: 'Latest', path: 'function_app.py' },
 ]
+const requestRecord = path => ({ id: 'http-request-3', appId: appId.toLowerCase(), scope: 'local', generation: 1, method: 'GET',
+  path, authorization: 'not-required', operationIds: [], readIds: ['http-read-1'],
+  response: { statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{"status":"pending"}' },
+  sendReceiptIds: [], workerReceiptIds: [], executionId: 'execution-9', beforeNextId: 4, afterNextId: 10 })
 
 describe('HTTP order contracts', () => {
   it('normalizes exact payloads and compares repository metadata through canonical fields', () => {
@@ -66,6 +70,13 @@ describe('HTTP order contracts', () => {
     expect(() => parse({ method: 'POST', url: 'http://localhost:7071/api/orders', body: 'é'.repeat(8193) }, { appId })).toThrow()
     expect(() => parse({ method: 'GET', url: 'http://localhost:7071/api/orders', headers: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`x-${i}`, 'a'])) }, { appId })).toThrow()
     expect(() => parse({ method: 'GET', url: 'http://localhost:7071/api/orders?' + 'a'.repeat(2048) }, { appId })).toThrow()
+  })
+  it.each([['%2541', '%41'], ['%25', '%'], ['%3F', '?'], ['%23', '#']])('preserves encoded parameter %s through matching and persisted validation', (encoded, expected) => {
+    const parsed = fn(contracts, 'parseHttpRequest')({ method: 'GET', url: 'http://localhost:7071/api/orders/' + encoded }, { appId })
+    expect(parsed.path).toBe('/api/orders/' + expected)
+    expect(fn(contracts, 'matchHttpRoute')(routes, parsed.method, parsed.path).params).toEqual({ id: expected })
+    expect(fn(state, 'validateHttpRequestRecord')(requestRecord(parsed.path))).toBe(true)
+    for (const segment of ['%2f', '%5c', '%00', '%2e', '%2e%2e', '%xx', '%252f']) expect(() => fn(contracts, 'parseHttpRequest')({ method: 'GET', url: 'http://localhost:7071/api/orders/' + segment }, { appId })).toThrow()
   })
   it('gives static routes precedence and separates method 405 from path 404', () => {
     const match = fn(contracts, 'matchHttpRoute')
@@ -186,17 +197,17 @@ describe('closed bounded HTTP state', () => {
   })
   it('admits typed captures and request links but rejects altered schemas and exhausted bounds', () => {
     const valid = fn(state, 'validateHttpFunctionsState'), empty = fn(state, 'emptyHttpFunctionsState')()
-    const capture = { id: 'http-capture-1', appId: appId.toLowerCase(), scope: 'local', generation: 1, status: 'captured',
+    const capture = { id: 'http-capture-1', appId: appId.toLowerCase(), scope: 'local', generation: 1, status: 'captured', createdAtMs: 0,
       entry: 'function_app.py', sources: { 'function_app.py': '# handler' }, sourceVersions: { 'function_app.py': 1 }, routes }
     const request = { id: 'http-request-2', appId: appId.toLowerCase(), scope: 'local', generation: 1, method: 'GET',
       path: '/api/orders/O_A', authorization: 'not-required', operationIds: [], readIds: ['http-read-1'],
       response: { statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{"id":"O_A","status":"pending"}' },
       sendReceiptIds: [], workerReceiptIds: [], executionId: 'execution-9', beforeNextId: 4, afterNextId: 10 }
-    const extension = { ...empty, nextId: 3, localHosts: { [capture.appId]: capture }, requests: [request] }
+    const extension = { ...empty, nextId: 3, localHosts: [capture], currentLocal: { [capture.appId]: capture.id }, requests: [request] }
     expect(valid(extension)).toBe(true)
     for (const patch of [{ success: true }, { authorization: 'secret-key' }, { afterNextId: 4 }, { readIds: ['fake'] },
       { response: { ...request.response, headers: { 'x-functions-key': 'secret' } } }]) expect(valid({ ...extension, requests: [{ ...request, ...patch }] })).toBe(false)
-    expect(valid({ ...extension, localHosts: { [capture.appId]: { ...capture, sources: { 'function_app.py': 'é'.repeat(32769) } } } })).toBe(false)
+    expect(valid({ ...extension, localHosts: [{ ...capture, sources: { 'function_app.py': 'é'.repeat(32769) } }] })).toBe(false)
     expect(valid({ ...extension, requests: Array(101).fill(request) })).toBe(false)
     expect(valid({ ...extension, requests: [{ ...request, response: { ...request.response, body: 'a'.repeat(16385) } }] })).toBe(false)
     const recorded = accepted(sent()), reordered = JSON.parse(JSON.stringify(recorded))
@@ -204,5 +215,23 @@ describe('closed bounded HTTP state', () => {
     reordered.accepted[0].target = { queue: 'orders', namespace: 'sb-orders', resourceGroup: 'rg-messaging' }
     expect(valid(reordered)).toBe(true)
     expect(valid({ ...extension, accepted: recorded.accepted })).toBe(false)
+  })
+  it('retains capture generations while current references select an active bounded snapshot', () => {
+    const valid = fn(state, 'validateHttpFunctionsState'), empty = fn(state, 'emptyHttpFunctionsState')()
+    const capture = { id: 'http-capture-1', appId: appId.toLowerCase(), scope: 'local', generation: 1, status: 'stopped', createdAtMs: 0,
+      entry: 'function_app.py', sources: { 'function_app.py': '# handler' }, sourceVersions: { 'function_app.py': 1 }, routes }
+    const latest = { ...capture, id: 'http-capture-2', generation: 2, status: 'captured', createdAtMs: 10 }
+    const extension = { ...empty, nextId: 4, localHosts: [capture, latest], currentLocal: { [capture.appId]: latest.id }, requests: [requestRecord('/api/orders/o1')] }
+    expect(valid(extension)).toBe(true)
+    expect(valid({ ...extension, localHosts: [latest] })).toBe(false)
+    for (const currentLocal of [{ [capture.appId]: 'http-capture-999' }, { [appId.toLowerCase() + '-other']: latest.id }, { [capture.appId]: capture.id }]) expect(valid({ ...extension, currentLocal })).toBe(false)
+    for (const patch of [{ generation: 1 }, { createdAtMs: -1 }, { createdAtMs: Infinity }, { unexpected: true }]) expect(valid({ ...extension, localHosts: [capture, { ...latest, ...patch }] })).toBe(false)
+    const published = { ...latest, id: 'http-capture-4', scope: 'published' }
+    expect(valid({ ...extension, nextId: 5, deployments: [published], currentPublished: { [capture.appId]: published.id } })).toBe(true)
+    expect(valid({ ...extension, nextId: 5, deployments: [published], currentLocal: { [capture.appId]: published.id } })).toBe(false)
+    const history = Array.from({ length: 16 }, (_, i) => ({ ...latest, id: `http-capture-${i + 1}`, generation: i + 1, createdAtMs: i }))
+    expect(valid({ ...empty, nextId: 17, localHosts: history, currentLocal: { [capture.appId]: history.at(-1).id } })).toBe(true)
+    expect(valid({ ...empty, nextId: 18, localHosts: [...history, { ...latest, id: 'http-capture-17', generation: 17 }], currentLocal: { [capture.appId]: 'http-capture-17' } })).toBe(false)
+    expect(extension.localHosts).toHaveLength(2)
   })
 })

@@ -3,7 +3,7 @@ import { HTTP_LIMITS, closedHttpObject, httpCounter, jsonBytes, normalizeOrder,
   normalizeHttpAppId, normalizeHttpTarget, normalizeHttpHeaders, normalizeHttpPath, validateHttpRoutes } from './contracts.js'
 
 export function emptyHttpFunctionsState() {
-  return { version: 1, nextId: 1, localHosts: {}, deployments: {}, accepted: [], requests: [] }
+  return { version: 1, nextId: 1, localHosts: [], deployments: [], currentLocal: {}, currentPublished: {}, accepted: [], requests: [] }
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const canonicalApp = value => { try { return normalizeHttpAppId(value) === value } catch { return false } }
@@ -32,9 +32,9 @@ export function validateHttpAcceptedRecord(value) {
     && reference(value.sourceMessageId, 'message') && httpCounter(value.acceptedAtMs)
 }
 export function validateHttpCapture(value) {
-  if (!closedHttpObject(value, ['id', 'appId', 'scope', 'generation', 'status', 'entry', 'sources', 'sourceVersions', 'routes'])
+  if (!closedHttpObject(value, ['id', 'appId', 'scope', 'generation', 'status', 'createdAtMs', 'entry', 'sources', 'sourceVersions', 'routes'])
     || !reference(value.id, 'http-capture') || !canonicalApp(value.appId) || !['local', 'published'].includes(value.scope)
-    || !positive(value.generation) || !['captured', 'stopped'].includes(value.status) || value.entry !== 'function_app.py'
+    || !positive(value.generation) || !['captured', 'stopped'].includes(value.status) || !httpCounter(value.createdAtMs) || value.entry !== 'function_app.py'
     || !plainObject(value.sources) || !plainObject(value.sourceVersions) || !Object.hasOwn(value.sources, value.entry)
     || Object.keys(value.sources).length > HTTP_LIMITS.files || Object.keys(value.sources).length < 1
     || !same(Object.keys(value.sources).sort(), Object.keys(value.sourceVersions).sort())
@@ -60,15 +60,21 @@ export function validateHttpRequestRecord(value) {
 
 /** Structural admission only; runtime owners additionally verify authoritative journal links. */
 export function validateHttpFunctionsState(value) {
-  if (!closedHttpObject(value, ['version', 'nextId', 'localHosts', 'deployments', 'accepted', 'requests']) || value.version !== 1
-    || !positive(value.nextId) || !plainObject(value.localHosts) || !plainObject(value.deployments)
+  if (!closedHttpObject(value, ['version', 'nextId', 'localHosts', 'deployments', 'currentLocal', 'currentPublished', 'accepted', 'requests']) || value.version !== 1
+    || !positive(value.nextId) || !Array.isArray(value.localHosts) || !Array.isArray(value.deployments)
+    || !plainObject(value.currentLocal) || !plainObject(value.currentPublished)
     || !Array.isArray(value.accepted) || value.accepted.length > HTTP_LIMITS.accepted
     || !Array.isArray(value.requests) || value.requests.length > HTTP_LIMITS.requests
     || jsonBytes(value) > HTTP_LIMITS.stateBytes) return false
-  const captures = [...Object.entries(value.localHosts).map(([key, row]) => ({ key, scope: 'local', row })),
-    ...Object.entries(value.deployments).map(([key, row]) => ({ key, scope: 'published', row }))]
-  if (captures.length > HTTP_LIMITS.captures || captures.some(({ key, scope, row }) => !validateHttpCapture(row)
-    || row.appId !== key || row.scope !== scope)) return false
+  const captures = [...value.localHosts, ...value.deployments]
+  if (captures.length > HTTP_LIMITS.captures || captures.some(row => !validateHttpCapture(row))
+    || value.localHosts.some(row => row.scope !== 'local') || value.deployments.some(row => row.scope !== 'published')) return false
+  const captureIdentity = row => `${row.appId}|${row.scope}|${row.generation}`
+  const captureIdentities = new Set(captures.map(captureIdentity))
+  if (captureIdentities.size !== captures.length) return false
+  const currentValid = (selection, history) => Object.entries(selection).every(([appId, id]) => canonicalApp(appId)
+    && history.some(row => row.id === id && row.appId === appId && row.status === 'captured'))
+  if (!currentValid(value.currentLocal, value.localHosts) || !currentValid(value.currentPublished, value.deployments)) return false
   const ids = new Set(), validIds = rows => {
     let previous = 0
     for (const row of rows) {
@@ -79,12 +85,8 @@ export function validateHttpFunctionsState(value) {
     return true
   }
   if (value.accepted.some(row => !validateHttpAcceptedRecord(row)) || value.requests.some(row => !validateHttpRequestRecord(row))
-    || !validIds(value.accepted) || !validIds(value.requests)) return false
-  for (const { row } of captures) {
-    const number = Number(row.id.split('-').at(-1))
-    if (!positive(number) || number >= value.nextId || ids.has(number)) return false
-    ids.add(number)
-  }
+    || !validIds(value.accepted) || !validIds(value.requests) || !validIds(value.localHosts) || !validIds(value.deployments)
+    || value.requests.some(row => !captureIdentities.has(captureIdentity(row)))) return false
   const identities = value.accepted.map(row => `${row.appId}|${JSON.stringify(normalizeHttpTarget(row.target))}|${row.order.id}`)
   return new Set(identities).size === identities.length && new Set(value.accepted.map(row => row.sendReceiptId)).size === value.accepted.length
 }
