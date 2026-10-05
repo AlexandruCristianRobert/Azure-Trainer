@@ -1,6 +1,8 @@
 import { parser } from '@lezer/python'
 import { SECURITY_PROFILE, SECURITY_SIGNATURES, SECURITY_EXPORTS, SECURITY_HELPERS, SECURITY_INITIALIZERS, securityMemberType } from '../security/sdk.js'
 import { TELEMETRY_SIGNATURES, TELEMETRY_EXPORTS, TELEMETRY_HELPERS, TELEMETRY_INITIALIZERS, TELEMETRY_CONSTANTS, telemetryImport } from '../observability/sdk.js'
+import { HTTP_PROFILE, httpSdkContract, httpImport, httpMember } from '../http-functions/sdk.js'
+import { analyzeHttpHandlers } from '../http-functions/python.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const blocked = new Set(['__proto__', 'constructor', 'prototype'])
@@ -58,7 +60,7 @@ export const SDK_EXPORTS = Object.freeze({
 export function messagingSdkContract(profile) {
   return profile === SECURITY_PROFILE ? { signatures: { ...SDK_SIGNATURES, ...SECURITY_SIGNATURES, ...TELEMETRY_SIGNATURES },
     exports: { ...SDK_EXPORTS, ...SECURITY_EXPORTS, ...TELEMETRY_EXPORTS, training_runtime: [...SDK_EXPORTS.training_runtime, ...SECURITY_HELPERS, ...TELEMETRY_HELPERS] } }
-    : { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS }
+    : httpSdkContract(profile, { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS })
 }
 export function bindArguments(names, required, args, kwargs, loc, positionalLimit = names?.length) {
   if (names === null) {
@@ -89,7 +91,7 @@ const mergeTypes = values => {
 
 export function parseMessagingProject(files, { entry, mode = 'script', fixedFiles = {}, profile = 'messaging-v1' } = {}) {
   const { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS } = messagingSdkContract(profile)
-  const program = { entry, mode, profile, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [] }
+  const program = { entry, mode, profile, functions: Object.create(null), globals: Object.create(null), imports: Object.create(null), sourcePaths: [], handlers: [], ...(profile === HTTP_PROFILE ? { httpHandlers: [] } : {}) }
   const modules = new Map(), definitions = new Map(), analyzing = new Map()
   let location = { path: entry, line: 1, column: 1 }, analysisSteps = 0, moduleScope = false, registrationSequence = 0
   const unsupported = (message, loc = location) => { throw messagingError('MESSAGING_UNSUPPORTED', message, loc) }
@@ -190,6 +192,10 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         case 'PassStatement': return { kind: 'pass', loc: at }
         case 'ReturnStatement': return { kind: 'return', value: c[1] ? e(c[1]) : { kind: 'literal', value: null, loc: at }, loc: at }
         case 'RaiseStatement': return { kind: 'raise', value: e(c[1]), loc: at }
+        case 'TryStatement': {
+          if (profile !== HTTP_PROFILE || c.length !== 5 || c[0].name !== 'try' || c[2].name !== 'except' || text(c[3], path) !== 'ValueError' || c[1].name !== 'Body' || c[4].name !== 'Body') unsupported('Only one explicit ValueError except arm is supported.', at)
+          return { kind: 'try', body: body(c[1]), otherwise: body(c[4]), loc: at }
+        }
         case 'WithStatement': {
           if (profile === SECURITY_PROFILE && c.length === 3) return { kind: 'with', value: e(c[1]), name: null, body: body(c[2]), loc: at }
           if (c.length !== 5 || c[2].name !== 'as' || c[3].name !== 'VariableName') unsupported('Use one with resource and an explicit alias.', at)
@@ -234,6 +240,9 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       if (!SDK_EXPORTS[item.module].includes(item.name)) unsupported(`Unsupported import '${item.name}'.`, item.loc)
       const telemetry = profile === SECURITY_PROFILE && telemetryImport(item.module, item.name)
       if (telemetry) return telemetry
+      const http = profile === HTTP_PROFILE && httpImport(item.module, item.name)
+      if (http) return http
+      if (profile === HTTP_PROFILE && item.module === 'order_store' && !program.sourcePaths.includes('order_store.py') && own(files, 'order_store.py')) program.sourcePaths.push('order_store.py')
       if (item.module === 'azure.functions' && item.name !== 'FunctionApp') return typed(item.name === 'ServiceBusMessage' ? 'functionmessageType' : 'functioneventType')
       if (item.name === 'ServiceBusSubQueue') return typed('subqueue')
       return callable(item.module === 'json' ? `json.${item.name}` : item.name)
@@ -253,11 +262,12 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       case 'name': {
         if (env.has(node.name)) return env.get(node.name)
         if (['str', 'len', 'print', 'ValueError'].includes(node.name)) return callable(node.name)
+        if (profile === HTTP_PROFILE && ['isinstance', 'int', 'bool', 'dict', 'list'].includes(node.name)) return node.name === 'isinstance' ? callable(node.name) : { type: 'pytype', name: node.name }
         unsupported(`Unbound name '${node.name}'.`, node.loc); break
       }
-      case 'list': { const items = node.items.map(item => infer(item, env, path)); return { type: 'list', element: mergeTypes(items) } }
+      case 'list': { const items = node.items.map(item => infer(item, env, path)); return { type: 'list', element: mergeTypes(items), ...(profile === HTTP_PROFILE && items.every(item => own(item, 'constant')) ? { constant: items.map(item => item.constant) } : {}) } }
       case 'dict': node.entries.forEach(pair => pair.forEach(item => infer(item, env, path))); return data
-      case 'index': { const object = infer(node.object, env, path); infer(node.index, env, path); return object.element ?? data }
+      case 'index': { const object = infer(node.object, env, path), index = infer(node.index, env, path); if (profile === HTTP_PROFILE && object.type === 'httpoutType' && index.name === 'str') return typed('httpoutstrType'); return object.element ?? data }
       case 'unary': infer(node.value, env, path); return data
       case 'binary': infer(node.left, env, path); infer(node.right, env, path); return data
       case 'attribute': {
@@ -278,20 +288,25 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
         if (object.type === 'functionmessage' && ['message_id', 'delivery_count', 'application_properties'].includes(node.name)) return data
         const securityType = profile === SECURITY_PROFILE && securityMemberType(object.type, node.name)
         if (securityType) return typed(securityType)
+        const http = profile === HTTP_PROFILE && httpMember(object.type, node.name)
+        if (http) return http
         const name = `${object.type}.${node.name}`
-        if (own(SDK_SIGNATURES, name)) return { ...callable(name), ...(object.type === 'functionapp' ? { registrationId: object.registrationId } : {}) }
+        if (own(SDK_SIGNATURES, name)) return { ...callable(name), ...(object.type === 'functionapp' ? { registrationId: object.registrationId, httpAuthLevel: object.httpAuthLevel } : {}) }
         unsupported(`Unsupported member '${node.name}' on ${object.type}.`, node.loc); break
       }
       case 'call': {
         const target = infer(node.callee, env, path), args = node.args.map(arg => infer(arg, env, path))
         const kwargs = Object.fromEntries(Object.entries(node.kwargs).map(([key, value]) => [key, infer(value, env, path)]))
-        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'FunctionApp', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len', ...(profile === SECURITY_PROFILE ? [...SECURITY_INITIALIZERS, ...TELEMETRY_INITIALIZERS] : [])].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
+        if (moduleScope && (target.type !== 'callable' || !['DefaultAzureCredential', 'ServiceBusClient', 'ServiceBusMessage', 'EventGridPublisherClient', 'EventGridEvent', 'FunctionApp', 'bus.get_queue_sender', 'bus.get_topic_sender', 'bus.get_queue_receiver', 'bus.get_subscription_receiver', 'json.dumps', 'json.loads', 'str', 'len', ...(profile === HTTP_PROFILE ? ['OrderStatusRepository', 'os.getenv'] : []), ...(profile === SECURITY_PROFILE ? [...SECURITY_INITIALIZERS, ...TELEMETRY_INITIALIZERS] : [])].includes(target.name))) unsupported('Module scope allows constants and supported constructors, not application effects.', node.loc)
         if (target.type === 'function') return analyzeFunction(target.id, args, kwargs, node.loc)
         if (target.type !== 'callable' || !own(SDK_SIGNATURES, target.name)) unsupported('Only resolved local functions and supported SDK calls are callable.', node.loc)
         if (target.name.startsWith('functionapp.')) unsupported('Functions decorator factories are supported only as registration metadata.', node.loc)
         const [names, required, returns, positionalLimit] = SDK_SIGNATURES[target.name]
         const bound = bindArguments(names, required, args, kwargs, node.loc, positionalLimit)
-        if (target.name === 'FunctionApp') return { type: 'functionapp', registrationId: ++registrationSequence }
+        if (target.name === 'FunctionApp') {
+          if (profile === HTTP_PROFILE && bound.http_auth_level && !['anonymous', 'function'].includes(bound.http_auth_level.constant)) unsupported('Unsupported HTTP authorization level.', node.loc)
+          return { type: 'functionapp', registrationId: ++registrationSequence, ...(profile === HTTP_PROFILE ? { httpAuthLevel: bound.http_auth_level?.constant ?? 'function' } : {}) }
+        }
         if (target.name === 'deliver_events') {
           if (bound.handler?.type !== 'function') unsupported('deliver_events requires an actual local handler function.', node.loc)
           analyzeFunction(bound.handler.id, [typed('event')], {}, node.loc)
@@ -307,6 +322,15 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     for (const statement of body) {
       tick(statement.loc)
       if (statement.kind === 'pass') continue
+      if (statement.kind === 'try') {
+        const successful = new Map(env), caught = new Map(env)
+        const first = analyzeStatements(statement.body, successful, path), second = analyzeStatements(statement.otherwise, caught, path)
+        if (fallsThrough) returns.push(...first.returns, ...second.returns)
+        const continuing = [first.fallsThrough ? successful : null, second.fallsThrough ? caught : null].filter(Boolean)
+        for (const key of new Set(continuing.flatMap(branch => [...branch.keys()]))) env.set(key, mergeTypes(continuing.map(branch => branch.get(key))))
+        fallsThrough = fallsThrough && continuing.length > 0
+        continue
+      }
       if (statement.kind === 'if') {
         // Validate every possible branch before any broker operations can run.
         const branches = [], flows = []
@@ -333,7 +357,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
           infer(statement.target.index, env, path)
           // List aliases share their abstract element record; writing through any
           // alias must not preserve a stale callable/SDK receiver type.
-          if (object.type === 'list') object.element = mergeTypes([object.element, value])
+          if (object.type === 'list') { object.element = mergeTypes([object.element, value]); if (profile === HTTP_PROFILE) delete object.constant }
         }
       } else if (statement.kind === 'for' || statement.kind === 'with') {
         if (statement.name !== null) safeKey(statement.name, statement.loc)
@@ -362,11 +386,15 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       if (c.some(n => n.name === 'async')) unsupported('Async functions are not supported.', loc(definition.node, definition.path))
       const paramsNode = c.find(n => n.name === 'ParamList'), params = children(paramsNode).filter(n => !['(', ')', ',', 'TypeDef'].includes(n.name))
       const annotations = Object.create(null)
-      for (const annotation of c.filter(n => n.name === 'TypeDef')) simpleAnnotation(annotation, definition.path)
+      let returnType = null
+      for (const annotation of c.filter(n => n.name === 'TypeDef')) {
+        if (profile === HTTP_PROFILE) returnType = infer(expr(children(annotation).at(-1), definition.path), modules.get(definition.path), definition.path)
+        else simpleAnnotation(annotation, definition.path)
+      }
       const paramParts = children(paramsNode)
       for (let index = 0; index < paramParts.length; index++) if (paramParts[index].name === 'TypeDef') {
         const annotation = paramParts[index], parts = children(annotation).filter(n => n.name !== ':')
-        if (mode === 'functions') {
+        if (mode === 'functions' || profile === HTTP_PROFILE) {
           if (parts.length !== 1 || !['VariableName', 'MemberExpression'].includes(parts[0].name)) unsupported('Functions annotations must resolve supported type names.', loc(annotation, definition.path))
           const lowered = expr(parts[0], definition.path)
           annotations[text(paramParts[index - 1], definition.path)] = { expression: lowered, type: infer(lowered, modules.get(definition.path), definition.path).type, loc: loc(annotation, definition.path) }
@@ -374,7 +402,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       }
       if (params.some(n => n.name !== 'VariableName')) unsupported('Only simple named parameters are supported.', loc(paramsNode, definition.path))
       const names = params.map(n => safeKey(text(n, definition.path), loc(n, definition.path)))
-      program.functions[id] = { name: definition.name, path: definition.path, params: names, annotations, decorators: definition.decorators ?? [], body: statements(c.find(n => n.name === 'Body'), definition.path), loc: loc(definition.node, definition.path) }
+      program.functions[id] = { name: definition.name, path: definition.path, params: names, annotations, returnType, decorators: definition.decorators ?? [], body: statements(c.find(n => n.name === 'Body'), definition.path), loc: loc(definition.node, definition.path) }
     }
     const fn = program.functions[id], bound = bindArguments(fn.params, fn.params.length, args, kwargs, at)
     const argumentTypes = JSON.stringify(bound, (key, value) => key === 'constant' ? undefined : value)
@@ -467,7 +495,7 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
       const node = top.name === 'DecoratedStatement' ? children(top).find(n => n.name === 'FunctionDefinition') : top
       if (top.name === 'DecoratedStatement' && !node) unsupported('Only supported function declarations may have decorators.', loc(top, path))
       if (node?.name === 'FunctionDefinition') {
-        if (top.name === 'DecoratedStatement' && mode !== 'functions') unsupported('Decorators require Functions host mode.', loc(top, path))
+        if (top.name === 'DecoratedStatement' && mode !== 'functions' && !(profile === HTTP_PROFILE && mode === 'http-handler')) unsupported('Decorators require Functions host mode.', loc(top, path))
         const nameNode = children(node).find(n => n.name === 'VariableName'), name = safeKey(text(nameNode, path), loc(nameNode, path)), id = `${path}:${name}`
         if (definitions.has(id)) unsupported('Duplicate function definition.', loc(node, path))
         definitions.set(id, { name, node, path, decorators: top.name === 'DecoratedStatement' ? children(top).filter(n => n.name === 'Decorator').map(n => lowerDecorator(n, path)) : [] }); env.set(name, { type: 'function', id })
@@ -495,9 +523,10 @@ export function parseMessagingProject(files, { entry, mode = 'script', fixedFile
     return env
   }
   try {
-    if (!['script', 'eventgrid-handler', 'functions'].includes(mode)) unsupported(`Mode '${mode}' is not supported by the messaging adapter.`)
+    if (!['script', 'eventgrid-handler', 'functions', ...(profile === HTTP_PROFILE ? ['http-handler'] : [])].includes(mode)) unsupported(`Mode '${mode}' is not supported by the messaging adapter.`)
     for (const [path, expected] of Object.entries(fixedFiles)) if (!own(files, path) || files[path] !== expected) throw messagingError('MESSAGING_CONFIG', 'Protected scaffold content was changed or removed.', { path, line: 1, column: 1 })
     const env = loadModule(entry)
+    if (mode === 'http-handler') { analyzeHttpHandlers({ program, definitions, infer, analyzeFunction, bindArguments, signatures: SDK_SIGNATURES, unsupported, location: loc }); return { program, diagnostics: [] } }
     if (mode === 'functions') { registerHandlers(); return { program, diagnostics: [] } }
     const main = env.get(mode === 'eventgrid-handler' ? 'handle_event' : 'main')
     if (main?.type !== 'function') unsupported(`The entry must define ${mode === 'eventgrid-handler' ? 'handle_event(event)' : 'main()'}.`)

@@ -7,6 +7,8 @@ import { parseEventGridFunctionEndpoint } from '../sandbox/eventgrid-validation.
 import { createTelemetrySession, TELEMETRY_OPERATIONS } from '../observability/runtime.js'
 import { telemetryImport } from '../observability/sdk.js'
 import { appendSecurityRecord, emptySecurityObservabilityState } from '../security/state.js'
+import { HTTP_PROFILE, httpImport } from '../http-functions/sdk.js'
+import { createHttpSession } from '../http-functions/runtime.js'
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const clone = value => JSON.parse(JSON.stringify(value))
@@ -30,23 +32,23 @@ const scalarStringArguments = Object.freeze({
 })
 
 /** Executes tagged data only. SDK handles are private WeakMap tokens, never JS objects exposed to Python. */
-export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {} }) {
+export function executeMessagingProgram({ program, state, sandbox, input = {}, limits = {}, httpInvocation }) {
   const { signatures: SDK_SIGNATURES, exports: SDK_EXPORTS } = messagingSdkContract(program.profile)
-  let security = null, telemetry = null
+  let security = null, telemetry = null, http = null
   let current = state, steps = 0, depth = 0, receiverSequence = 0, eventSequence = 0, draining = false, activeDelivery = null
   const trace = [], diagnostics = [], output = [], modules = new Map(), handles = new WeakMap(), orderOrigins = new WeakMap()
   let outputBytes = 0
   const maximumSteps = cap(limits.steps, 10000), maximumTraces = cap(limits.traces, 500)
   const maximumFrames = cap(limits.frames, 100), maximumValues = cap(limits.valueBytes, 128 * 1024)
   const fail = (message, loc, code = 'MESSAGING_RUNTIME', details = {}) => {
-    const error = messagingError(code, message, loc)
+    const error = messagingError(code, message, loc ?? {})
     Object.assign(error.diagnostic, details)
     throw error
   }
   const tick = loc => { if (++steps > maximumSteps) fail(`Execution exceeds ${maximumSteps} shared steps.`, loc, 'MESSAGING_LIMIT') }
   const handle = (type, fields = {}) => { const token = Object.create(null); handles.set(token, { type, ...fields }); return token }
   const info = token => token && typeof token === 'object' ? handles.get(token) : undefined
-  const unbox = value => ['bodytext', 'configvalue', 'querynumber'].includes(info(value)?.type) ? info(value).value : value
+  const unbox = value => ['bodytext', 'configvalue', 'querynumber', 'httpvalue'].includes(info(value)?.type) ? info(value).value : value
   const callable = (name, owner) => handle('callable', { name, owner })
   const readonlyProperties = value => {
     const copy = clone(value)
@@ -74,13 +76,14 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   function jsonValue(value, loc, seen = new Set(), nesting = 0, budget = { bytes: 0 }) {
     tick(loc)
     security?.guard(value, loc)
+    http?.guard(value, loc)
     telemetry?.guard(value, loc, 'payload')
     value = unbox(value)
     if (nesting > 100) fail('Data nesting exceeds 100.', loc, 'MESSAGING_LIMIT')
     if (info(value)) fail('SDK handles cannot be stored as application data.', loc)
     if (typeof value === 'string') { chargeString(budget, value, loc); return value }
     if (value === null || typeof value === 'boolean' || Number.isSafeInteger(value)
-      || program.profile === SECURITY_PROFILE && typeof value === 'number' && Number.isFinite(value)) {
+      || [SECURITY_PROFILE, HTTP_PROFILE].includes(program.profile) && typeof value === 'number' && Number.isFinite(value)) {
       chargeBytes(budget, String(value).length, loc)
       return value
     }
@@ -133,6 +136,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     let object = info(value)
     if (object?.type === 'receipt') { guardServiceBusBody(object.record.body, loc); return object.record.body }
     if (['bodytext', 'bytes'].includes(object?.type)) { guardServiceBusBody(object.value, loc); return object.value }
+    http?.guard(value, loc)
+    if (object?.type === 'httpvalue') { value = unbox(value); object = info(value) }
     if (!info(value) || ['configvalue', 'bodytext', 'bytes', 'querynumber'].includes(info(value)?.type)) telemetry?.guard(unbox(value), loc, 'payload')
     if (object?.type === 'querynumber') { value = unbox(value); object = info(value) }
     if (object?.type === 'configvalue') return object.value
@@ -146,6 +151,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     safeKey(name, loc)
     if (env.has(name)) return env.get(name)
     if (['str', 'len', 'print', 'ValueError'].includes(name)) return callable(name)
+    if (program.profile === HTTP_PROFILE && ['isinstance', 'int', 'bool', 'dict', 'list'].includes(name)) return name === 'isinstance' ? callable(name) : handle('pytype', { name })
     fail(`Unbound name '${name}'.`, loc)
   }
   function readIndex(object, key, loc) {
@@ -161,6 +167,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   }
   function attribute(value, name, loc) {
     safeKey(name, loc)
+    const httpMember = http?.member(value, name, loc)
+    if (httpMember?.handled) return httpMember.value
     const selected = security?.member(value, name, loc)
     if (selected?.handled) return selected.value
     const telemetryMember = telemetry?.member(value, name, loc)
@@ -195,6 +203,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     fail(`Unsupported member '${name}' on ${object.type}.`, loc, 'MESSAGING_UNSUPPORTED')
   }
   function guardServiceBusBody(body, loc) {
+    http?.guard(body, loc)
     if (!telemetry) return
     telemetry.guard(body, loc, 'payload')
     let parsed
@@ -202,19 +211,22 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     telemetry.guard(parsed, loc, 'payload')
   }
   function guardServiceBusMessage(message, loc) {
-    if (!telemetry) return
+    if (!telemetry && !http) return
     guardServiceBusBody(message.body, loc)
     // Only application fields cross this boundary; broker lock tokens are internal.
-    telemetry.guard({ messageId: message.messageId, sessionId: message.sessionId, properties: message.properties,
-      deadLetterReason: message.deadLetterReason, deadLetterDescription: message.deadLetterDescription }, loc, 'payload')
+    const fields = { messageId: message.messageId, sessionId: message.sessionId, properties: message.properties,
+      deadLetterReason: message.deadLetterReason, deadLetterDescription: message.deadLetterDescription }
+    telemetry?.guard(fields, loc, 'payload')
+    http?.guard(fields, loc)
   }
   function broker(operation, loc) {
     tick(loc)
+    const pendingHttp = http?.beforeBroker(operation, loc)
     if (operation.message) guardServiceBusMessage(operation.message, loc)
     telemetry?.guard({ sessionId: operation.sessionId, reason: operation.reason, description: operation.description }, loc, 'payload')
     const result = applyServiceBusOperation(current, sandbox, operation)
     if (result.diagnostics.length) throw messagingError(result.diagnostics[0].code, result.diagnostics[0].message, loc)
-    if (telemetry) {
+    if (telemetry || http) {
       // The broker returns a private candidate clone. Validate every touched receipt
       // before committing its state or publishing any of its trace/evidence.
       const touched = new Set(result.trace.map(row => row.messageRecordId).filter(Boolean))
@@ -227,6 +239,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (locks > 500) fail('Retained lock history exceeds 500 receipts; reset this fixture.', loc, 'MESSAGING_LIMIT')
     current = result.state
     trace.push(...result.trace)
+    http?.afterBroker(operation, result, pendingHttp, loc)
     return result.value
   }
   function eventGrid(operation, loc) {
@@ -393,6 +406,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (functionInfo?.type !== 'callable' || !own(SDK_SIGNATURES, functionInfo.name)) fail('Unresolved callable.', loc, 'MESSAGING_UNSUPPORTED')
     const { name, owner } = functionInfo, [names, required, , positionalLimit] = SDK_SIGNATURES[name]
     const a = bindArguments(names, required, args, kwargs, loc, positionalLimit)
+    const httpResult = http?.call(name, owner, a, loc)
+    if (httpResult?.handled) return httpResult.value
     const instrumented = telemetry?.call(name, owner, a, loc)
     if (instrumented?.handled) return instrumented.value
     // Telemetry observes the original private numeric cell before ordinary SDK
@@ -523,6 +538,7 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (name === 'print') {
       const line = a.map(value => string(value, loc)).join(' ')
       security?.guard(line, loc)
+      http?.guard(line, loc)
       outputBytes += line.length
       if (output.length >= 500 || outputBytes > maximumValues) fail('Printed output exceeds its bounded buffer.', loc, 'MESSAGING_LIMIT')
       output.push(line)
@@ -624,6 +640,16 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     for (const statement of body) {
       tick(statement.loc)
       if (statement.kind === 'pass') continue
+      if (statement.kind === 'try') {
+        let result
+        try { result = block(statement.body, env) }
+        catch (error) {
+          if (error.diagnostic?.code !== 'MESSAGING_RUNTIME' || error.diagnostic?.errorType !== 'ValueError') throw error
+          result = block(statement.otherwise, env)
+        }
+        if (result?.signal === RETURN) return result
+        continue
+      }
       if (statement.kind === 'if') {
         const branch = statement.branches.find(item => truth(evaluate(item.test, env)))
         const result = block(branch ? branch.body : statement.otherwise, env)
@@ -650,8 +676,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
           fail(`ValueError: ${info(value).message}`, statement.loc, 'MESSAGING_RUNTIME', { errorType: 'ValueError' }); break
         }
         case 'for': {
-          if (!Array.isArray(value)) fail('For requires a bounded list.', statement.loc)
-          for (const item of value) { tick(statement.loc); env.set(statement.name, item); const result = block(statement.body, env); if (result?.signal === RETURN) return result }
+          const iterable = unbox(value)
+          if (!Array.isArray(iterable) && !(http && typeof iterable === 'string')) fail('For requires a bounded list or supported string.', statement.loc)
+          for (const item of iterable) { tick(statement.loc); env.set(statement.name, item); const result = block(statement.body, env); if (result?.signal === RETURN) return result }
           break
         }
         case 'with': {
@@ -692,6 +719,8 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
       if (!SDK_EXPORTS[item.module].includes(item.name)) fail('Unsupported import.', item.loc, 'MESSAGING_UNSUPPORTED')
       const imported = telemetry && telemetryImport(item.module, item.name)
       if (imported) return imported.type === 'data' ? imported.constant : handle(imported.type, imported)
+      const httpImported = http && httpImport(item.module, item.name)
+      if (httpImported) return handle(httpImported.type, httpImported)
       if (item.module === 'azure.functions' && item.name !== 'FunctionApp') return handle(item.name === 'ServiceBusMessage' ? 'functionmessageType' : 'functioneventType')
       if (item.name === 'ServiceBusSubQueue') return handle('subqueue')
       return callable(item.module === 'json' ? `json.${item.name}` : item.name)
@@ -710,6 +739,9 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
   let value = null
   try {
     if (!validateMessagingState(state) || !finiteJson(input)) fail('Invalid messaging state or fixture input.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
+    if (httpInvocation && (program.profile !== HTTP_PROFILE || program.mode !== 'http-handler')) fail('HTTP invocation requires the explicit HTTP handler profile.', null, 'HTTP_CONFIG')
+    if (program.profile === HTTP_PROFILE) http = createHttpSession({ handle, info, fail, jsonValue, program, invocation: httpInvocation,
+      getState: () => current, setState: next => { current = next } })
     if (program.profile === SECURITY_PROFILE) security = createSecuritySession({ sandbox, input: input.securityObservability, entry: program.entry, mode: program.mode,
       handle, info, fail, getState: () => current, setState: next => { current = next },
       notify: (eventId, orderId, loc) => effects('notifications', eventId, { eventId, orderId }, loc),
@@ -730,11 +762,11 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     if (input.handlerStatus !== undefined && (!input.handlerStatus || typeof input.handlerStatus !== 'object' || Array.isArray(input.handlerStatus)
       || Object.values(input.handlerStatus).some(status => Array.isArray(status) ? status.length < 1 || status.length > 30 || !status.every(httpStatus) : !httpStatus(status)))) fail('Handler fixture outcomes must be integer HTTP statuses or 1-30 status sequences.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
     if (input.eventGridHandlers !== undefined && !validateEventGridWebhookRegistration(sandbox, input.eventGridHandlers)) fail('Training webhook registrations must resolve actual WebHook subscriptions and bounded source paths.', { path: program.entry, line: 1, column: 1 }, 'MESSAGING_CONFIG')
-    value = program.mode === 'functions' ? hostFunctions({ path: program.entry, line: 1, column: 1 }) : program.mode === 'eventgrid-handler'
+    value = program.mode === 'http-handler' ? http.invoke(invoke, { path: program.entry, line: 1, column: 1 }) : program.mode === 'functions' ? hostFunctions({ path: program.entry, line: 1, column: 1 }) : program.mode === 'eventgrid-handler'
       ? deliverEvent(input.deliveryId, program.main, { path: program.entry, line: 1, column: 1 })
       : invoke(program.main, [], {}, { path: program.entry, line: 1, column: 1 })
     // The public result is JSON-only; receipt/client closures never escape.
-    value = jsonValue(value, { path: program.entry, line: 1, column: 1 })
+    value = program.mode === 'http-handler' ? http.finish(value, { path: program.entry, line: 1, column: 1 }) : jsonValue(value, { path: program.entry, line: 1, column: 1 })
   } catch (error) {
     value = null
     // Dynamic KQL is parsed at its actual call. A query diagnostic rejects this
@@ -747,5 +779,6 @@ export function executeMessagingProgram({ program, state, sandbox, input = {}, l
     diagnostics.push(error.diagnostic ?? { code: 'MESSAGING_RUNTIME', message: 'The bounded script could not execute this value.', path: program.entry, line: 1, column: 1 })
   }
   return { state: current, value, trace, diagnostics: program.profile === SECURITY_PROFILE
-    ? sanitizeSecurityDiagnostics(diagnostics, sandbox, input.securityObservability) : diagnostics, output }
+    ? sanitizeSecurityDiagnostics(diagnostics, sandbox, input.securityObservability) : http ? http.sanitize(diagnostics) : diagnostics, output,
+    ...(http ? { http: http.measurements(diagnostics.length > 0) } : {}) }
 }

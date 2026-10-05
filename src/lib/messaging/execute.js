@@ -4,10 +4,11 @@ import { MESSAGING_RUNTIME_FILES } from '../../data/templates/messaging-python/r
 import { finiteJson, plainObject } from './state.js'
 import { getProjectManifest } from '../project/manifests.js'
 import { SECURITY_PROFILE, sanitizeSecurityDiagnostics } from '../security/sdk.js'
+import { HTTP_PROFILE } from '../http-functions/contracts.js'
 
 export function messagingProjectOptions(run, lab) {
   return { fixedFiles: getProjectManifest(run.project.manifestId).fixedFiles ?? MESSAGING_RUNTIME_FILES,
-    profile: lab.capabilities?.securityObservability === true ? SECURITY_PROFILE : 'messaging-v1' }
+    profile: lab.capabilities?.httpFunctions === true ? HTTP_PROFILE : lab.capabilities?.securityObservability === true ? SECURITY_PROFILE : 'messaging-v1' }
 }
 
 /** Source execution only. Shell/evidence/grading integration is owned by later adapters. */
