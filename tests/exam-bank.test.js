@@ -100,3 +100,43 @@ describe('containers bank', () => {
     expect(() => validateDomainContent(c, 'containers')).toThrow(); expect(accessed).toBe(false)
   })
 })
+
+const { DATA_QUESTIONS, DATA_GROUPS, DATA_REFERENCES } = banks['../src/data/exam/bank/data.js'] || {}
+const dataContent = () => structuredClone({ questions: DATA_QUESTIONS, groups: DATA_GROUPS, references: DATA_REFERENCES })
+const dataKeys = [
+  ['point'],['session'],['params'],['cosine'],['invalidate'],['transaction'],
+  [['dimension','metric']],[['cpu','memory']],[['exclude','measure']],[['filter','vector']],[['idempotent','leases']],[['expiry','delete']],
+  ['extension','table','insert'],['begin','query','commit'],['read','cost','compare'],['miss','source','store'],['baseline','ann','recall'],
+  ['btree','gin'],['history','cache'],['l2','cosine','negative'],['app','server'],
+  ['tenant','distance'],['bound','literal'],['path','size'],['tag','knn'],['limit','headroom'],
+  ['yes','no'],['yes','no'],['no','yes'],[['filter','order']],[['ttl','invalidate']],['latest','idempotent'],['memory','compute'],
+]
+describe('data bank', () => {
+  it('exports all 33 allocated original items and validates all 12 objectives', () => {
+    expect(DATA_QUESTIONS).toBeInstanceOf(Array)
+    expect(DATA_QUESTIONS).toHaveLength(33)
+    expect(validateDomainContent(dataContent(), 'data')).toBe(true)
+    expect(new Set(DATA_QUESTIONS.map(q => q.objectiveId)).size).toBe(12)
+    expect(DATA_QUESTIONS.map(q => q.id)).toEqual(Array.from({ length: 33 }, (_, i) => `ai200-d${String(i+1).padStart(3,'0')}`))
+    expect(DATA_QUESTIONS.map(q => q.kind)).toEqual(['single-choice','multiple-response','build-list','matching','dropdown','statement-grid','hot-area','active-screen'].flatMap((kind,i) => Array([6,6,5,4,5,3,2,2][i]).fill(kind)))
+    expect(DATA_GROUPS.map(g => [g.id,g.questionIds])).toEqual([
+      ['case-d1',['ai200-d004','ai200-d022','ai200-d030']], ['case-d2',['ai200-d009','ai200-d019','ai200-d032']],
+    ])
+  })
+  it('grades hand-checked literal data keys and resolves canonical references', () => {
+    expect(DATA_QUESTIONS).toBeInstanceOf(Array)
+    const refs = DATA_REFERENCES.map(r => r.id)
+    for (const c of EXAM_CONCEPTS.filter(c => c.objectiveId.startsWith('data.'))) expect(c.referenceIds.every(id => refs.includes(id))).toBe(true)
+    for (const [i,q] of DATA_QUESTIONS.entries()) {
+      expect(q.components.map(c => c.expected)).toEqual(dataKeys[i])
+      expect(gradeQuestion(q, Object.fromEntries(q.components.map((c,j) => [c.id,dataKeys[i][j]]))).earned).toBe(q.components.length)
+    }
+  })
+  it('prevents equivalent data widgets from multiplying fresh family evidence', () => {
+    expect(DATA_QUESTIONS).toBeInstanceOf(Array)
+    const families = Object.fromEntries(DATA_QUESTIONS.map(q => [q.id,q.familyId]))
+    for (const [member,original] of [[20,4],[21,6],[22,4],[23,3],[24,7],[25,10],[27,11],[28,5],[30,4],[31,12],[32,11],[33,8]]) {
+      expect(families[`ai200-d${String(member).padStart(3,'0')}`]).toBe(`ai200-d${String(original).padStart(3,'0')}`)
+    }
+  })
+})
