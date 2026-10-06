@@ -7,7 +7,7 @@ Task 11 base is `fbb112bb822b678006310cc006f857a5c2b9b7fa`. This is a local
 review handoff. Whole-branch review and its single aggregate fix wave are complete:
 the original reviewer approved all eight fixes at `42fb810`, with no new findings.
 The finishing workflow awaits the user's integration choice. Nothing was merged,
-pushed or published.
+pushed or published at that review handoff. See the local integration receipt below.
 The approved design remains intact; only its implementation-status paragraph changed.
 
 ## Release contract and learner documentation
@@ -168,3 +168,29 @@ Task 10 continued run 1 is abridged and run 12 has truncated historical raw outp
 all timing/final/R1 outputs are retained. No reruns regenerated missing history.
 Task 11 report retains its exact gates, raw outputs/session exits, reads/self-review
 and scoped commit; no native/tool repair or remote action was attempted.
+
+## Local integration receipt — 2026-10-06
+
+User selected local merge (option 1). `git pull --ff-only` was already up to date;
+`git merge --ff-only codex/ai200-exam-review` advanced `main` from `10b44f2` to
+`9c3df5b` without conflicts. No push, PR or publication was performed.
+
+Fresh merged-tree verification:
+
+- `npm.cmd run test:exam-review`: 7 files, **252/252**, exit 0, 43.940 seconds.
+- Three named compatibility files: **29/29**, exit 0, 4.456 seconds.
+- Pages-base production build: **709 modules**, exit 0, 7.603 seconds.
+
+Only these bounded tests ran; no AKS/Container Apps or full suite. Build retains
+the >500 kB chunk warning (largest 3,010.39 kB). Native browser verification is
+still NOT RUN. Overall test cost remains below 30 minutes.
+
+Initial `npm ci` failed because the project's running Vite/esbuild service locked
+`node_modules/@esbuild/win32-x64/esbuild.exe`. Exact project process identities
+were checked; only that service was stopped. A second `npm ci` succeeded; existing
+seven dependency advisories remain. The project dev server was restarted on its
+original port 5175. No permission/security settings or unrelated processes changed.
+
+The feature worktree/branch and ignored review evidence are deliberately preserved
+to avoid deleting the only copies of detailed reports, rulings and raw receipts.
+The unrelated untracked `RESUME-HTTP-FUNCTIONS.md` checkpoint remains untouched.
