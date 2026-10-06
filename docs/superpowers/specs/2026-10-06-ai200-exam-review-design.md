@@ -1,7 +1,7 @@
 # AI-200 Exam & Review — design specification
 
-Status: conversational core design approved; written specification awaiting
-user review. Implementation and the implementation plan have not started.
+Status: written specification approved by the user2026-10-06. Implementation
+plan prepared for review/execution-method selection; implementation has not started.
 
 ## Purpose and agreed direction
 
@@ -399,4 +399,6 @@ migration. Integration references actual routes/store/catalog, not the unrelated
 Greenfield project inspected while searching for AZ-900. Bank source review,
 practice-score limitations and non-proctored/live-lab exclusions are explicit.
 No product code, implementation dependencies, tests or deployment changed during
-specification writing. Next gate is user approval of this file, then writing-plans.
+specification writing. The user subsequently approved this file and requested
+the implementation plan. Next gate is review of
+`../plans/2026-10-06-ai200-exam-review.md` and execution-method selection.
