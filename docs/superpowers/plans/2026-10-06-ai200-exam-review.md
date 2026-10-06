@@ -312,7 +312,7 @@ dataByteLimit=EXAM_LIMITS.dataBytes})` with async `load()`,
 getters through adapter. **Produces:** `EXAM_OBJECTIVES`, `EXAM_CONCEPTS`,
 `validateLabMappings(concepts,labs)`,
 `computeReview({attempts,activeSessions,concepts}) -> {topics,assessmentNeeded,counts}`,
-`recommendPractice(review,{bank,labProgress,notes})`,
+`recommendPractice(review,{bank,labProgress,notes,now})`,
 `readLabProgress(progress,labIds)`, `conceptPrompt(concept)`.
 
 - [ ] RED sparse3-family boundary, multi-component normalization, assistance
@@ -354,6 +354,9 @@ getters through adapter. **Produces:** `EXAM_OBJECTIVES`, `EXAM_CONCEPTS`,
   expose separate omitted/assisted/repeat/confidence counts. Never derive scores
   from Lab completion or reviewed/snoozed flags. Sort per spec, prefer unseen
   targeted items and show fresh-family exhaustion rather than fabricate progress.
+  Recommendation `now` is an explicit safe epoch-millisecond input: snoozed notes
+  suppress advice only until `snoozedUntil`, without hidden wall-clock reads or
+  changing assessment evidence.
 - [ ] GREEN, source/target mapping check and authored-only prompt privacy review;
   commit `feat: derive evidence-based review advice and lab links`.
 
