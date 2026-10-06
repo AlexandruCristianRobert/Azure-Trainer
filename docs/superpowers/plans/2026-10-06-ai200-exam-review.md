@@ -597,6 +597,9 @@ when permitted. Renderer maps all eight kinds, unknown kind fails visibly.
 components/exam/{ExamSetup,SectionNavigation,CaseReference,ExamTimer,BackupControls,
 ReviewRecommendation}.vue; `tests/exam-app.test.js`; modify router/index.js,
 HomePage.vue, PortalHeader.vue only for lazy exam routes/entry. Add
+an exam-route-only root modifier in `src/App.vue` and scoped rules in the new
+`src/styles/exam.css` to remove the existing 1280px minimum width for exam pages;
+preserve the existing root/header/layout styles on all non-exam routes. Add
 `tests/browser/exam-persistence.html` and `.browser.js` for bounded native smoke.
 **Consumes:** Tasks1–9 contracts/repository/bank/widgets/review/Lab adapter.
 **Produces:** `useExamStore()` with `hydrate`, `start`, `dispatch`, `flush`,
