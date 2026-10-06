@@ -148,7 +148,8 @@ withheld. This is disclosure control, not cryptographic anti-cheat.
 Lab engines. **Produces:** `ExamError`, `EXAM_VERSION`, `EXAM_DOMAINS`, `EXAM_KINDS`, `EXAM_LIMITS`,
 `validateQuestion(q,{historical=false})`, `validateQuestionView(view)`, `validateAnswer(qOrView,answer)`,
 `validateSession(value)`, `validateAttempt(value)`, `validateNote(value)`,
-`validateReference(ref)`, `gradeQuestion(q,answer) -> Grade`,
+`validateReference(ref)`, `validateGrade(grade,question) -> grade` (shared by feedback),
+`gradeQuestion(q,answer) -> Grade`,
 `gradeAttempt(attempt) -> {grades,earned,possible,percentage,byDomain,byKind}`,
 `publicQuestion(q,{feedback=false})`, `applyAnswerEdit(q,answer,edit)`.
 
@@ -593,7 +594,8 @@ when permitted. Renderer maps all eight kinds, unknown kind fails visibly.
 
 ### Task 10: Save orchestration, integrated routes, history and review UI
 
-**Files:** Create `src/stores/exam.js`; five named pages from file map;
+**Files:** Create `src/stores/exam.js`;
+`src/pages/{ExamPage,ExamSessionPage,ExamResultPage,ReviewPage,ReviewHistoryPage}.vue`;
 components/exam/{ExamSetup,SectionNavigation,CaseReference,ExamTimer,BackupControls,
 ReviewRecommendation}.vue; `tests/exam-app.test.js`; modify router/index.js,
 HomePage.vue, PortalHeader.vue only for lazy exam routes/entry. Add
