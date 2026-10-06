@@ -32,6 +32,26 @@ export function correctAnswer(q) { return Object.fromEntries(q.components.map((c
 export function bankFixture() {
   return freeze({ version: 1, revision: 1, questions: kinds.map((k) => questionFixture(k)), groups: [], references: [{ id: 'ref-one', title: 'Messaging', url: 'https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-messaging-overview', reviewedAt: '2026-10-06' }] })
 }
+// Synthetic typed selection pool; no authored training-bank content.
+export function mockBankFixture() {
+  const domains = ['containers', 'data', 'connect', 'secure']
+  const questions = domains.flatMap((domain, d) => Array.from({ length: 24 }, (_, i) => questionFixture(kinds[i % 8], {
+    id: `pool-${d}-${i}`, familyId: `family-${d}-${i}`, domain,
+  })))
+  const groups = [
+    ['case-containers', 'case', 'containers'], ['case-data', 'case', 'data'],
+    ['case-data-two', 'case', 'data'], ['case-connect', 'case', 'connect'],
+    ['case-secure', 'case', 'secure'], ['case-secure-two', 'case', 'secure'],
+    ['series-data', 'series', 'data'], ['series-connect', 'series', 'connect'],
+  ].map(([id, kind, domain]) => {
+    const members = Array.from({ length: 3 }, (_, i) => questionFixture('single-choice', {
+      id: `${id}-${i}`, familyId: `family-${id}-${i}`, domain, groupId: id,
+    }))
+    questions.push(...members)
+    return { id, kind, domain, title: id, background: 'Shared scenario requirements.', questionIds: members.map(q => q.id) }
+  })
+  return freeze({ ...bankFixture(), questions, groups })
+}
 export function sessionFixture() {
   const bank = bankFixture(), questions = [bank.questions[0]]
   return freeze({ version: 1, id: SESSION_FIXTURE_ID, revision: 1, mode: 'study', status: 'active', bankRevision: 1,
