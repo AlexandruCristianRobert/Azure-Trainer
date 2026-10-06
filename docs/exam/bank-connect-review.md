@@ -2,8 +2,9 @@
 
 Author review date: 2026-10-06. All 30 items are original. Author checked every
 expected answer and legal distractor against the primary pages below, including
-the Python SDK/decorator API names. Independent controller review is pending for
-every row; author checks are not independent approval. No unresolved author claim.
+the Python SDK/decorator API names. The original author ledger and independent
+gate are preserved below. Current verdicts incorporate the controller-owned
+review and keep the x019/x027 text clarifications pending re-review.
 
 The envelope uses one primary objective and its canonical concept per question.
 Each component is one point. Multipart reasons include a justification for every
@@ -21,7 +22,7 @@ are S, E, H and J; remaining sources are item-level supporting references.
 | S / ref-connect.servicebus | [Message transfers, locks, settlement](https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement) | Settling send operations; Settling receive operations; Renew locks |
 | E / ref-connect.eventgrid | [Event filtering](https://learn.microsoft.com/en-us/azure/event-grid/event-filtering) | Event type filtering; Subject filtering; StringIn; OR and AND |
 | H / ref-connect.functions-api | [HTTP trigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger) | Python examples; Decorators; Customize the HTTP endpoint |
-| J / ref-connect.functions-host | [host.json reference](https://learn.microsoft.com/en-us/azure/azure-functions/functions-host-json) | Sample host.json; extensionBundle; logging; version; environment configuration |
+| J / ref-connect.functions-host | [host.json reference](https://learn.microsoft.com/en-us/azure/azure-functions/functions-host-json) | Sample host.json; extensionBundle; logging; version; environment configuration; Override host.json values |
 | A / connect-async | [Asynchronous request-reply](https://learn.microsoft.com/en-us/azure/architecture/patterns/asynchronous-request-reply) | Solution; input validation; status endpoint; Location header |
 | Q / connect-sb-sql | [SQL filter syntax](https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-messaging-sql-filter) | Arguments; user scope; string_constant; property names |
 | F / connect-sb-filters | [Topic filters and actions](https://learn.microsoft.com/en-us/azure/service-bus-messaging/topic-filters) | Default rule; SQL filters; Boolean filters; body-evaluation restriction |
@@ -54,8 +55,9 @@ requirements, rather than claims that Azure automatically provides them.
 
 ## Per-item answer and distractor review
 
-Every outcome below is **author checked; independent pending**. The date is the
-actual review date, not an inferred publication date. Sources include the
+The Outcome column preserves the initial **author checked; independent pending**
+gate at 5d9edd4. Current independent verdicts follow in their own table. The date
+is the actual review date, not an inferred publication date. Sources include the
 canonical page plus each necessary supporting page. The complete candidate-level
 reasoning remains in each DTO; this ledger records the editorial cross-check.
 
@@ -79,7 +81,7 @@ reasoning remains in each DTO; this ledger records the editorial cross-check.
 | ai200-x016 | connect.servicebus / connect.queue-acceptance | S settlement; R operation signatures; D application DLQ | 2026-10-06 | complete, abandon, deadletter | Successful, transient and permanently invalid outcomes need distinct settlement. All other operations checked per outcome; peek never settles. | ai200-x007 | author checked; independent pending |
 | ai200-x017 | connect.eventgrid / connect.event-routing | E type filtering; G webhook error table | 2026-10-06 | retry, deadletter, exclude | Matching 500 retries; matching 400 schedules DLQ without retry; nonmatching type is excluded. Wrong treatments and unlimited retry checked per observation. | ai200-x017 | author checked; independent pending |
 | ai200-x018 | connect.functions-api / connect.http-validation | H Python/route; I attributes/get_json | 2026-10-06 | query, route, body | Each request source maps to its API; every other source and req.method rejected per target. | ai200-x005 | author checked; independent pending |
-| ai200-x019 | connect.functions-host / connect.host-configuration | J environment/logging; P local files | 2026-10-06 | host, azure, local | Host behavior, deployed connections and local Values have separate roles; requirements is package metadata. Each candidate checked per role. | ai200-x006 | author checked; independent pending |
+| ai200-x019 | connect.functions-host / connect.host-configuration | J environment/logging/Override host.json values; P local files | 2026-10-06 | host, azure, local | Logging target now explicitly requests the checked-in authored project host file. AzureFunctionsJobHost__logging__ app settings can override runtime logging but do not replace the requested file. Deployed connections/local Values retain their roles. | ai200-x006 | author checked; independent pending |
 | ai200-x020 | connect.eventgrid / connect.event-routing | E includedEventTypes/subjectBeginsWith | 2026-10-06 | type, subject | Harbor completed type and north prefix; created and south select different routes. Advanced condition retained. | ai200-x009 | author checked; independent pending |
 | ai200-x021 | connect.servicebus / connect.queue-acceptance | S messaging; Q user scope/string; F body | 2026-10-06 | property, literal | region is custom property; quoted north is literal. body path unsupported; unquoted north means property, not string. | ai200-x004 | author checked; independent pending |
 | ai200-x022 | connect.functions-api / connect.http-validation | H Decorators; X routePrefix | 2026-10-06 | route, post | Relative orders plus api prefix yields requested path; repeated api prefix and GET conflict with route/verb requirements. | ai200-x022 | author checked; independent pending |
@@ -87,10 +89,58 @@ reasoning remains in each DTO; this ledger records the editorial cross-check.
 | ai200-x024 | connect.servicebus / connect.queue-acceptance | S redelivery; U MessageId/window; D maximum delivery count | 2026-10-06 | yes, no, yes | Duplicate send can succeed with copy dropped; consumer redelivery still possible; repeated abandonment can exceed delivery limit and DLQ. Opposite answers checked individually. | ai200-x007 | author checked; independent pending |
 | ai200-x025 | connect.eventgrid / connect.event-routing | E subscription; G order/retry policy | 2026-10-06 | no, yes | No ordering guarantee; first exhausted attempt/TTL limit stops delivery. Opposite statements checked, without claiming exact expiry/write time. | ai200-x008 | author checked; independent pending |
 | ai200-x026 | connect.functions-api / connect.http-validation | H Python error/HttpResponse; I JSON | 2026-10-06 | no, yes | Successful parse does not enforce schema; ValueError guarded 400 before send meets malformed-input rule. Each opposite answer checked. | ai200-x010 | author checked; independent pending |
-| ai200-x027 | connect.servicebus / connect.queue-acceptance | S broker; C topic/subscription model; F SQL rules | 2026-10-06 | {billing, warehouse} | North and urgent subscriptions each match; topic is the publishing box and south fails. No true rule allows unintended routing. | ai200-x004 | author checked; independent pending |
+| ai200-x027 | connect.servicebus / connect.queue-acceptance | S broker; C topic/subscription model; F SQL rules | 2026-10-06 | {billing, warehouse} | Inventory explicitly includes all three idle provisioned subscriptions and only their stated filters. North and urgent match; south-only fails and topic is the publisher. | ai200-x004 | author checked; independent pending |
 | ai200-x028 | connect.functions-api / connect.http-validation | H Python guards/response; I JSON; T send_messages | 2026-10-06 | {invalid, missing} | JSON and schema guards are the two validation blocks; SDK enqueue and accepted response are later effects. | ai200-x010 | author checked; independent pending |
 | ai200-x029 | connect.functions-host / connect.host-configuration | J environment; B Python v2 topic example/connection | 2026-10-06 | topic, subscription, connection | orders/fulfill/OrdersBus are declared scenario values and real decorator fields; queue parameter, audit route and raw secret are wrong per field. | ai200-x011 | author checked; independent pending |
 | ai200-x030 | connect.functions-host / connect.host-configuration | J version/extensionBundle | 2026-10-06 | schema, bundle | Host schema 2.0; half-open interval excludes 5.0.0. 4.0 host schema and inclusive upper bound each contradict the field requirement. | ai200-x011 | author checked; independent pending |
+
+## Current independent verdicts — 2026-10-06
+
+Controller-owned reviewer `/root/exam_bank_connect_review` inspected the actual
+range c5d24d6..5d9edd4 on 2026-10-06. The initial gate was Needs fixes: Important
+x019 allowed a documented app-setting logging override to compete with host.json;
+Minor x027 omitted the third subscription from the inventory. All other facts,
+keys, distractors and families were approved. This attribution is the supplied
+controller review result, not a new author-created independent approval.
+
+Fix round 1 starts at 10ff853. x019 now explicitly requests the checked-in host
+configuration file and acknowledges supported environment logging overrides;
+x027 names all three subscriptions and applies rule removal/idle/provisioning
+conditions to all three. Keys, family assignments, counts and source URLs are
+unchanged. Only those two text deltas require the original reviewer's re-review.
+
+| Item | Current verdict |
+| --- | --- |
+| ai200-x001 | Independently approved at initial gate; unchanged |
+| ai200-x002 | Independently approved at initial gate; unchanged |
+| ai200-x003 | Independently approved at initial gate; unchanged |
+| ai200-x004 | Independently approved at initial gate; unchanged |
+| ai200-x005 | Independently approved at initial gate; unchanged |
+| ai200-x006 | Independently approved at initial gate; unchanged |
+| ai200-x007 | Independently approved at initial gate; unchanged |
+| ai200-x008 | Independently approved at initial gate; unchanged |
+| ai200-x009 | Independently approved at initial gate; unchanged |
+| ai200-x010 | Independently approved at initial gate; unchanged |
+| ai200-x011 | Independently approved at initial gate; unchanged |
+| ai200-x012 | Independently approved at initial gate; unchanged |
+| ai200-x013 | Independently approved at initial gate; unchanged |
+| ai200-x014 | Independently approved at initial gate; unchanged |
+| ai200-x015 | Independently approved at initial gate; unchanged |
+| ai200-x016 | Independently approved at initial gate; unchanged |
+| ai200-x017 | Independently approved at initial gate; unchanged |
+| ai200-x018 | Independently approved at initial gate; unchanged |
+| ai200-x019 | Important ambiguity clarified by author; pending original-reviewer re-review |
+| ai200-x020 | Independently approved at initial gate; unchanged |
+| ai200-x021 | Independently approved at initial gate; unchanged |
+| ai200-x022 | Independently approved at initial gate; unchanged |
+| ai200-x023 | Independently approved at initial gate; unchanged |
+| ai200-x024 | Independently approved at initial gate; unchanged |
+| ai200-x025 | Independently approved at initial gate; unchanged |
+| ai200-x026 | Independently approved at initial gate; unchanged |
+| ai200-x027 | Facts/key approved; Minor inventory clarification pending original-reviewer re-review |
+| ai200-x028 | Independently approved at initial gate; unchanged |
+| ai200-x029 | Independently approved at initial gate; unchanged |
+| ai200-x030 | Independently approved at initial gate; unchanged |
 
 ## Families and group continuity
 
@@ -121,5 +171,5 @@ completion notifications; the last item configures that same worker binding.
 The Event Grid filter and worker binding retain separate primary objectives.
 
 Structural validation and literal-key grading passed the focused Connect test.
-Those tests do not establish primary-source factual correctness or confer the
-pending independent editorial approval.
+Those tests do not establish primary-source factual correctness or confer
+approval of the two text clarifications pending independent re-review.
