@@ -1,7 +1,10 @@
-import { EXAM_DOMAINS, EXAM_KINDS, EXAM_LIMITS, finiteJson, record, member, arrayOf, uniqueRecords, requireExam, stableId, text, uniqueIds, validateReference } from './contracts.js'
+import { EXAM_DOMAINS, EXAM_KINDS, EXAM_LIMITS, finiteJson, record, member, integer, arrayOf, uniqueRecords, requireExam, stableId, text, uniqueIds, validateReference } from './contracts.js'
 import { validateQuestion } from './question.js'
 import { EXAM_OBJECTIVES } from '../../data/exam/taxonomy.js'
 import { EXAM_CONCEPTS } from '../../data/exam/concepts.js'
+import { validateLabMappings } from '../../data/exam/index.js'
+import { LABS } from '../../data/labs/index.js'
+import { drawMock } from './selection.js'
 
 // Literal authoring allocations; no dependency on unpublished domain modules.
 const allocations = {
@@ -48,4 +51,57 @@ export function validateDomainContent(content, domain) {
   })
   requireExam(content.questions.every(q => q.groupId === null || content.groups.some(g => g.id === q.groupId && g.questionIds.includes(q.id))), 'Missing reciprocal question group')
   return true
+}
+
+/** Validate the current complete authored bank; historical DTO validation stays separate. */
+export function validateExamBank(bank) {
+  finiteJson(bank)
+  record(bank,['version','revision','questions','groups','references'])
+  member(bank.version,[1]); integer(bank.revision,1)
+  arrayOf(bank.questions,120,validateQuestion,120); uniqueRecords(bank.questions)
+  arrayOf(bank.references,3840,validateReference,1); uniqueRecords(bank.references)
+  arrayOf(bank.groups,8,g=>{
+    record(g,['id','kind','domain','title','background','questionIds'])
+    member(g.domain,EXAM_DOMAINS)
+  },8); uniqueRecords(bank.groups)
+  for (const domain of EXAM_DOMAINS) validateDomainContent({
+    questions:bank.questions.filter(q=>q.domain===domain),
+    groups:bank.groups.filter(g=>g.domain===domain),
+    references:bank.references,
+  },domain)
+  // Published family IDs identify an existing same-objective representative.
+  // This authoring restriction does not apply to persisted historical attempts.
+  const questions = new Map(bank.questions.map(q=>[q.id,q]))
+  for (const q of bank.questions) {
+    const representative=questions.get(q.familyId)
+    requireExam(representative && representative.familyId===representative.id && representative.domain===q.domain && representative.objectiveId===q.objectiveId,'Unresolved or incompatible question family')
+  }
+  validateLabMappings(EXAM_CONCEPTS,LABS)
+  for (const size of [40,50,60]) drawMock(bank,{size},23)
+  return true
+}
+
+/** Counts authored availability, not learner results. Partial pools reveal gaps. */
+export function bankCoverage(bank) {
+  finiteJson(bank)
+  record(bank,['version','revision','questions','groups','references'])
+  member(bank.version,[1]); integer(bank.revision,1)
+  arrayOf(bank.questions,120,validateQuestion); uniqueRecords(bank.questions)
+  const countBy = (ids,read) => Object.fromEntries(ids.map(id=>[id,bank.questions.filter(q=>read(q,id)).length]))
+  const byDomain=countBy(EXAM_DOMAINS,(q,id)=>q.domain===id)
+  const byKind=countBy(EXAM_KINDS,(q,id)=>q.kind===id)
+  const byObjective=countBy(EXAM_OBJECTIVES.map(o=>o.id),(q,id)=>q.objectiveId===id)
+  // One question counts once for each concept, even when it has several components.
+  const byConcept=countBy(EXAM_CONCEPTS.map(c=>c.id),(q,id)=>q.components.some(c=>c.conceptId===id))
+  const familyCount=new Set(bank.questions.map(q=>q.familyId)).size
+  const ids=new Set(bank.questions.map(q=>q.id))
+  const missingFamilyIds=[...new Set(bank.questions.filter(q=>!ids.has(q.familyId)).map(q=>q.familyId))].sort()
+  const assessmentNeeded=EXAM_CONCEPTS.map(c=>({conceptId:c.id,objectiveId:c.objectiveId,
+    familyCount:new Set(bank.questions.filter(q=>q.objectiveId===c.objectiveId && q.components.some(part=>part.conceptId===c.id)).map(q=>q.familyId)).size,
+    reason:'assessment-needed',
+  })).filter(c=>c.familyCount<3)
+  return {byDomain,byKind,byObjective,byConcept,familyCount,
+    missingObjectiveIds:EXAM_OBJECTIVES.filter(o=>byObjective[o.id]===0).map(o=>o.id),
+    missingConceptIds:EXAM_CONCEPTS.filter(c=>byConcept[c.id]===0).map(c=>c.id),
+    missingFamilyIds,assessmentNeeded}
 }

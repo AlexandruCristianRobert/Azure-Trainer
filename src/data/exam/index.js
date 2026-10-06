@@ -2,6 +2,7 @@ import { finiteJson, record, stableId, text, uniqueIds, uniqueRecords, requireEx
 import { EXAM_OBJECTIVES } from './taxonomy.js'
 export { EXAM_OBJECTIVES } from './taxonomy.js'
 export { EXAM_CONCEPTS } from './concepts.js'
+export const loadExamBank = async () => (await import('./bank/index.js')).EXAM_BANK
 
 export function validateLabMappings(concepts, labs) {
   finiteJson(concepts)

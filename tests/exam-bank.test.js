@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { gradeQuestion } from '../src/lib/exam/grading.js'
 import { EXAM_CONCEPTS } from '../src/data/exam/concepts.js'
+import * as examData from '../src/data/exam/index.js'
+import { LABS } from '../src/data/labs/index.js'
+import { drawMock } from '../src/lib/exam/selection.js'
+import { ExamError } from '../src/lib/exam/contracts.js'
 
 const banks = import.meta.glob('../src/data/exam/bank/*.js', { eager: true })
 const validators = import.meta.glob('../src/lib/exam/bankValidation.js', { eager: true })
 const { CONTAINERS_QUESTIONS, CONTAINERS_GROUPS, CONTAINERS_REFERENCES } = banks['../src/data/exam/bank/containers.js'] || {}
 const { validateDomainContent } = validators['../src/lib/exam/bankValidation.js'] || {}
+const { validateExamBank, bankCoverage } = validators['../src/lib/exam/bankValidation.js'] || {}
 const content = () => structuredClone({ questions: CONTAINERS_QUESTIONS, groups: CONTAINERS_GROUPS, references: CONTAINERS_REFERENCES })
 const ready = () => { expect(validateDomainContent).toBeTypeOf('function'); expect(CONTAINERS_QUESTIONS).toBeInstanceOf(Array) }
 // Hand-checked author keys, independent literal expectations in component order.
@@ -187,5 +192,107 @@ describe('data bank', () => {
     for (const [member,original] of [[12,5],[20,4],[21,6],[22,4],[23,3],[24,7],[25,10],[27,11],[28,5],[30,4],[31,5],[32,11],[33,8]]) {
       expect(families[`ai200-d${String(member).padStart(3,'0')}`]).toBe(`ai200-d${String(original).padStart(3,'0')}`)
     }
+  })
+})
+
+const { SECURE_QUESTIONS, SECURE_GROUPS, SECURE_REFERENCES } = banks['../src/data/exam/bank/secure.js'] || {}
+const { EXAM_BANK } = banks['../src/data/exam/bank/index.js'] || {}
+const secureContent = () => structuredClone({ questions:SECURE_QUESTIONS, groups:SECURE_GROUPS, references:SECURE_REFERENCES })
+// Independently hand-checked keys and equivalence assignments, never derived by the authoring helper.
+const secureKeys = [
+  ['no'],['yes'],['no'],['production'],['current'],['failures'],
+  [['get','value']],[['set','latest']],[['operation','status']],[['enabled','refresh']],[['total','failed']],
+  ['client','get','value'],['regenerate','store','consume'],['filter','summarize','sort'],
+  ['user','reader','officer'],['unlabelled','production','development'],['extract','inject','current'],['where','summarize','project'],
+  ['production','refresh'],['get','value'],['extract','context'],['countif','bin'],
+  ['yes','no','no'],['yes','no'],['yes','no'],['yes','no'],
+  [['label','refresh']],[['filter','aggregate']],['extract','parent'],['store','vault'],
+]
+const secureFamilies = [1,1,1,4,5,6,7,7,9,4,6,7,13,6,1,4,17,6,4,7,17,6,7,9,25,6,4,6,17,30]
+describe('secure bank', () => {
+  it('exports 30 schema-valid items with exact kinds, groups and four objective allocations', () => {
+    expect(SECURE_QUESTIONS).toBeInstanceOf(Array)
+    expect(SECURE_QUESTIONS).toHaveLength(30)
+    expect(validateDomainContent(secureContent(),'secure')).toBe(true)
+    expect(SECURE_QUESTIONS.map(q=>q.id)).toEqual(Array.from({length:30},(_,i)=>`ai200-s${String(i+1).padStart(3,'0')}`))
+    expect(SECURE_QUESTIONS.map(q=>q.kind)).toEqual(['single-choice','multiple-response','build-list','matching','dropdown','statement-grid','hot-area','active-screen'].flatMap((kind,i)=>Array([6,5,3,4,4,4,2,2][i]).fill(kind)))
+    expect(SECURE_GROUPS.map(g=>[g.id,g.kind,g.questionIds])).toEqual([
+      ['series-s1','series',['ai200-s001','ai200-s002','ai200-s003']],
+      ['case-s1','case',['ai200-s004','ai200-s019','ai200-s027']],
+      ['case-s2','case',['ai200-s009','ai200-s024','ai200-s029']],
+    ])
+    expect(new Set(SECURE_QUESTIONS.map(q=>q.objectiveId)).size).toBe(4)
+  })
+  it('grades all 30 literal keys and keeps equivalent widgets in shared families', () => {
+    expect(SECURE_QUESTIONS).toBeInstanceOf(Array)
+    SECURE_QUESTIONS.forEach((q,i)=>{
+      expect(q.components.map(c=>c.expected)).toEqual(secureKeys[i])
+      expect(gradeQuestion(q,Object.fromEntries(q.components.map((c,j)=>[c.id,secureKeys[i][j]]))).earned).toBe(q.components.length)
+      expect(q.familyId).toBe(`ai200-s${String(secureFamilies[i]).padStart(3,'0')}`)
+    })
+    expect(new Set(SECURE_QUESTIONS.map(q=>q.familyId)).size).toBe(10)
+    expect(SECURE_QUESTIONS.slice(0,3).map(q=>q.presentation.choices.map(c=>c.id))).toEqual([['yes','no'],['yes','no'],['yes','no']])
+  })
+})
+describe('full-bank publication', () => {
+  it('loads the complete validated bank lazily with all objective and canonical references', async () => {
+    expect(EXAM_BANK).toBeTypeOf('object')
+    expect(examData.loadExamBank).toBeTypeOf('function')
+    expect(await examData.loadExamBank()).toBe(EXAM_BANK)
+    expect(EXAM_BANK.questions).toHaveLength(120)
+    expect(validateExamBank(EXAM_BANK)).toBe(true)
+    expect(EXAM_BANK.groups).toHaveLength(8)
+    expect(bankCoverage(EXAM_BANK).byKind).toEqual({'single-choice':24,'multiple-response':20,'build-list':16,matching:16,dropdown:16,'statement-grid':12,'hot-area':8,'active-screen':8})
+    const coverage = bankCoverage(EXAM_BANK)
+    expect(coverage.byDomain).toEqual({containers:27,data:33,connect:30,secure:30})
+    expect(Object.keys(coverage.byObjective)).toHaveLength(27)
+    expect(coverage.byObjective['secure.vault']).toBe(10)
+    expect(coverage.byConcept['secure.trace-context']).toBe(6)
+    expect(coverage.missingObjectiveIds).toEqual([])
+    expect(coverage.missingConceptIds).toEqual([])
+    expect(coverage.missingFamilyIds).toEqual([])
+    expect(coverage.familyCount).toBe(69)
+    expect(coverage.assessmentNeeded).toContainEqual({conceptId:'secure.failure-query',objectiveId:'secure.kql',familyCount:1,reason:'assessment-needed'})
+    expect(coverage.assessmentNeeded.every(row=>row.reason==='assessment-needed' && row.familyCount<3)).toBe(true)
+    const refs = new Set(EXAM_BANK.references.map(r=>r.id))
+    for(const c of EXAM_CONCEPTS) expect(c.referenceIds.every(id=>refs.has(id))).toBe(true)
+    expect(examData.validateLabMappings(EXAM_CONCEPTS,LABS)).toBe(EXAM_CONCEPTS)
+  })
+  it.each([40,50,60])('draws full-bank size %i with exact quotas, all kinds, two whole cases and one whole series', size => {
+    expect(EXAM_BANK).toBeTypeOf('object')
+    for(const seed of [0,23,4294967295]) {
+      const deck=drawMock(EXAM_BANK,{size},seed)
+      expect(deck.order).toHaveLength(size)
+      expect(new Set(deck.order).size).toBe(size)
+      expect(['containers','data','connect','secure'].map(d=>deck.questions.filter(q=>q.domain===d).length)).toEqual({40:[9,11,10,10],50:[12,14,12,12],60:[14,16,15,15]}[size])
+      expect(new Set(deck.questions.map(q=>q.kind)).size).toBe(8)
+      expect(deck.groups.filter(g=>g.kind==='case')).toHaveLength(2)
+      expect(deck.groups.filter(g=>g.kind==='series')).toHaveLength(1)
+      for(const g of deck.groups) expect(g.questionIds).toEqual(EXAM_BANK.groups.find(original=>original.id===g.id).questionIds)
+      expect(drawMock(EXAM_BANK,{size},seed).order).toEqual(deck.order)
+    }
+  })
+  it.each([
+    ['incomplete pool',b=>b.questions.pop()],
+    ['duplicate global question',b=>{b.questions[27].id=b.questions[0].id}],
+    ['conflicting reused reference',b=>{b.references.push({...b.references[0],title:'Conflicting definition'})}],
+    ['unknown family',b=>{b.questions[0].familyId='absent-family'}],
+    ['cross-objective family',b=>{b.questions[0].familyId='ai200-s001'}],
+    ['missing canonical ref',b=>{b.references=b.references.filter(r=>r.id!=='ref-secure.otel')}],
+    ['extra envelope field',b=>{b.published=true}],
+    ['null group',b=>{b.groups[0]=null}],
+  ])('rejects full-bank %s',(_,corrupt)=>{
+    expect(EXAM_BANK).toBeTypeOf('object')
+    const b=structuredClone(EXAM_BANK);corrupt(b)
+    expect(()=>validateExamBank(b)).toThrow(ExamError)
+  })
+  it('reports absent objectives, concepts and unresolved families honestly without inventing evidence',()=>{
+    expect(bankCoverage).toBeTypeOf('function')
+    const partial={version:1,revision:1,questions:[{...structuredClone(EXAM_BANK.questions.find(q=>q.id==='ai200-s007')),familyId:'missing'}],groups:[],references:[]}
+    const coverage=bankCoverage(partial)
+    expect(coverage.missingObjectiveIds).toContain('secure.kql')
+    expect(coverage.missingConceptIds).toContain('secure.failure-query')
+    expect(coverage.missingFamilyIds).toEqual(['missing'])
+    expect(coverage.assessmentNeeded.find(c=>c.conceptId==='secure.failure-query')).toEqual({conceptId:'secure.failure-query',objectiveId:'secure.kql',familyCount:0,reason:'assessment-needed'})
   })
 })
