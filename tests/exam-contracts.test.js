@@ -120,6 +120,13 @@ describe('closed finite data and layout validation', () => {
     for (const url of ['https://redis.io/docs/', 'https://github.com/Azure/azure-sdk-for-python/blob/main/README.md']) expect(call('validateReference', { ...ref, url }).url).toBe(url)
     for (const url of ['javascript:alert(1)', 'data:text/html,x', 'file:///tmp/a', 'http://learn.microsoft.com/a', 'https://learn.microsoft.com.evil.test/a', 'https://evil.test/', 'https://github.com/evil/repo', 'https://github.com/Azure/azure-sdk-for-python-evil/a', 'https://user:pass@learn.microsoft.com/a', 'https://learn.microsoft.com:444/a']) expect(() => call('validateReference', { ...ref, url })).toThrow()
   })
+  it('rejects non-string reference review dates with ExamError before coercion', () => {
+    const ref = bankFixture().references[0]
+    for (const reviewedAt of [{ toString: null }, ['2026-10-06'], {}, null, 20261006, true]) {
+      expect(() => call('validateReference', { ...ref, reviewedAt })).toThrow(api.ExamError)
+    }
+    expect(call('validateReference', ref)).toBe(ref)
+  })
 })
 
 describe('frozen records and recomputed attempt grades', () => {

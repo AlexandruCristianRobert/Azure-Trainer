@@ -81,7 +81,7 @@ export function uniqueRecords(values) { requireExam(new Set(values.map((v) => v.
 export function validateReference(ref) {
   finiteJson(ref, EXAM_LIMITS.questionBytes)
   record(ref, ['id', 'title', 'url', 'reviewedAt']); stableId(ref.id); text(ref.title, 1024); text(ref.url, 4096)
-  requireExam(/^\d{4}-\d{2}-\d{2}$/.test(ref.reviewedAt) && !Number.isNaN(Date.parse(ref.reviewedAt)) && new Date(ref.reviewedAt).toISOString().slice(0, 10) === ref.reviewedAt, 'Invalid reference review date')
+  requireExam(typeof ref.reviewedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ref.reviewedAt) && !Number.isNaN(Date.parse(ref.reviewedAt)) && new Date(ref.reviewedAt).toISOString().slice(0, 10) === ref.reviewedAt, 'Invalid reference review date')
   let url
   try { url = new URL(ref.url) } catch { throw new ExamError('Invalid reference URL') }
   requireExam(ref.url === ref.url.trim() && !/[\u0000-\u0020\\]/.test(ref.url), 'Invalid reference URL characters')
