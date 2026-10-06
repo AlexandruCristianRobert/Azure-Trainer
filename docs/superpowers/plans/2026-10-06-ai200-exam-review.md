@@ -681,8 +681,8 @@ only where necessary for exact aggregate/catalog/route checks.
   mappings. Sources/editorial answer review must already have been independently
   approved per domain. No new per-item review fleet or schema-only fact claim:
   ```js
-  expect(bankCoverage(await loadExamBank()).missingObjectives).toEqual([])
-  expect(validateLabMappings(EXAM_CONCEPTS,LABS)).toBe(true)
+  expect(bankCoverage(await loadExamBank()).missingObjectiveIds).toEqual([])
+  expect(validateLabMappings(EXAM_CONCEPTS,LABS)).toBe(EXAM_CONCEPTS)
   expect(EXAM_BANK.questions.some(q=>q.objectiveId==='containers.appservice-container')).toBe(true)
   ```
 - [ ] Add exact script (seven files), then one normal Pages CI step before build,
