@@ -1,7 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { validateQuestion } from '../../lib/exam/question.js'
-import { EXAM_LIMITS, arrayOf, finiteJson, member, record, requireExam, uniqueRecords, validateReference } from '../../lib/exam/contracts.js'
+import { EXAM_LIMITS, arrayOf, finiteJson, requireExam, uniqueRecords, validateGrade, validateReference } from '../../lib/exam/contracts.js'
 import '../../styles/exam.css'
 
 // The caller sets permitted only after the store acknowledges disclosure.
@@ -10,20 +9,8 @@ const props = defineProps({ question: { default: null }, grade: { default: null 
 const feedback = computed(() => {
   if (props.permitted !== true) return null
   try {
-    validateQuestion(props.question, { historical: true })
-    const grade = props.grade, q = props.question
-    finiteJson(grade, EXAM_LIMITS.questionBytes)
-    record(grade, ['questionId', 'outcomes', 'earned', 'possible'])
-    requireExam(grade.questionId === q.id, 'Grade question mismatch')
-    arrayOf(grade.outcomes, EXAM_LIMITS.components, (outcome, index) => {
-      record(outcome, ['componentId', 'conceptId', 'earned', 'possible', 'status', 'attempted'])
-      const component = q.components[index]
-      requireExam(component && outcome.componentId === component.id && outcome.conceptId === component.conceptId, 'Outcome component mismatch')
-      member(outcome.earned, [0, 1]); member(outcome.possible, [1])
-      member(outcome.status, ['correct', 'wrong', 'unanswered', 'incomplete'])
-      requireExam(outcome.earned === (outcome.status === 'correct' ? 1 : 0) && outcome.attempted === ['correct', 'wrong'].includes(outcome.status), 'Inconsistent outcome')
-    })
-    requireExam(grade.outcomes.length === q.components.length && grade.possible === q.components.length && grade.earned === grade.outcomes.reduce((sum, outcome) => sum + outcome.earned, 0), 'Inconsistent grade totals')
+    validateGrade(props.grade, props.question)
+    const q = props.question
     finiteJson(props.references)
     arrayOf(props.references, EXAM_LIMITS.items * EXAM_LIMITS.candidates, validateReference)
     uniqueRecords(props.references)

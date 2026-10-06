@@ -175,6 +175,12 @@ function gradeShape(grade, question) {
   })
   requireExam(grade.outcomes.length === question.components.length && grade.possible === question.components.length && grade.earned === grade.outcomes.reduce((sum, o) => sum + o.earned, 0), 'Inconsistent grade totals')
 }
+export function validateGrade(grade, question) {
+  finiteJson(grade, EXAM_LIMITS.questionBytes)
+  validateQuestion(question, { historical: true })
+  gradeShape(grade, question)
+  return grade
+}
 export function validateAttempt(value) {
   finiteJson(value)
   record(value, ['version', 'id', 'sessionId', 'mode', 'createdAt', 'finishedAt', 'lastObservedAt', 'bankRevision', 'settings', 'questions', 'references', 'groups', 'order', 'optionOrders', 'responses', 'submittedIds', 'assistedIds', 'confidence', 'exposures', 'submissionReason', 'grades', 'source'])

@@ -12,6 +12,39 @@ const kinds = ['single-choice', 'multiple-response', 'build-list', 'matching', '
 const copy = (v) => structuredClone(v)
 
 describe('eight authored scoring contracts', () => {
+  it('validateGrade bounds standalone grades and validates their question without reading accessors', () => {
+    const q = copy(questionFixture())
+    q.domain = 'retired-domain'
+    const grade = {
+      questionId: q.id, earned: 1, possible: 1,
+      outcomes: [{ componentId: 'pick', conceptId: 'concept-one', earned: 1, possible: 1, status: 'correct', attempted: true }],
+    }
+    expect(call('validateGrade', grade, q)).toBe(grade)
+    for (const invalid of [
+      null,
+      { ...grade, questionId: 'another-question' },
+      { ...grade, outcomes: [] },
+      { ...grade, earned: 0 },
+      { ...grade, outcomes: [{ ...grade.outcomes[0], componentId: 'other-component' }] },
+      { ...grade, outcomes: [{ ...grade.outcomes[0], attempted: false }] },
+    ]) expect(() => call('validateGrade', invalid, q)).toThrow(api.ExamError)
+    expect(() => call('validateGrade', { ...grade, oversized: 'x'.repeat(65537) }, q)).toThrow('JSON data exceeds the byte limit')
+    expect(() => call('validateGrade', grade, { ...q, stem: 'x'.repeat(65537) })).toThrow('JSON data exceeds the byte limit')
+    expect(() => call('validateGrade', grade, { ...q, components: [] })).toThrow(api.ExamError)
+    let getterReads = 0
+    const accessorGrade = { ...grade }
+    Object.defineProperty(accessorGrade, 'questionId', { enumerable: true, get() { getterReads++; return q.id } })
+    const accessorQuestion = { ...q }
+    Object.defineProperty(accessorQuestion, 'stem', { enumerable: true, get() { getterReads++; return q.stem } })
+    expect(() => call('validateGrade', accessorGrade, q)).toThrow('Accessors are not allowed')
+    expect(() => call('validateGrade', grade, accessorQuestion)).toThrow('Accessors are not allowed')
+    expect(getterReads).toBe(0)
+    expect(grade).toEqual({
+      questionId: q.id, earned: 1, possible: 1,
+      outcomes: [{ componentId: 'pick', conceptId: 'concept-one', earned: 1, possible: 1, status: 'correct', attempted: true }],
+    })
+  })
+
   it.each(kinds)('%s grades stable IDs, missing answers and safe public edits', (kind) => {
     const q = questionFixture(kind), expectedPoints = ['single-choice', 'multiple-response', 'hot-area'].includes(kind) ? 1 : 2
     expect(call('validateQuestion', q)).toBe(q)

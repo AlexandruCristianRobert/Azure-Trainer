@@ -196,6 +196,44 @@ describe('exam public question controls', () => {
 })
 
 describe('explicitly permitted feedback', () => {
+  it('omitted permission hides malformed private payloads without reading getters', () => {
+    let getterReads = 0
+    let descriptorInspections = 0
+    const payload = {}
+    for (const property of ['id', 'stem', 'explanation', 'questionId', 'outcomes']) {
+      Object.defineProperty(payload, property, { enumerable: true, get() { getterReads++; throw new Error('Denied payload was read') } })
+    }
+    const privatePayload = new Proxy(payload, { ownKeys() { descriptorInspections++; throw new Error('Denied payload was inspected') } })
+    const m = mountExam(QuestionFeedback, { question: privatePayload, grade: privatePayload, references: [privatePayload] })
+    expect(m.host.textContent.trim()).toBe('')
+    expect(m.host.querySelector('a, pre, [role=alert]')).toBeNull()
+    expect(getterReads).toBe(0)
+    expect(descriptorInspections).toBe(0)
+    expect(m.warnings).toEqual([])
+  })
+
+  it('revoking permission removes all private feedback and does not inspect a denied replacement', async () => {
+    const q = questionFixture('matching', { csharp: 'private example' })
+    const m = mountExam(QuestionFeedback, { question: q, grade: gradeQuestion(q, { first: 'a' }), references: bankFixture().references, permitted: true })
+    expect(m.host.querySelector('[data-component-reason]')).not.toBeNull()
+    expect(m.host.querySelector('a')).not.toBeNull()
+    expect(m.host.querySelector('pre code').textContent).toBe('private example')
+    await m.setProps({ permitted: false })
+    expect(m.host.textContent.trim()).toBe('')
+    expect(m.host.querySelector('[data-component-reason], [data-candidate-reason], a, pre, [role=alert]')).toBeNull()
+    let getterReads = 0
+    let descriptorInspections = 0
+    const payload = {}
+    Object.defineProperty(payload, 'id', { enumerable: true, get() { getterReads++; throw new Error('Denied question was read') } })
+    Object.defineProperty(payload, 'questionId', { enumerable: true, get() { getterReads++; throw new Error('Denied grade was read') } })
+    const denied = new Proxy(payload, { ownKeys() { descriptorInspections++; throw new Error('Denied payload was inspected') } })
+    await m.setProps({ question: denied, grade: denied, references: [denied] })
+    expect(m.host.textContent.trim()).toBe('')
+    expect(getterReads).toBe(0)
+    expect(descriptorInspections).toBe(0)
+    expect(m.warnings).toEqual([])
+  })
+
   it('discloses nothing until permission and then shows every authored reason, outcome and approved reference', async () => {
     const q = questionFixture('matching', { csharp: '<script>not executable</script>' })
     const grade = gradeQuestion(q, { first: 'a' })
