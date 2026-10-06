@@ -235,7 +235,7 @@ assistedIds and advance lastObservedAt monotonically without modifying grades.
   availability before creation; shorter decks require the UI's consent.
   ```js
   const remaining = quotas.map((n,i)=>n-reserved.filter(q=>q.domain===EXAM_DOMAINS[i]).length)
-  if (remaining.some(n=>n<0)) throw new ExamError('BANK_UNSATISFIABLE','Group quota exceeded')
+  if (remaining.some(n=>n<0)) throw new ExamError('Group quota exceeded','BANK_UNSATISFIABLE')
   // Selected output is accepted only after exact quotas, all kinds and unique IDs validate.
   ```
 - [ ] GREEN only owning file, no real waits; self-review deadline/feedback/atomic
@@ -285,7 +285,7 @@ dataByteLimit=EXAM_LIMITS.dataBytes})` with async `load()`,
   remains active. Only observed disclosure metadata changes, not sealed scores.
   ```js
   tx.oncomplete = () => resolve(savedSnapshot) // never resolve on request success
-  tx.onabort = () => reject(new ExamError('STORAGE_FAILED','Exam transaction aborted'))
+  tx.onabort = () => reject(new ExamError('Exam transaction aborted','STORAGE_FAILED'))
   tx.onerror = () => { /* capture cause; abort/complete owns Promise settlement */ }
   ```
   `load` validates all records; fail visible, no reset/memory fallback. Backup
