@@ -34,6 +34,14 @@ describe('containers bank', () => {
     expect(CONTAINERS_QUESTIONS.map(q => q.kind)).toEqual(kinds.flatMap((kind, i) => Array(counts[i]).fill(kind)))
     expect(CONTAINERS_GROUPS.map(g => [g.id,g.kind,g.questionIds])).toEqual([['case-c1','case',['ai200-c019','ai200-c022','ai200-c026']]])
   })
+  it('shares the containers replica-bound family across equivalent widgets without removing questions', () => {
+    ready()
+    expect(CONTAINERS_QUESTIONS).toHaveLength(27)
+    expect(CONTAINERS_QUESTIONS.find(q => q.id === 'ai200-c010').familyId).toBe('ai200-c010')
+    expect(CONTAINERS_QUESTIONS.find(q => q.id === 'ai200-c025').familyId).toBe('ai200-c010')
+    expect(new Set(CONTAINERS_QUESTIONS.map(q => q.familyId)).size).toBe(26)
+    expect(CONTAINERS_QUESTIONS.filter(q => q.id !== 'ai200-c025').every(q => q.familyId === q.id)).toBe(true)
+  })
   it('resolves every authored concept and gives full credit to legal answer keys', () => {
     ready()
     const refs = CONTAINERS_REFERENCES.map(r => r.id)

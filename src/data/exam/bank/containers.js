@@ -6,7 +6,7 @@ const objectives = {
   scale: ['containerapps-keda','scale-signals'], aks: ['aks-manifests','workload-manifests'],
   diagnose: ['container-diagnostics','failure-layers'],
 }
-function item(n, key, kind, stem, candidates, parts, { artifacts = [], groupId = null, refs = [], difficulty = 'medium', presentation = null, count = null } = {}) {
+function item(n, key, kind, stem, candidates, parts, { artifacts = [], groupId = null, refs = [], difficulty = 'medium', presentation = null, count = null, familyId = null } = {}) {
   const id = `ai200-c${String(n).padStart(3,'0')}`
   const [objective,concept] = objectives[key]
   const catalog = candidates.map(([id,label]) => ({ id,label }))
@@ -27,7 +27,7 @@ function item(n, key, kind, stem, candidates, parts, { artifacts = [], groupId =
     componentId, text: reason, candidates: components[i].candidateIds.map(candidateId => ({ candidateId,
       text: checks ? checks[candidateId] : candidates.find(c => c[0] === candidateId)[2] })),
   })) }
-  return { id, revision:1, familyId:id, kind, domain:'containers', objectiveId:`containers.${objective}`, difficulty,
+  return { id, revision:1, familyId:familyId ?? id, kind, domain:'containers', objectiveId:`containers.${objective}`, difficulty,
     stem, artifacts, presentation, components, groupId, explanation, referenceIds:[`ref-containers.${objective}`, ...refs], csharp:null }
 }
 const code = text => [{ id:'configuration', kind:'code', language:'text', text }]
@@ -189,7 +189,7 @@ export const CONTAINERS_QUESTIONS = [
     'An HTTP Container App is configured as shown. Select the two fields that control the configured lower and upper replica bounds, rather than the HTTP trigger threshold.',
     [['min','minReplicas: 1','This is the configured lower replica bound.'],['max','maxReplicas: 8','This is the configured upper replica bound.'],['http','concurrentRequests: 40','This controls the HTTP trigger threshold, not a replica bound.']],
     [['bounds','Replica limits',['min','max'],'Minimum and maximum replicas define the configured range.']],
-    { count:2, presentation:{ label:'HTTP scale settings', regions:[
+    { count:2, familyId:'ai200-c010', presentation:{ label:'HTTP scale settings', regions:[
       { id:'min',label:'minReplicas: 1',x:0,y:0,width:1,height:0.25 },
       { id:'max',label:'maxReplicas: 8',x:0,y:0.35,width:1,height:0.25 },
       { id:'http',label:'concurrentRequests: 40',x:0,y:0.7,width:1,height:0.25 },
