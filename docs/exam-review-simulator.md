@@ -172,7 +172,10 @@ budget does not change 32 MiB normal backup, 24 MiB storage or 200-attempt limit
 
 ## Verification limits and development
 
-`npm run test:exam-review` runs exactly the seven exam files named in package.json.
+`npm run test:exam-review` runs the seven exam files plus the real-application
+startup regression named in package.json. The startup check renders Home and
+exam setup using the actual router and default Pinia store, catching catalog
+render failures that isolated page tests would miss.
 Pages CI runs it as a normal step before the existing project-base build, without
 a bypass. Test-only `jsdom` 26.1.0 and `fake-indexeddb` 6.2.5 were added; runtime
 dependencies were unchanged, Node >=18 remains supported and CI uses Node 22.

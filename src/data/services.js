@@ -10,6 +10,7 @@ export const SERVICES = {
   'managed-redis': { label: 'Managed Redis', icon: 'managed-redis', tint: 'var(--tint-red)' },
   'container-registry': { label: 'Container Registry', icon: 'container-registry', tint: 'var(--tint-slate)' },
   'event-grid': { label: 'Event Grid', icon: 'event-grid', tint: 'var(--tint-teal)' },
+  'application-insights': { label: 'Application Insights', icon: 'dashboard', tint: 'var(--tint-violet)' },
 }
 
 export const HOME_SERVICES = ['service-bus', 'container-apps', 'aks', 'cosmos-db', 'key-vault', 'functions', 'postgresql', 'managed-redis', 'container-registry']
