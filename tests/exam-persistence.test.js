@@ -137,9 +137,15 @@ describe('durable exam repository', () => {
     await repo.load()
     const db = await open(indexedDB, 'azure-trainer-exam')
     const forged = clone(attemptFixture())
+    const pointer = { version: 1, id: forged.sessionId, revision: 1, mode: forged.mode, status: 'finished', attemptId: forged.id }
+    await writeRaw(db, 'sessions', pointer)
+    await writeRaw(db, 'attempts', forged)
+    const baseline = await repo.load()
+    expect(baseline.sessions).toEqual([pointer])
+    expect(baseline.attempts).toEqual([forged])
     forged.responses['q-single-choice'] = { pick: 'd' }
     await writeRaw(db, 'attempts', forged)
-    await expect(repo.load()).rejects.toMatchObject({ code: 'INVALID_EXAM_DATA' })
+    await expect(repo.load()).rejects.toMatchObject({ code: 'INVALID_EXAM_DATA', message: 'Stored grades disagree with frozen keys and responses' })
     db.close(); repo.close()
   })
   it('rejects unavailable storage without an in-memory success path', async () => {
