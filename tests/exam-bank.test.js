@@ -135,7 +135,7 @@ describe('data bank', () => {
   it('prevents equivalent data widgets from multiplying fresh family evidence', () => {
     expect(DATA_QUESTIONS).toBeInstanceOf(Array)
     const families = Object.fromEntries(DATA_QUESTIONS.map(q => [q.id,q.familyId]))
-    for (const [member,original] of [[20,4],[21,6],[22,4],[23,3],[24,7],[25,10],[27,11],[28,5],[30,4],[31,12],[32,11],[33,8]]) {
+    for (const [member,original] of [[12,5],[20,4],[21,6],[22,4],[23,3],[24,7],[25,10],[27,11],[28,5],[30,4],[31,5],[32,11],[33,8]]) {
       expect(families[`ai200-d${String(member).padStart(3,'0')}`]).toBe(`ai200-d${String(original).padStart(3,'0')}`)
     }
   })
