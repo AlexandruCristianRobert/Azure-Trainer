@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:exam-review": "vitest run tests/exam-contracts.test.js tests/exam-session.test.js tests/exam-persistence.test.js tests/exam-review.test.js tests/exam-bank.test.js tests/exam-widgets.test.js tests/exam-app.test.js",
     "test:http-functions": "vitest run tests/http-functions-contracts.test.js tests/http-functions-sdk.test.js tests/http-functions-engine.test.js tests/http-functions-labs-basic.test.js tests/http-functions-labs-hosting.test.js tests/http-functions-capstone.test.js tests/http-functions-catalog.test.js",
     "test:security-observability": "vitest run tests/security-resources.test.js tests/security-sdk.test.js tests/security-state.test.js tests/security-labs.test.js tests/observability-sdk.test.js tests/observability-kql.test.js tests/observability-labs.test.js tests/security-observability-capstone.test.js tests/security-observability-catalog.test.js",
     "test:messaging": "vitest run tests/messaging-rationale.test.js tests/messaging-servicebus.test.js tests/messaging-python.test.js tests/messaging-eventgrid.test.js tests/messaging-functions.test.js tests/messaging-engine.test.js tests/messaging-labs-servicebus.test.js tests/messaging-labs-eventgrid.test.js tests/messaging-labs-functions.test.js tests/messaging-capstone.test.js tests/messaging-catalog.test.js"

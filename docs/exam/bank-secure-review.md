@@ -1,5 +1,11 @@
 # Secure bank author fact ledger
 
+Final gate (2026-10-06): `/root/exam_bank_secure_review` independently approved
+all30 Secure editorial/source relationships and the complete120-item assembly,
+spec and quality at `3d8afef`, with no findings. The author-era PENDING statements
+and row outcomes below are historical and superseded by this final verdict.
+Task11 records the actual gate without a second source-review fleet.
+
 Review date: 2026-10-06. Author checked all 30 keys and every legal candidate.
 Independent controller review: PENDING for all 30 items and full-bank assembly.
 No unresolved author correctness/source findings. Structural tests do not certify facts.

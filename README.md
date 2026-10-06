@@ -69,6 +69,41 @@ Container Apps to Cosmos DB to Key Vault to Azure Functions to Event Grid. All s
 Each Lab has its own saved Sandbox, command history, Hints and Lab Results.
 The Container Apps journey uses native saved progress and Results. Its resource Blades are read-only; completed runs can be inspected or restarted while preserving historical Results.
 
+## Exam & Review
+
+Open **Exam & Review** from Home or the header. Study defaults to 10 questions
+without a timer; Mock defaults to 50 questions and 100 minutes. The 120 original
+questions cover 27 objectives and all eight formats: single choice, multiple
+response, build list, matching, dropdown, statement grid, hot area and active
+screen. Six cases and two no-return series are included in those 120 items.
+Mock seals completed sections; series Next seals each item. A break seals seen
+items and the absolute deadline continues through breaks, Home and browser closure.
+Study Submit seals an answer; Reveal marks assistance. Mock withholds explanations
+and blocks Study/Review until durable finish. The 80% practice goal is self-set;
+it is not a 700 scaled score, a pass threshold or a readiness prediction.
+
+Exam data is local in separate IndexedDB `azure-trainer-exam`. Saving becomes
+Saved only after storage acknowledgment. Export a standard unencrypted backup
+before clearing browser data: origins/dev/Pages/private sessions and devices do
+not share records. Normal backup input is 32 MiB, stored exam data 24 MiB, completed
+attempts 200 and each whole serialized UTF-8 note 8 KiB. A frozen save/conflict error
+offers explicit retry/reload/discard choices; recovery export has a separate
+96 MiB queue+snapshot bound (64 KiB reserve) and a different non-importable format,
+without enlarging standard backup or storage limits. Notes and answers are
+personal unencrypted data. Nothing is automatically sent to GPT or another AI;
+Copy concept prompt uses authored canonical context only.
+
+Review needs at least three eligible distinct families and uses the latest six;
+repeated/assisted answers and omissions are shown separately. Historical snapshots
+keep their keys; unknown IDs are unmapped. App Service and deeper ACR Tasks have
+documentation guidance with no matching playable Lab. References were reviewed
+2026-10-06; content can become stale and is original practice, not confidential
+or live exam content. Sources follow the approved primary-host policy.
+See [full rules, privacy, backup and verification limits](./docs/exam-review-simulator.md)
+and [local release handoff](./docs/superpowers/plans/2026-10-06-exam-review-handoff.md).
+Native IndexedDB and actual viewport/focus checks are NOT RUN due to the browser
+helper failing before opening a tab; unit DOM coverage is separate evidence.
+
 ## Run
 
 ```bash

@@ -6,7 +6,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { createExamRepository } from '../src/lib/exam/persistence.js'
 import { bankFixture, mockBankFixture, correctAnswer } from './helpers/examFixtures.js'
 import { createExamStore } from '../src/stores/exam.js'
-import { createExamNavigationGuard } from '../src/router/index.js'
+import appRouter, { createExamNavigationGuard } from '../src/router/index.js'
 import ExamSessionPage from '../src/pages/ExamSessionPage.vue'
 import ExamResultPage from '../src/pages/ExamResultPage.vue'
 import ReviewPage from '../src/pages/ReviewPage.vue'
@@ -48,6 +48,13 @@ function rendered(host, predicate) {
 async function start(f, mode = 'study', settings = {}) { await f.store.hydrate(); await f.store.start({ mode, size: mode === 'mock' ? 40 : 5, seed: 31, ...settings }) }
 
 describe('acknowledged exam application', () => {
+  it('registers the canonical exam and review entry points with lazy page boundaries', () => {
+    for (const [name, path] of [['exam', '/exam'], ['exam-session', '/exam/session/:sessionId'], ['exam-results', '/exam/results/:attemptId'], ['review', '/review'], ['review-history', '/review/history']]) {
+      const route = appRouter.getRoutes().find(r => r.name === name)
+      expect(route?.path).toBe(path)
+      expect(route?.components.default).toBeTypeOf('function')
+    }
+  })
   // Catches optimistic Saved/score/cursor and losing same-tick checkbox edits.
   it('composes rapid real widget edits and flushes before seal across a mixed Mock with cases and series', async () => {
     const f = fixture(mockBankFixture()); await start(f, 'mock')

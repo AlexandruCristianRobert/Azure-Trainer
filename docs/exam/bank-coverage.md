@@ -11,12 +11,21 @@ These are pool availability counts, not measured learner knowledge or 120 indepe
 | containers | 27 / 26 | d4dfe6b | root/exam_bank_containers_review: all 27 approved; final correctness/source fixes closed |
 | data | 33 / 20 | c5d24d6 | root/exam_bank_data_review: all 33 approved; final correctness/source fixes closed |
 | connect | 30 / 13 | 947c2e2 | root/exam_bank_connect_review: all 30 approved; final correctness/source fixes closed |
-| secure | 30 / 10 | Task 8 authored change, based on 947c2e2 | Author checked all 30; controller independent review PENDING |
+| secure | 30 / 10 | 3d8afef | root/exam_bank_secure_review: all 30 and full-bank assembly approved; spec/quality Approved |
 
 Prior domain ledgers preserve historical pending/fix notes. Their final gates above
 are the accepted controller-provided verdicts; unchanged facts were not re-reviewed
-by this implementer. Secure and full-bank independent gates remain pending until
-controller review. Structural validation alone is not editorial approval.
+by this implementer. All four final gates were independently approved on
+2026-10-06: containers `d4dfe6b`, data `c5d24d6`, connect `947c2e2` and secure
+`3d8afef`. Secure/full-bank review
+closed the historical pending notes. Structural validation alone is not editorial
+approval. The controller's durable progress ledger records each original seat's
+final verdict; Task11 performs no second source-review fleet.
+
+Exact final content commits: containers `d4dfe6b453ce8cef0253b528f3ad5369018b4629`,
+data `c5d24d68242bf2e114a5c7f850e43e25c3e73d4b`,
+connect `947c2e2b167f83575696652f9962987e2bca8d9b`,
+secure/full bank `3d8afefa7c9543289ddacc766bd940a4d4e9cc01`.
 
 ## Allocations
 

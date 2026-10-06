@@ -1,8 +1,12 @@
 # AI-200 Exam & Review — design specification
 
 Status: written specification approved by the user2026-10-06. Implementation
-plan approved with subagent-driven execution selected; implementation underway
-in an isolated feature worktree, with no new integration/publication authority.
+plan approved with subagent-driven execution selected; Tasks1–10 independently
+approved, including all120 source/editorial checks. Task11 completes local docs,
+CI and bounded verification in the isolated feature worktree. Native IndexedDB
+and actual viewport/focus checks remain NOT RUN because the browser helper
+could not open a tab. Final whole-branch review and integration workflow remain
+controller-owned; no merge, push or publication has been authorized.
 
 ## Purpose and agreed direction
 

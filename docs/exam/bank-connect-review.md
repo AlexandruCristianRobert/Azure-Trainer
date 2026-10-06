@@ -1,5 +1,10 @@
 # Connect bank editorial ledger
 
+Final gate (2026-10-06): `/root/exam_bank_connect_review` approved all30
+editorial/source relationships, spec and quality at `947c2e2`. Both x019/x027
+clarifications were resolved with no new findings. Historical pending rows below
+are closed by this verdict; Task11 does not repeat their source checks.
+
 Author review date: 2026-10-06. All 30 items are original. Author checked every
 expected answer and legal distractor against the primary pages below, including
 the Python SDK/decorator API names. The original author ledger and independent

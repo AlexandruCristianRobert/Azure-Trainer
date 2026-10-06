@@ -1,5 +1,10 @@
 # Data bank editorial ledger
 
+Final gate (2026-10-06): `/root/exam_bank_data_review` approved all33
+editorial/source relationships, spec and quality at `c5d24d6`, including the
+family merge. Historical pending rereview notes below are closed by this verdict;
+Task11 adds this status record without another factual review.
+
 Review date: 2026-10-06. All 33 scenarios, configurations and explanations were authored for this project from primary documentation. None are imported or paraphrased exam questions. Independent reviewer `/root/exam_bank_data_review` approved all 33 answer keys, distractors and primary-source relationships for `d4dfe6b..2425f41` on 2026-10-06. Structural GREEN validates shape and hand-checked keys, not factual approval. The metadata-only family correction below is pending rereview by that original reviewer; approved question content and references are unchanged.
 
 Each component is worth one point. Every component has a structured reason and checks for every legal candidate. Multi-response and hot-area items require the stated two candidates; multipart widgets assess components separately. The single primary objective remains canonical even when a scenario mentions other stores. d019 tests the configured authoritative-history boundary and its disposable copy, with both components mapped to cosmos-history; it does not introduce a cross-objective cache component.
