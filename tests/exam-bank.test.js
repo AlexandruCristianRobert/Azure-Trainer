@@ -111,6 +111,55 @@ const dataKeys = [
   ['tenant','distance'],['bound','literal'],['path','size'],['tag','knn'],['limit','headroom'],
   ['yes','no'],['yes','no'],['no','yes'],[['filter','order']],[['ttl','invalidate']],['latest','idempotent'],['memory','compute'],
 ]
+
+const { CONNECT_QUESTIONS, CONNECT_GROUPS, CONNECT_REFERENCES } = banks['../src/data/exam/bank/connect.js'] || {}
+const connectContent = () => structuredClone({ questions: CONNECT_QUESTIONS, groups: CONNECT_GROUPS, references: CONNECT_REFERENCES })
+// Hand-derived keys: changing a settlement/filter/API decision must fail grading.
+const connectKeys = [
+  ['no'],['yes'],['no'],['property'],['json'],['azure'],
+  [['complete','abandon']],[['retry','idempotent']],[['north','priority']],[['parse','schema']],[['requirements','settings']],
+  ['receive','commit','complete'],['validate','send','respond'],['declare','publish','probe'],['destination','subscribe','test'],
+  ['complete','abandon','deadletter'],['retry','deadletter','exclude'],['query','route','body'],['host','azure','local'],
+  ['type','subject'],['property','literal'],['route','post'],['python','v4'],
+  ['yes','no','yes'],['no','yes'],['no','yes'],[['billing','warehouse']],[['invalid','missing']],
+  ['topic','subscription','connection'],['schema','bundle'],
+]
+
+describe('connect bank', () => {
+  it('exports 30 allocated items with the fixed ordered series and continuing case', () => {
+    expect(CONNECT_QUESTIONS).toBeInstanceOf(Array)
+    expect(CONNECT_QUESTIONS).toHaveLength(30)
+    expect(validateDomainContent(connectContent(), 'connect')).toBe(true)
+    expect(CONNECT_QUESTIONS.map(q => q.id)).toEqual(Array.from({ length: 30 }, (_, i) => `ai200-x${String(i+1).padStart(3,'0')}`))
+    expect(CONNECT_QUESTIONS.map(q => q.kind)).toEqual(['single-choice','multiple-response','build-list','matching','dropdown','statement-grid','hot-area','active-screen'].flatMap((kind,i) => Array([6,5,4,4,4,3,2,2][i]).fill(kind)))
+    expect(CONNECT_GROUPS.map(g => [g.id,g.kind,g.questionIds])).toEqual([
+      ['series-x1','series',['ai200-x001','ai200-x002','ai200-x003']],
+      ['case-x1','case',['ai200-x009','ai200-x020','ai200-x029']],
+    ])
+    expect(new Set(CONNECT_QUESTIONS.map(q => q.objectiveId)).size).toBe(4)
+  })
+  it('grades all hand-checked connect keys and resolves canonical source IDs', () => {
+    expect(CONNECT_QUESTIONS).toBeInstanceOf(Array)
+    const refs = CONNECT_REFERENCES.map(r => r.id)
+    for (const c of EXAM_CONCEPTS.filter(c => c.objectiveId.startsWith('connect.'))) expect(c.referenceIds.every(id => refs.includes(id))).toBe(true)
+    for (const [i,q] of CONNECT_QUESTIONS.entries()) {
+      expect(q.components.map(c => c.expected)).toEqual(connectKeys[i])
+      const answer = Object.fromEntries(q.components.map((c,j) => [c.id,connectKeys[i][j]]))
+      expect(gradeQuestion(q, answer).earned).toBe(q.components.length)
+      expect(q.referenceIds.every(id => refs.includes(id))).toBe(true)
+      expect(q.components.every(c => c.points === 1)).toBe(true)
+    }
+    expect(CONNECT_QUESTIONS.slice(0,3).map(q => q.presentation.choices.map(c => c.id))).toEqual([['yes','no'],['yes','no'],['yes','no']])
+  })
+  it('shares families for equivalent settlement, filtering and configuration widgets', () => {
+    expect(CONNECT_QUESTIONS).toBeInstanceOf(Array)
+    const families = Object.fromEntries(CONNECT_QUESTIONS.map(q => [q.id,q.familyId]))
+    for (const [member,original] of [[2,1],[3,1],[12,7],[13,10],[16,7],[18,5],[20,9],[21,4],[24,7],[25,8],[26,10],[27,4],[28,10],[29,11],[30,11],[19,6],[23,6]]) {
+      expect(families[`ai200-x${String(member).padStart(3,'0')}`]).toBe(`ai200-x${String(original).padStart(3,'0')}`)
+    }
+    expect(new Set(CONNECT_QUESTIONS.map(q => q.familyId)).size).toBe(13)
+  })
+})
 describe('data bank', () => {
   it('exports all 33 allocated original items and validates all 12 objectives', () => {
     expect(DATA_QUESTIONS).toBeInstanceOf(Array)
