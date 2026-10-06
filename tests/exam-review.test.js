@@ -188,12 +188,43 @@ describe('authored guidance and read-only Lab links', () => {
       expect(c.labIds).toEqual([]); expect(c.advice).toMatch(/documentation-only/i)
     }
   })
-  it('reads only status and summary getters into detached Lab context', () => {
+  it('reads status and summary getters into detached Lab context when no result getter is available', () => {
     const summary = { tasksDone: 2, total: 4, completedAt: null }
     const progress = Object.freeze({ labStatus: () => 'in-progress', runSummary: () => summary })
     const result = readLabProgress(progress, ['messaging-send', 'messaging-send'])
-    expect(result).toEqual([{ labId: 'messaging-send', status: 'in-progress', tasksDone: 2, total: 4, completedAt: null }])
+    expect(result).toEqual([{ labId: 'messaging-send', status: 'in-progress', tasksDone: 2, total: 4, completedAt: null, latestResult: null }])
     result[0].tasksDone = 4; expect(summary.tasksDone).toBe(2)
+  })
+  it('retains completed Lab assistance context in recommendations without changing exam evidence', () => {
+    const finishedAt = '2026-10-06T12:00:00.000Z'
+    const result = Object.freeze({ id: 'lab-result-one', labId: 'messaging-send', attemptId: 'lab-attempt-one', tasksDone: 4, total: 4, hintsUsed: 2, solutionsUsed: 1, durationMs: 60000, finishedAt, sandbox: { privateDraft: 'do not project' } })
+    const progress = Object.freeze({ labStatus: () => 'completed', runSummary: () => ({ tasksDone: 4, total: 4, completedAt: finishedAt }), latestResult: () => result })
+    const labProgress = readLabProgress(progress, ['messaging-send'])
+    expect(labProgress).toEqual([{ labId: 'messaging-send', status: 'completed', tasksDone: 4, total: 4, completedAt: finishedAt,
+      latestResult: { id: 'lab-result-one', finishedAt, hintsUsed: 2, solutionsUsed: 1 } }])
+    const measured = review([attempt(1, { credit: 0 }), attempt(2, { credit: 0 }), attempt(3)]), before = structuredClone(measured)
+    const recommendation = recommendPractice(measured, { bank: { questions: [], references: primaryReferences, groups: [] }, labProgress, notes: [], now: 5000 }).find(r => r.conceptId === conceptId)
+    expect(recommendation.labs[0].progress.latestResult).toEqual({ id: 'lab-result-one', finishedAt, hintsUsed: 2, solutionsUsed: 1 })
+    recommendation.labs[0].progress.latestResult.hintsUsed = 10
+    expect(labProgress[0].latestResult.hintsUsed).toBe(2)
+    labProgress[0].latestResult.solutionsUsed = 10
+    expect(result.solutionsUsed).toBe(1)
+    expect(measured).toEqual(before)
+    expect(row(measured)).toMatchObject({ sampleCount: 3, accuracy: 1 / 3, status: 'needs-review' })
+  })
+  it('distinguishes missing results and unknown legacy Lab assistance from explicit zero usage', () => {
+    const progress = { labStatus: () => 'completed', runSummary: () => null, latestResult: () => null }
+    expect(readLabProgress(progress, ['messaging-send'])[0].latestResult).toBeNull()
+    progress.latestResult = () => ({ id: 'legacy-result', finishedAt: '2026-10-06T12:00:00Z' })
+    expect(readLabProgress(progress, ['messaging-send'])[0].latestResult).toEqual({ id: 'legacy-result', finishedAt: '2026-10-06T12:00:00Z', hintsUsed: null, solutionsUsed: null })
+    progress.latestResult = () => ({ hintsUsed: 0, solutionsUsed: 0 })
+    expect(readLabProgress(progress, ['messaging-send'])[0].latestResult).toEqual({ id: null, finishedAt: null, hintsUsed: 0, solutionsUsed: 0 })
+  })
+  it('rejects malformed supplied Lab assistance counts and nonprimitive or oversized result identifiers', () => {
+    const progress = { labStatus: () => 'completed', runSummary: () => null }
+    for (const result of [{ hintsUsed: -1 }, { solutionsUsed: 0.5 }, { hintsUsed: NaN }, { hintsUsed: Number.MAX_SAFE_INTEGER + 1 }, { id: {} }, { finishedAt: {} }, { id: 'x'.repeat(1025) }, { finishedAt: 'x'.repeat(129) }]) {
+      expect(() => readLabProgress({ ...progress, latestResult: () => result }, ['messaging-send'])).toThrow()
+    }
   })
   it('prefers unseen targeted families and reports exhaustion without manufacturing progress', () => {
     const history = [attempt(1, { credit: 0 }), attempt(2, { credit: 0 }), attempt(3)]
