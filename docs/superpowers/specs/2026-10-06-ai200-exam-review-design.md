@@ -1,7 +1,8 @@
 # AI-200 Exam & Review — design specification
 
 Status: written specification approved by the user2026-10-06. Implementation
-plan prepared for review/execution-method selection; implementation has not started.
+plan approved with subagent-driven execution selected; implementation underway
+in an isolated feature worktree, with no new integration/publication authority.
 
 ## Purpose and agreed direction
 
@@ -291,7 +292,12 @@ and permutations, sections/cursor/seals, draft answers, flags, assisted exposure
 deadline and greatest observed time. A finished attempt stores those definitions,
 final responses and recomputable component outcomes. Retain original historical
 content rather than regrading old answers using an updated answer key. Counts/
-percentages are derived, not trusted imported aggregates. Cross-tab writes and
+percentages are derived, not trusted imported aggregates. Post-finish answer
+disclosure is acknowledged explicitly: lastObservedAt tracks
+review reveals without changing frozen responses, keys, grades or finishedAt.
+Revealing an omitted answer is still exposure and cannot make a later familiar
+retry fresh. A submit event alone is not evidence of attempted knowledge.
+Cross-tab writes and
 submission use revisions and a single transaction; conflicts show a reload
 choice rather than overwriting another tab. No score or answer leakage from
 Review into an active Mock screen by routing. While a Mock is active, Study and

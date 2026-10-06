@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-ai200-exam-review-design.md`, approved by the user2026-10-06.
 
-**Authority:** This turn authorizes the implementation plan only. Wait for plan review/execution-method selection before code or dependency installation. Implementation uses an isolated feature worktree, not main. Merge, push, publication and deletion require separate authority; preserve RESUME-HTTP-FUNCTIONS.md and other worktrees.
+**Authority:** The user reviewed this plan and selected option1, subagent-driven implementation. Execute in the isolated feature worktree, not main. Merge, push, publication and deletion require separate authority; preserve RESUME-HTTP-FUNCTIONS.md and other worktrees.
 
 ## Global Constraints
 
@@ -108,7 +108,7 @@ ActiveSession = { version:1, id, revision, mode:'study'|'mock',
   assistedIds, confidence, exposures, resultId:null }
 FinishedPointer = { version:1, id, revision, mode, status:'finished', attemptId }
 Section = { id, kind:'standalone'|'case'|'series', questionIds, sealed }
-Attempt = { version:1, id, sessionId, mode, createdAt, finishedAt, bankRevision,
+Attempt = { version:1, id, sessionId, mode, createdAt, finishedAt, lastObservedAt, bankRevision,
   settings, questions, references, groups, order, optionOrders, responses,
   submittedIds, assistedIds, confidence, exposures, submissionReason, grades,
   source:'local'|'imported' }
@@ -126,6 +126,10 @@ an unfinished Study also prevents a later familiar answer being called fresh.
 The first ever answered/revealed encounter of a family is the freshness boundary;
 an assisted first encounter cannot be washed away by a later unassisted retry.
 Unanswered/unrevealed encounters alone do not establish a knowledge outcome.
+Attempt.lastObservedAt starts at finishedAt and permits acknowledged post-finish
+feedback reveals. Only exposure/assistance metadata may change afterward;
+questions, keys, responses, grades and finishedAt remain frozen. A grading-submit
+event for an omitted component is not an answered knowledge encounter.
 
 Question data intentionally exists in client storage; UI projections must omit
 expected answers, explanations and per-question references while feedback is
@@ -199,6 +203,9 @@ Lab engines. **Produces:** `ExamError`, `EXAM_VERSION`, `EXAM_DOMAINS`, `EXAM_KI
 `createExamSession({id,bank,mode,settings,seed,now})`,
 `reduceExamSession(session,action,{now}) -> {session,attempt:null|Attempt}`,
 `presentSession(session,{now})`, `sessionSummary(session)`, `accessDecision(snapshot,to)`.
+Also produce `recordReviewReveal(attempt,questionId,{now}) -> Attempt`: validate
+the frozen record, append its first actual reveal event if absent, mirror
+assistedIds and advance lastObservedAt monotonically without modifying grades.
 
 - [ ] RED seeded draw assertions for40/50/60, complete two cases/one series,
   eight formats/domain quotas/no duplicates, reload equivalence and impossible
@@ -273,6 +280,9 @@ dataByteLimit=EXAM_LIMITS.dataBytes})` with async `load()`,
   between transaction reads/writes. Mutation receives intent, runs reducer
   against actual stored session and recomputes grades, never accepts caller
   outcomes. Finalization atomically writes Result plus lightweight pointer.
+  For a finished pointer, dispatch supports reviewReveal for its actual stored
+  attempt through recordReviewReveal; reject that feedback action while any Mock
+  remains active. Only observed disclosure metadata changes, not sealed scores.
   ```js
   tx.oncomplete = () => resolve(savedSnapshot) // never resolve on request success
   tx.onabort = () => reject(new ExamError('STORAGE_FAILED','Exam transaction aborted'))
@@ -583,6 +593,10 @@ HomePage.vue, PortalHeader.vue only for lazy exam routes/entry. Add
 `saveNote`, `setPracticeGoal`, `previewImport`, `applyImport`, `exportBackup`,
 `deleteAttempt`, `reset`; state ready/loading/saving/error, snapshot and session
 presenters. Getter correctness never depends on optimistic unacknowledged state.
+`dispatch(action,{sessionId}={})` defaults to the active session; completed review
+explicitly supplies the attempt's sessionId and reviewReveal before showing a
+previously omitted question's answer. Storage failure cannot falsely acknowledge
+that exposure. No active-Mock review bypass or mutable Result answers.
 
 - [ ] RED store/view integration with fake-indexeddb and actual Vue controls:
   rapid save->seal/expiry, storage failure freeze/retry, two-tab conflict,
