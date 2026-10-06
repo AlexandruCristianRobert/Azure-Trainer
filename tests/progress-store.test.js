@@ -31,9 +31,9 @@ describe('progress store', () => {
 
   it('skillAreaProgress counts labs', () => {
     const p = useProgressStore()
-    expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 0 })
+    expect(p.skillAreaProgress('connect')).toEqual({ total: LABS.filter((lab) => lab.skillAreaId === 'connect').length, completed: 0, inProgress: 0 })
     localStorage.setItem('at_run_servicebus-order-backend', JSON.stringify({ labId: 'servicebus-order-backend', completedAt: null, sandbox: { resourceGroups: [], namespaces: [], defaults: { group: null, location: null } } }))
-    expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 1 })
+    expect(p.skillAreaProgress('connect')).toEqual({ total: LABS.filter((lab) => lab.skillAreaId === 'connect').length, completed: 0, inProgress: 1 })
     expect(p.skillAreaProgress('containers')).toEqual({ total: LABS.filter((lab) => lab.skillAreaId === 'containers').length, completed: 0, inProgress: 0 })
   })
 
@@ -44,7 +44,7 @@ describe('progress store', () => {
     expect(() => p.labStatus('servicebus-order-backend')).not.toThrow()
     expect(p.labStatus('servicebus-order-backend')).toBe('not-started')
     expect(() => p.skillAreaProgress('connect')).not.toThrow()
-    expect(p.skillAreaProgress('connect')).toEqual({ total: 3, completed: 0, inProgress: 0 })
+    expect(p.skillAreaProgress('connect')).toEqual({ total: LABS.filter((lab) => lab.skillAreaId === 'connect').length, completed: 0, inProgress: 0 })
   })
 
   it('a run with a sandbox missing namespaces is also treated as malformed', () => {
