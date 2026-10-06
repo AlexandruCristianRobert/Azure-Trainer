@@ -205,7 +205,7 @@ Lab engines. **Produces:** `ExamError`, `EXAM_VERSION`, `EXAM_DOMAINS`, `EXAM_KI
 **Files:** Create `src/lib/exam/{selection,session}.js`; test
 `tests/exam-session.test.js`; extend shared test fixtures only as necessary.
 **Consumes:** Task1 contracts/graders. **Produces:** `drawMock(bank,settings,seed)`,
-`drawStudy(bank,filters,requestedSize,seed)`,
+`drawStudy(bank,filters,requestedSize,seed,{preferredQuestionIds=[]}={})`,
 `createExamSession({id,bank,mode,settings,seed,now})`,
 `reduceExamSession(session,action,{now}) -> {session,attempt:null|Attempt}`,
 `presentSession(session,{now})`, `sessionSummary(session)`, `accessDecision(snapshot,to)`.
@@ -218,13 +218,13 @@ assistedIds and advance lastObservedAt monotonically without modifying grades.
   pool error. Pin rollback clock, pending-submit handling, no-return/break locks,
   Study assistance and past-deadline answer refusal with deterministic clocks:
   ```js
-  const s = createExamSession({id:SESSION_FIXTURE_ID,bank:bankFixture(),mode:'mock',
+  const s = createExamSession({id:SESSION_FIXTURE_ID,bank:mockBankFixture(),mode:'mock',
     settings:{size:50,durationMinutes:100,practiceGoal:80},seed:17,now:1000})
   const expired = reduceExamSession(s,{type:'tick'},{now:6001000})
   expect(expired.session.status).toBe('expired')
   expect(()=>reduceExamSession(expired.session,{type:'answer',questionId:s.order[0],
     answer:{}},{now:6001001})).toThrow()
-  expect(drawMock(bankFixture(),{size:50},17).order).toEqual(s.order)
+  expect(drawMock(mockBankFixture(),{size:50},17).order).toEqual(s.order)
   ```
 - [ ] Timed RED owning file.
 - [ ] Implement pure transitions answer/visit/flag/confidence/next/back/sealSection/
@@ -239,6 +239,10 @@ assistedIds and advance lastObservedAt monotonically without modifying grades.
   remaining domain/kind requirements, reserving groups atomically. Report
   `BANK_UNSATISFIABLE` rather than a greedy partial deck. Study returns explicit
   availability before creation; shorter decks require the UI's consent.
+  Study creation may pass creation-only `preferredQuestionIds`: validate against
+  the full bank, intersect existing filters, choose eligible preferred IDs first,
+  then fill from the remaining pool. Keep persisted Settings unchanged and label
+  familiar fill honestly; preference is not a fresh-only restriction.
   ```js
   const remaining = quotas.map((n,i)=>n-reserved.filter(q=>q.domain===EXAM_DOMAINS[i]).length)
   if (remaining.some(n=>n<0)) throw new ExamError('Group quota exceeded','BANK_UNSATISFIABLE')
@@ -650,7 +654,10 @@ that exposure. No active-Mock review bypass or mutable Result answers.
   confirmations are explicit. Review renders evidence counts/omissions/assistance/
   repeat exposure separately and honest no-fresh-item/no-matching-Lab messages.
   Recommendation Lab links include a safe review return link but never modify
-  native Lab state. Router imports exam store dynamically only on exam/review
+  native Lab state. Targeted Study passes the recommendation's `questionIds` as the
+  creation-only `preferredQuestionIds`, without constructing a partial bank.
+  Selection prefers these IDs and labels any familiar fill honestly. Router
+  imports the store dynamically only on exam/review
   navigation; active Mock blocks feedback routes, not existing Lab engines.
   Home/header entry adds no synchronous question-bank import. Microsoft Learn
   button opens its official home, noopener/noreferrer, without pausing timer.
