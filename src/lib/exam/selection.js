@@ -99,11 +99,20 @@ export function drawMock(bank, settings = {}, seed = 0) {
   }
   return unsatisfiable()
 }
-export function drawStudy(bank, filters = {}, requestedSize = 10, seed = 0) {
+export function drawStudy(bank, filters = {}, requestedSize = 10, seed = 0, options = {}) {
   validateBank(bank); member(requestedSize, [5, 10, 20])
+  finiteJson(options)
+  requireExam(options && typeof options === 'object' && !Array.isArray(options), 'Invalid Study draw options')
+  record(options, Object.hasOwn(options, 'preferredQuestionIds') ? ['preferredQuestionIds'] : [])
+  const preferredQuestionIds = Object.hasOwn(options, 'preferredQuestionIds') ? options.preferredQuestionIds : []
+  uniqueIds(preferredQuestionIds, bank.questions.length, bank.questions.map(q => q.id))
+  const preferred = new Set(preferredQuestionIds)
   const chosenFilters = filtersWithDefaults(filters), random = randomFor(seed)
   const eligible = bank.questions.filter(q => chosenFilters.domains.includes(q.domain) && chosenFilters.kinds.includes(q.kind) && (!chosenFilters.conceptIds.length || q.components.some(c => chosenFilters.conceptIds.includes(c.conceptId))))
-  const selected = shuffle(eligible, random).slice(0, requestedSize), ids = new Set(selected.map(q => q.id))
+  const selected = [
+    ...shuffle(eligible.filter(q => preferred.has(q.id)), random),
+    ...shuffle(eligible.filter(q => !preferred.has(q.id)), random),
+  ].slice(0, requestedSize), ids = new Set(selected.map(q => q.id))
   const groupIds = [...new Set(selected.filter(q => q.groupId !== null).map(q => q.groupId))]
   const groups = groupIds.map(id => { const g = bank.groups.find(g => g.id === id); return { ...g, questionIds: g.questionIds.filter(qid => ids.has(qid)) } })
   return { ...deckFor(bank, selected, groups, random), available: eligible.length, requestedSize, actualSize: selected.length, requiresConsent: selected.length < requestedSize }

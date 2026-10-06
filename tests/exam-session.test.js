@@ -82,6 +82,93 @@ describe('seeded selection', () => {
   })
 })
 
+describe('preferred Study questions', () => {
+  const preferredQuestionIds = ['q-multiple-response', 'q-build-list', 'q-dropdown']
+
+  it('selects preferred IDs omitted by the existing seed before filling remaining slots', () => {
+    const bank = bankFixture(), baseline = drawStudy(bank, {}, 5, 17)
+    expect(baseline.order).toEqual(['q-hot-area', 'q-matching', 'q-active-screen', 'q-single-choice', 'q-statement-grid'])
+    const deck = drawStudy(bank, {}, 5, 17, { preferredQuestionIds })
+    expect(new Set(deck.order.slice(0, 3))).toEqual(new Set(preferredQuestionIds))
+    expect(deck.order).toHaveLength(5)
+    expect(new Set(deck.order).size).toBe(5)
+    expect(deck.order.slice(3).every(id => !preferredQuestionIds.includes(id))).toBe(true)
+    expect(deck).toMatchObject({ available: 8, actualSize: 5, requestedSize: 5, requiresConsent: false })
+    expect(drawStudy({ ...bank, questions: [...bank.questions].reverse() }, {}, 5, 17, { preferredQuestionIds: [...preferredQuestionIds].reverse() })).toEqual(deck)
+    expect(drawStudy(bank, {}, 5, 17, {})).toEqual(baseline)
+    expect(drawStudy(bank, {}, 5, 17, { preferredQuestionIds: [] })).toEqual(baseline)
+  })
+
+  it('intersects preferred IDs with domain and kind filters and fills eligible nonpreferred items', () => {
+    const bank = mockBankFixture(), preferences = ['pool-0-0', 'pool-1-1', 'pool-1-0']
+    const deck = drawStudy(bank, { domains: ['data'], kinds: ['single-choice'] }, 5, 17, { preferredQuestionIds: preferences })
+    expect(deck.order).toContain('pool-1-0')
+    expect(deck.order).not.toContain('pool-0-0')
+    expect(deck.order).not.toContain('pool-1-1')
+    expect(deck.questions.every(q => q.domain === 'data' && q.kind === 'single-choice')).toBe(true)
+    expect(deck.order).toHaveLength(5)
+    expect(new Set(deck.order).size).toBe(5)
+    expect(deck.available).toBe(12)
+  })
+
+  it('intersects preferred IDs with concepts while preserving shortages and explicit consent', () => {
+    const bank = clone(bankFixture())
+    bank.questions.find(q => q.id === 'q-single-choice').components[0].conceptId = 'other-concept'
+    const filters = { kinds: ['single-choice', 'multiple-response'], conceptIds: ['concept-one'] }
+    const options = { preferredQuestionIds: ['q-single-choice', 'q-multiple-response'] }
+    const deck = drawStudy(bank, filters, 5, 17, options)
+    expect(deck.order).toEqual(['q-multiple-response'])
+    expect(deck).toMatchObject({ available: 1, actualSize: 1, requestedSize: 5, requiresConsent: true })
+    const create = allowShorter => createExamSession({ id: SESSION_FIXTURE_ID, bank, mode: 'study', settings: { size: 5, ...filters, ...options, allowShorter }, seed: 17, now: 1000 })
+    expect(() => create(false)).toThrow(expect.objectContaining({ code: 'SHORTER_DECK_CONSENT_REQUIRED' }))
+    expect(create(true).order).toEqual(['q-multiple-response'])
+  })
+
+  it('freezes preferred selection through creation and reload without changing persisted Settings', () => {
+    const s = study({ preferredQuestionIds })
+    expect(new Set(s.order.slice(0, 3))).toEqual(new Set(preferredQuestionIds))
+    expect(Object.keys(s.settings).sort()).toEqual(['actualSize', 'conceptIds', 'domains', 'durationMinutes', 'kinds', 'practiceGoal', 'requestedSize', 'seed'])
+    const loaded = JSON.parse(JSON.stringify(s))
+    expect(validateSession(loaded)).toBe(loaded)
+    expect(act(loaded, { type: 'next' })).toEqual(act(s, { type: 'next' }))
+    expect(loaded.optionOrders).toEqual(s.optionOrders)
+  })
+
+  it('projects preferred case members from the valid full bank with the full background', () => {
+    const bank = mockBankFixture(), ids = ['case-secure-0', 'case-secure-2', 'pool-0-1', 'pool-1-1', 'pool-2-1']
+    const s = createExamSession({ id: SESSION_FIXTURE_ID, bank, mode: 'study', settings: { size: 5, preferredQuestionIds: ids }, seed: 17, now: 1000 })
+    expect(new Set(s.order)).toEqual(new Set(ids))
+    expect(s.groups).toEqual([{ ...bank.groups.find(g => g.id === 'case-secure'), questionIds: ['case-secure-0', 'case-secure-2'] }])
+    expect(s.sections.flatMap(section => section.questionIds)).toEqual(s.order)
+    expect(validateSession(s)).toBe(s)
+    expect(bank.groups.find(g => g.id === 'case-secure').questionIds).toHaveLength(3)
+  })
+
+  it.each([
+    null, [], 'invalid', { extra: true }, { preferredQuestionIds: null },
+    { preferredQuestionIds: 'q-single-choice' }, { preferredQuestionIds: ['q-single-choice', 'q-single-choice'] },
+    { preferredQuestionIds: ['unknown-question'] }, { preferredQuestionIds: ['constructor'] },
+    { preferredQuestionIds: Array.from({ length: 121 }, (_, i) => `question-${i}`) },
+  ])('rejects malformed preferred options %# as ExamError', options => {
+    expect(() => drawStudy(bankFixture(), {}, 5, 17, options)).toThrow(expect.objectContaining({ name: 'ExamError' }))
+  })
+
+  it('rejects preferred accessors without evaluating them at either boundary', () => {
+    let reads = 0
+    const options = Object.defineProperty({}, 'preferredQuestionIds', { enumerable: true, get() { reads += 1; return preferredQuestionIds } })
+    expect(() => drawStudy(bankFixture(), {}, 5, 17, options)).toThrow(expect.objectContaining({ name: 'ExamError' }))
+    expect(() => createExamSession({ id: SESSION_FIXTURE_ID, bank: bankFixture(), mode: 'study', settings: options, seed: 17, now: 1000 })).toThrow(expect.objectContaining({ name: 'ExamError' }))
+    expect(reads).toBe(0)
+  })
+
+  it('rejects preferred intent for Mock even with an empty list', () => {
+    for (const ids of [[], preferredQuestionIds]) {
+      expect(() => mock({ preferredQuestionIds: ids })).toThrow(expect.objectContaining({ name: 'ExamError' }))
+      expect(() => drawMock(mockBankFixture(), { preferredQuestionIds: ids }, 17)).toThrow(expect.objectContaining({ name: 'ExamError' }))
+    }
+  })
+})
+
 describe('session transitions', () => {
   it('freezes a reload-equivalent draw and detached options', () => {
     const s = mock(), reloaded = JSON.parse(JSON.stringify(s))

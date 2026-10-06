@@ -46,17 +46,19 @@ function validateAction(action) {
 export function createExamSession({ id, bank, mode, settings = {}, seed = 0, now }) {
   member(mode, ['study', 'mock']); integer(now); finiteJson(settings)
   requireExam(settings && typeof settings === 'object' && !Array.isArray(settings), 'Invalid creation settings')
-  requireExam(Object.keys(settings).every(k => ['size', 'durationMinutes', 'practiceGoal', 'domains', 'kinds', 'conceptIds', 'allowShorter'].includes(k)), 'Unknown creation setting')
+  requireExam(Object.keys(settings).every(k => ['size', 'durationMinutes', 'practiceGoal', 'domains', 'kinds', 'conceptIds', 'allowShorter', 'preferredQuestionIds'].includes(k)), 'Unknown creation setting')
   if (Object.hasOwn(settings, 'allowShorter')) requireExam(typeof settings.allowShorter === 'boolean', 'Invalid shorter-deck consent')
   if (mode === 'mock') {
     requireExam(!Object.hasOwn(settings, 'allowShorter'), 'Mock cannot consent to a shorter draw')
+    requireExam(!Object.hasOwn(settings, 'preferredQuestionIds'), 'Mock cannot prefer questions')
     for (const [key, expected] of [['domains', EXAM_DOMAINS], ['kinds', EXAM_KINDS], ['conceptIds', []]]) {
       if (Object.hasOwn(settings, key)) requireExam(Array.isArray(settings[key]) && settings[key].length === expected.length && new Set(settings[key]).size === expected.length && expected.every(v => settings[key].includes(v)), 'Mock cannot use adaptive filters')
     }
   } else requireExam(settings.durationMinutes === undefined || settings.durationMinutes === null, 'Study has no duration')
   const size = settings.size ?? (mode === 'mock' ? 50 : 10)
   const filters = { domains: settings.domains ?? [...EXAM_DOMAINS], kinds: settings.kinds ?? [...EXAM_KINDS], conceptIds: settings.conceptIds ?? [] }
-  const deck = mode === 'mock' ? drawMock(bank, { size }, seed) : drawStudy(bank, filters, size, seed)
+  const drawOptions = Object.hasOwn(settings, 'preferredQuestionIds') ? { preferredQuestionIds: settings.preferredQuestionIds } : {}
+  const deck = mode === 'mock' ? drawMock(bank, { size }, seed) : drawStudy(bank, filters, size, seed, drawOptions)
   if (mode === 'study' && !deck.actualSize) throw new ExamError('No questions match the Study filters', 'NO_STUDY_ITEMS')
   if (mode === 'study' && deck.requiresConsent && settings.allowShorter !== true) throw new ExamError('Confirm the available shorter Study deck', 'SHORTER_DECK_CONSENT_REQUIRED')
   const durationMinutes = mode === 'mock' ? settings.durationMinutes ?? 100 : null
