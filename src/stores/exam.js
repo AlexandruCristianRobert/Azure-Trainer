@@ -5,6 +5,7 @@ import { accessDecision, createExamSession, presentSession } from '../lib/exam/s
 import { EXAM_LIMITS, ExamError, byteLength, finiteJson, integer, validateNote } from '../lib/exam/contracts.js'
 import { publicQuestion, validateAnswer } from '../lib/exam/question.js'
 import { loadExamBank } from '../data/exam/index.js'
+import { drawMock, drawStudy } from '../lib/exam/selection.js'
 
 const clone = value => JSON.parse(JSON.stringify(value))
 const RECOVERY_BYTES = EXAM_LIMITS.backupBytes * 3
@@ -23,6 +24,7 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
   let hydration = null, bankPromise = null, running = null
   let disclosureEpoch = 0
   const reviewGrants = new Set()
+  const startPreviews = new WeakMap()
   const revokeReviewGrants = () => { disclosureEpoch += 1; reviewGrants.clear() }
   const queue = [], drafts = new Map()
   const clock = () => (state.observedAt = Math.max(state.observedAt, integer(now())))
@@ -186,6 +188,38 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
     const session = createExamSession({ id: newId(), bank, mode, settings: { practiceGoal: state.snapshot.preferences.practiceGoal, ...settings }, seed, now: clock() })
     await enqueue({ kind: 'start', session }); return session
   }
+  async function previewStart(input) {
+    finiteJson(input)
+    if (!state.ready || state.loading || state.error) throw new ExamError('Load saved data before preparing practice.')
+    const options = clone(input), { mode, seed = 0, ...settings } = options
+    if (!['study', 'mock'].includes(mode) || Object.keys(settings).some(k => !['size', 'durationMinutes', 'practiceGoal', 'domains', 'kinds', 'conceptIds', 'preferredQuestionIds'].includes(k))) throw new ExamError('Invalid practice settings')
+    integer(seed, 0, 4294967295)
+    settings.practiceGoal ??= state.snapshot.preferences.practiceGoal
+    integer(settings.practiceGoal, 1, 100)
+    if (mode === 'study' && !api.access({ mode }).allowed) throw new ExamError('Finish the active Mock before Study.', 'MOCK_ACTIVE')
+    const bank = await loadBank(), size = settings.size ?? (mode === 'mock' ? 50 : 10)
+    if (mode === 'study' && settings.durationMinutes != null) throw new ExamError('Study has no duration')
+    const deck = mode === 'mock' ? drawMock(bank, settings, seed) : drawStudy(bank,
+      Object.fromEntries(['domains', 'kinds', 'conceptIds'].filter(k => settings[k] !== undefined).map(k => [k, settings[k]])), size, seed,
+      settings.preferredQuestionIds ? { preferredQuestionIds: settings.preferredQuestionIds } : {})
+    const preview = freeze({ mode, requestedSize: size, available: mode === 'mock' ? size : deck.available, actualSize: deck.order.length,
+      points: deck.questions.reduce((sum, q) => sum + q.components.length, 0), requiresConsent: mode === 'study' && deck.requiresConsent })
+    startPreviews.set(preview, { options: { mode, seed, ...settings }, bank, revision: state.snapshot.revision })
+    return preview
+  }
+  async function startPreview(preview, { allowShorter = false } = {}) {
+    if (typeof allowShorter !== 'boolean') throw new ExamError('Invalid shorter-deck consent')
+    await flush()
+    const prepared = startPreviews.get(preview)
+    if (!prepared || prepared.revision !== state.snapshot?.revision || prepared.bank !== state.bank || !state.ready || state.loading || state.error) throw new ExamError('Practice settings or saved data changed. Prepare the deck again.', 'STALE_PREVIEW')
+    if (prepared.options.mode === 'study' && !api.access({ mode: 'study' }).allowed) throw new ExamError('Finish the active Mock before Study.', 'MOCK_ACTIVE')
+    if (!preview.actualSize) throw new ExamError('No questions match the Study filters', 'NO_STUDY_ITEMS')
+    if (preview.requiresConsent && !allowShorter) throw new ExamError('Confirm the available shorter Study deck', 'SHORTER_DECK_CONSENT_REQUIRED')
+    startPreviews.delete(preview)
+    // Validate the preview before our own ordered preference write advances revision.
+    if (prepared.options.practiceGoal !== state.snapshot.preferences.practiceGoal) await api.setPracticeGoal(prepared.options.practiceGoal)
+    return start({ ...prepared.options, ...(prepared.options.mode === 'study' ? { allowShorter } : {}) })
+  }
   function makeNote({ id, target, text = '', status = 'pending', snoozedUntil = null }) {
     const existing = state.snapshot?.notes.find(n => n.id === id || (!id && n.target.kind === target.kind && n.target.id === target.id))
     return { version: 1, id: existing?.id ?? id ?? newId(), revision: (existing?.revision ?? 0) + 1, target: clone(target), text, status, snoozedUntil, updatedAt: Math.max(clock(), existing?.updatedAt ?? 0) }
@@ -206,7 +240,7 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
       if (s.mode === 'study' && !api.access({ mode: 'study' }).allowed) { view.questions = []; view.groups = []; view.feedback = null; view.references = []; view.editable = false }
       return view
     },
-    hydrate, loadBank, start, dispatch, flush, tick, retry, reload, widgetValue, makeNote,
+    hydrate, loadBank, start, previewStart, startPreview, dispatch, flush, tick, retry, reload, widgetValue, makeNote,
     selectSession(id) { state.selectedId = id },
     access(to) {
       if (!state.ready || state.loading || state.error) return { allowed: false, redirect: '/exam', reason: 'Saved access restrictions are unavailable. Finish loading or recover storage before continuing.' }

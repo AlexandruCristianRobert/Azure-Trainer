@@ -108,7 +108,46 @@ excluding dynamic imports, and found zero exam modules in the initial graph.
 Runtime route assertions verify all five canonical lazy entry points; existing
 bank assertions and new release assertions cover allocations/groups/mappings.
 
-## Explicit remaining verification and evidence limits
+## Aggregate final-review fixes
+
+The local fix wave after `4396576` addresses all five Important and three Minor
+findings from the single whole-branch review. Mock seal/break/manual-finish controls
+now require action-specific confirmation after pending answers save; cancel does
+not mutate the session, and deadline finalization remains immediate and idempotent.
+Setup and targeted practice preview exact counts and allocated points before
+start. Study question notes use the existing bounded separate note queue, with
+identity-bound acknowledgment and explicit unsaved status for newer edits.
+Result shows frozen case/series context and recomputed domain/format totals,
+including unmapped historical domains. Failed repository opens can retry, Review
+snoozes wake on time/visibility, and the exam-owned read-only Lab bridge aborts
+creation/upgrade races without touching the old Lab repository or schema.
+
+The controller approved transient `previewStart(options)` / `startPreview(preview,
+{allowShorter})` methods. The public frozen preview is only `{mode, requestedSize,
+available, actualSize, points, requiresConsent}`; private prepared settings retain
+the same seed, bank and revision. No session, exposure, deadline or UUID is created
+by preparation. Start rejects a stale/consumed preview, checks access, validates
+before its own preference write, and uses the existing queued start. Persisted
+DTOs and frozen Settings are unchanged.
+
+Fresh amended-file gate: app 41, widgets 31, persistence 26, **98/98 passed**,
+28.446 s. Self-review then caught and regression-tested the newer-note-draft ACK
+message; final app owning-file run is **42/42 passed**, 28.646 s. Widgets and
+persistence had no changes after their passing gate. Final changed-tree command
+`npm.cmd run build -- --base=/Azure-Trainer/` passed, 709 modules, 6.002 s.
+All fix-wave test attempts, including RED and failed first GREEN, total 116.980 s;
+two builds total 12.022 s (the second followed the actual note amendment).
+The prior seven-file/compatibility/build receipts above remain historical evidence;
+they were not rerun. No factual-bank content changed and no source fleet ran.
+
+The retained warning is still chunks over 500 kB; final largest
+`index-BHT47163.js` is 3,010.59 kB (gzip 828.84 kB). No dependency/audit scope
+changed. Full command outputs, every failed attempt, timing, sessions and per-finding
+disposition are in `.superpowers/sdd/2026-10-06-ai200-exam-review/final-fix-report.md`
+and its adjacent `final-fix-*.log` files. The controller's original final-review
+seat owns the scoped follow-up; this report does not assert merge/publication readiness.
+
+## Remaining verification limits after the fixes
 
 Native IndexedDB and actual small-viewport/keyboard-focus behavior are NOT RUN:
 IAB was unavailable and Chrome helper failed with missing app-server executable

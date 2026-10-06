@@ -27,6 +27,11 @@ describe('exam public question controls', () => {
 
   it.each(['multiple-response', 'hot-area'])('%s saves legal partial and excess drafts without enforcing the required count', async (kind) => {
     const m = mount(kind)
+    expect(m.host.textContent).toContain('Maximum: 1 point')
+    expect(m.host.textContent).toContain('Exact-set scoring')
+    expect(m.host.textContent).toContain('no partial credit within the set')
+    expect(m.host.textContent).toContain('no negative points')
+    expect(JSON.stringify(m.props.question)).not.toContain('expected')
     const checks = [...m.host.querySelectorAll('input[type=checkbox]')]
     expect(checks.every((el) => !el.checked)).toBe(true)
     for (const el of checks.slice(0, 3)) await click(el)

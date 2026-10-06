@@ -5,13 +5,16 @@ import { byteLength } from '../lib/exam/contracts.js'
 import QuestionRenderer from '../components/exam/QuestionRenderer.vue'
 import QuestionFeedback from '../components/exam/QuestionFeedback.vue'
 import BackupControls from '../components/exam/BackupControls.vue'
+import CaseReference from '../components/exam/CaseReference.vue'
+import { gradeAttempt } from '../lib/exam/grading.js'
+import { EXAM_DOMAINS } from '../lib/exam/contracts.js'
 const props = defineProps({ attemptId: String, store: { type: Object, default: () => useExamStore() } })
 const selected = ref(''), revealed = ref(''), message = ref(''), note = ref(null)
 let revealEpoch = 0
 function clearReveal() { revealEpoch += 1; revealed.value = '' }
 const allowed = computed(() => props.store.access({ path: '/review' }).allowed)
 const attempt = computed(() => allowed.value ? props.store.snapshot?.attempts.find(a => a.id === props.attemptId) : null)
-const points = computed(() => attempt.value?.grades.reduce((n, g) => ({ earned: n.earned + g.earned, possible: n.possible + g.possible }), { earned: 0, possible: 0 }))
+const points = computed(() => attempt.value ? gradeAttempt(attempt.value) : null)
 const question = computed(() => props.store.resultQuestion(props.attemptId, selected.value))
 const feedback = computed(() => revealed.value === selected.value ? props.store.resultQuestion(props.attemptId, selected.value, { feedback: true }) : null)
 const noteBytes = computed(() => note.value ? byteLength(JSON.stringify(note.value)) : 0)
@@ -67,6 +70,8 @@ async function saveNote() {
       <p>Practice goal: {{ attempt.settings.practiceGoal }}%. This is practice feedback, not a prediction of certification results.</p>
       <p>{{ attempt.mode === 'mock' ? 'Mock' : 'Study' }} · {{ new Date(attempt.finishedAt).toLocaleString() }} · {{ attempt.source }} · {{ attempt.submissionReason }}</p>
       <p>Saved answers and scores are fixed. Reviewing an answer records assistance exposure separately.</p>
+      <section data-score-domains><h2>Points by domain</h2><ul><li v-for="(score, domain) in points.byDomain" :key="domain">{{ EXAM_DOMAINS.includes(domain) ? domain : `Unmapped historical domain: ${domain}` }}: {{ score.earned }} / {{ score.possible }} points ({{ Math.round(score.percentage) }}%)</li></ul></section>
+      <section data-score-formats><h2>Points by format</h2><ul><li v-for="(score, kind) in points.byKind" :key="kind">{{ kind }}: {{ score.earned }} / {{ score.possible }} points ({{ Math.round(score.percentage) }}%)</li></ul></section>
 
       <label class="exam-field">
         Question
@@ -74,6 +79,7 @@ async function saveNote() {
           <option v-for="(id, i) in attempt.order" :key="id" :value="id">Question {{ i + 1 }}</option>
         </select>
       </label>
+      <CaseReference :groups="attempt.groups.filter(group => group.questionIds.includes(selected))" :historical="true" />
       <QuestionRenderer
         v-if="question"
         :question="question"

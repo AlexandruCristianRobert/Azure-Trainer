@@ -30,6 +30,11 @@ function update(value) { if (!props.disabled && widget.value) emit('update:value
 
 <template>
   <article v-if="widget" class="exam-question">
+    <p class="exam-hint">Maximum: {{ question.components.length }} {{ question.components.length === 1 ? 'point' : 'points' }}.
+      <span v-if="question.components.some(c => c.input === 'set')">Exact-set scoring: all required selections must match; no partial credit within the set.</span>
+      <span v-else-if="question.components.length > 1">Each component earns 1 point separately.</span>
+      <span v-else>One exact answer earns 1 point.</span>
+      Missing or incomplete components earn 0; no negative points.</p>
     <p class="exam-stem">{{ question.stem }}</p>
     <details v-for="artifact in question.artifacts" :key="artifact.id" class="exam-artifact">
       <summary>{{ artifact.kind === 'code' ? 'Code' : 'Supporting information' }}<span v-if="artifact.language"> ({{ artifact.language }})</span></summary>

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { createExamRepository } from '../src/lib/exam/persistence.js'
+import { createLabReadOnlyRepository } from '../src/lib/exam/labReadOnly.js'
 import { validateBackup, mergeBackup } from '../src/lib/exam/backup.js'
 import { createExamSession } from '../src/lib/exam/session.js'
 import { sessionFixture, attemptFixture, mockBankFixture, SESSION_FIXTURE_ID } from './helpers/examFixtures.js'
@@ -35,6 +36,58 @@ async function finished(repo) {
 }
 
 describe('durable exam repository', () => {
+  it('closes a late success from a rejected open without replacing the current generation', async () => {
+    const indexedDB = new IDBFactory(), requests = []
+    const repo = createExamRepository({ indexedDB: { open(...args) { const request = indexedDB.open(...args); requests.push(request); return request } } })
+    const first = repo.load(), late = new Promise(resolve => requests[0].addEventListener('success', () => resolve(requests[0].result)))
+    requests[0].onblocked()
+    await expect(first).rejects.toMatchObject({ code: 'STORAGE_FAILED' })
+    const second = repo.load()
+    const rejectedConnection = await late
+    expect(() => rejectedConnection.transaction('meta')).toThrow()
+    expect(await second).toEqual(empty())
+    await repo.savePreferences({ practiceGoal: 90 }, { expectedRevision: 0 })
+    expect((await repo.load()).preferences.practiceGoal).toBe(90)
+    repo.close()
+  })
+  it('Lab bridge aborts absent creation, rejects wrong versions and closes late generations', async () => {
+    const indexedDB = new IDBFactory()
+    const absent = createLabReadOnlyRepository({ indexedDB })
+    await expect(absent.listRuns()).rejects.toThrow('Existing Lab storage is unavailable')
+    expect(await indexedDB.databases()).toEqual([]); absent.close()
+    const newer = await new Promise((resolve, reject) => { const r = indexedDB.open('newer-lab', 2); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error) })
+    newer.close()
+    const wrong = createLabReadOnlyRepository({ indexedDB, dbName: 'newer-lab' })
+    await expect(wrong.listResults()).rejects.toThrow('Existing Lab storage is unavailable'); wrong.close()
+    expect(await indexedDB.databases()).toEqual([{ name: 'newer-lab', version: 2 }])
+    const db = await open(indexedDB, 'lab-present', db => { db.createObjectStore('runs', { keyPath: 'id' }); db.createObjectStore('results', { keyPath: 'id' }) })
+    await writeRaw(db, 'results', { id: 'sentinel' }); db.close()
+    const requests = []
+    const repo = createLabReadOnlyRepository({ dbName: 'lab-present', indexedDB: { open(...args) { const r = indexedDB.open(...args); requests.push(r); return r } } })
+    expect(Object.keys(repo).sort()).toEqual(['close', 'listResults', 'listRuns'])
+    const first = repo.listRuns(), late = new Promise(resolve => requests[0].addEventListener('success', () => resolve(requests[0].result)))
+    requests[0].onblocked()
+    await expect(first).rejects.toThrow()
+    const second = repo.listResults()
+    const rejectedConnection = await late
+    expect(() => rejectedConnection.transaction('runs')).toThrow()
+    expect(await second).toEqual([{ id: 'sentinel' }]); repo.close()
+    await expect(repo.listResults()).rejects.toThrow()
+    const closed = createLabReadOnlyRepository({ indexedDB, dbName: 'lab-present' })
+    const pending = closed.listRuns(); closed.close(); await expect(pending).rejects.toThrow()
+    await new Promise((resolve, reject) => { const r = indexedDB.deleteDatabase('lab-present'); r.onsuccess = resolve; r.onerror = () => reject(r.error) })
+  })
+  it('recovers a failed opening generation on the same repository without reopening after close', async () => {
+    const indexedDB = new IDBFactory()
+    let calls = 0
+    const repo = createExamRepository({ indexedDB: { open(...args) { if (++calls === 1) throw new Error('Transient open'); return indexedDB.open(...args) } } })
+    await expect(repo.load()).rejects.toMatchObject({ code: 'STORAGE_FAILED' })
+    expect(await repo.load()).toEqual(empty())
+    expect(calls).toBe(2)
+    repo.close()
+    await expect(repo.load()).rejects.toMatchObject({ code: 'STORAGE_FAILED' })
+    expect(calls).toBe(2)
+  })
   it('acknowledges committed snapshots that reopen with independent global and session revisions', async () => {
     const { indexedDB, repo } = setup()
     expect(await repo.load()).toEqual(empty())

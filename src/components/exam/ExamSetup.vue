@@ -1,24 +1,38 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { EXAM_DOMAINS, EXAM_KINDS } from '../../lib/exam/contracts.js'
 const props = defineProps({ store: { type: Object, required: true }, initialMode: String })
 const emit = defineEmits(['started'])
 const mode = ref(props.initialMode === 'study' ? 'study' : 'mock'), size = ref(mode.value === 'study' ? 10 : 50), duration = ref(100), goal = ref(props.store.snapshot?.preferences.practiceGoal ?? 80)
-const domains = ref([...EXAM_DOMAINS]), kinds = ref([...EXAM_KINDS]), message = ref(''), shorter = ref(false)
+const domains = ref([...EXAM_DOMAINS]), kinds = ref([...EXAM_KINDS]), message = ref(''), preview = shallowRef(null), busy = ref(false)
+let preparationEpoch = 0
+const configuration = computed(() => JSON.stringify([mode.value, size.value, duration.value, goal.value, domains.value, kinds.value]))
+watch(configuration, () => { preparationEpoch++; preview.value = null; message.value = ''; busy.value = false }, { flush: 'sync' })
 const quotas = computed(() => ({ 40: [9, 11, 10, 10], 50: [12, 14, 12, 12], 60: [14, 16, 15, 15] })[size.value])
 const studyBlocked = computed(() => !props.store.access({ mode: 'study' }).allowed)
-async function start(allowShorter = false) {
-  message.value = ''; shorter.value = false
+async function prepare() {
+  const epoch = ++preparationEpoch
+  message.value = ''; preview.value = null; busy.value = true
   try {
     const options = { mode: mode.value, size: size.value, practiceGoal: Number(goal.value), seed: Math.floor(Math.random() * 4294967296) }
     if (mode.value === 'mock') options.durationMinutes = duration.value
-    else Object.assign(options, { domains: domains.value, kinds: kinds.value, allowShorter })
-    await props.store.setPracticeGoal(Number(goal.value)); const session = await props.store.start(options); emit('started', session)
-  } catch (error) { message.value = error.message; shorter.value = error.code === 'SHORTER_DECK_CONSENT_REQUIRED' }
+    else Object.assign(options, { domains: domains.value, kinds: kinds.value })
+    const result = await props.store.previewStart(options)
+    if (epoch === preparationEpoch) preview.value = result
+  } catch (error) { if (epoch === preparationEpoch) message.value = error.message }
+  finally { if (epoch === preparationEpoch) busy.value = false }
+}
+async function start() {
+  const prepared = preview.value
+  if (!prepared || busy.value) return
+  busy.value = true; message.value = ''
+  try { const session = await props.store.startPreview(prepared, { allowShorter: prepared.requiresConsent }); preview.value = null; emit('started', session) }
+  catch (error) { message.value = error.message; preview.value = null }
+  finally { busy.value = false }
 }
 </script>
 <template>
-  <form class="exam-setup" @submit.prevent="start()">
+  <form class="exam-setup" @submit.prevent="prepare()">
     <fieldset>
       <legend>Practice mode</legend>
       <label><input v-model="mode" type="radio" value="mock" @change="size = 50">Mock exam</label>
@@ -60,10 +74,13 @@ async function start(allowShorter = false) {
     <p>Goals are personal targets, not a pass prediction. Saved attempts retain the goal used when they started.</p>
     <p v-if="studyBlocked">Finish the active Mock before starting or resuming Study.</p>
     <p v-if="message" role="alert">{{ message }}</p>
-    <button type="submit" :disabled="!store.ready || store.saving || !!store.error || (mode === 'study' && (studyBlocked || !domains.length || !kinds.length))">Start {{ mode === 'mock' ? 'Mock' : 'Study' }}</button>
-    <div v-if="shorter">
-      <p>Start the available shorter deck without duplicates?</p>
-      <button type="button" @click="start(true)">Confirm shorter Study</button>
-    </div>
+    <button type="submit" :disabled="busy || !store.ready || store.saving || !!store.error || (mode === 'study' && (studyBlocked || !domains.length || !kinds.length))">Prepare {{ mode === 'mock' ? 'Mock' : 'Study' }}</button>
+    <section v-if="preview" class="exam-confirm exam-deck-preview">
+      <p>Requested: {{ preview.requestedSize }}; available: {{ preview.available }}; selected: {{ preview.actualSize }}. {{ preview.points }} allocated practice points.</p>
+      <p v-if="preview.requiresConsent">The available deck is shorter than requested. No items will be duplicated.</p>
+      <p v-if="preview.mode === 'mock'">The timer starts when you start this prepared Mock. Changing settings requires a new preview.</p>
+      <button type="button" :disabled="busy || !preview.actualSize || store.saving || !!store.error" @click="start">{{ preview.requiresConsent ? 'Confirm shorter Study' : preview.mode === 'mock' ? 'Start Mock' : 'Start Study' }}</button>
+      <button type="button" :disabled="busy" @click="preview = null">Cancel</button>
+    </section>
   </form>
 </template>

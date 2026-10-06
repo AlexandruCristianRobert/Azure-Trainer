@@ -1,2 +1,2 @@
-<script setup>defineProps({ groups: { type: Array, default: () => [] } })</script>
-<template><aside v-for="group in groups" :key="group.id" class="exam-case"><h2>{{ group.title }}</h2><p class="exam-plain-text">{{ group.background }}</p><p v-if="group.kind === 'series'">Answer in order. Moving forward seals the current answer; you cannot return or take a break within this series.</p></aside></template>
+<script setup>defineProps({ groups: { type: Array, default: () => [] }, historical: Boolean })</script>
+<template><aside v-for="group in groups" :key="group.id" class="exam-case"><h2>{{ group.title }}</h2><p class="exam-plain-text">{{ group.background }}</p><p v-if="group.kind === 'series' && !historical">Answer in order. Moving forward seals the current answer; you cannot return or take a break within this series.</p></aside></template>

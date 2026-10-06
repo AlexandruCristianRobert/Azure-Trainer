@@ -26,7 +26,7 @@ export function createExamRepository({ indexedDB = globalThis.indexedDB, dbName 
   function open() {
     if (closed) return Promise.reject(new ExamError('Exam repository is closed', 'STORAGE_FAILED'))
     if (opening) return opening
-    opening = new Promise((resolve, reject) => {
+    const generation = new Promise((resolve, reject) => {
       let request, failed = false
       const rejectOpen = cause => { failed = true; reject(storageError(cause)) }
       try {
@@ -45,11 +45,16 @@ export function createExamRepository({ indexedDB = globalThis.indexedDB, dbName 
       request.onsuccess = () => {
         if (closed || failed) { request.result.close(); rejectOpen(new ExamError('Exam repository is closed or blocked', 'STORAGE_FAILED')); return }
         database = request.result
-        database.onversionchange = () => { database.close(); closed = true }
+        const connected = database
+        connected.onversionchange = () => { connected.close(); closed = true }
         resolve(database)
       }
     })
-    return opening
+    opening = generation
+    // A rejected request can still succeed later (e.g. after onblocked). Its
+    // local failed flag closes that connection without touching a newer open.
+    void generation.catch(() => { if (opening === generation) opening = null })
+    return generation
   }
   async function transaction(change, expectedRevision) {
     if (change) integer(expectedRevision)

@@ -19,6 +19,14 @@ Returning to unsubmitted items and flagging are allowed; retries create new
 exposures. Feedback includes component credit, reasons, reviewed references and
 an optional authored C# comparison rendered as text.
 
+Use Prepare Study or Prepare Mock to inspect requested, available and selected
+item counts and allocated practice points before starting. Preparation does not
+start a timer or save a session; Start uses that prepared seed and settings.
+Changing filters or settings clears the preview. Targeted concept practice uses
+the same preview and requires explicit consent when fewer than five items match.
+Study has a personal question-note editor beside each item. Save question note
+acknowledges the separate note; reopening that question restores it.
+
 Mock defaults to 50 questions and 100 minutes; choose 40/50/60 questions and
 60/100/120 minutes. Domain quotas, in containers/data/connect/secure order, are
 40:[9,11,10,10],50:[12,14,12,12],60:[14,16,15,15]. Each seeded draw includes all
@@ -45,6 +53,9 @@ expiry freezes input and finalizes acknowledged answers once, after queued edits
 observed before the deadline. Pending transitions disable edits. Save errors
 freeze the operation and expose recovery choices instead of claiming a saved
 cursor or score. Finishing is idempotent; sealed answers never reopen for editing.
+Seal section, Take break and manual Finish session each show an explicit
+confirmation with current action-specific unanswered/incomplete item counts.
+Cancel leaves the session unchanged. Deadline finalization needs no confirmation.
 
 ## All eight formats and practice points
 
@@ -67,6 +78,9 @@ reported as incomplete. Confidence does not affect points. Results show earned/
 available practice points, percentage and domain/format breakdowns. The default
 80% goal is a configurable self-set study target, not Microsoft's pass threshold,
 a 700 scaled score, certification, mastery or readiness prediction.
+Each item displays its maximum and exact-set or separate-component scoring rule.
+Saved result review includes the frozen case/series background and keeps unknown
+historical domains visible in the point breakdown.
 
 ## Bank and reviewed sources
 
@@ -107,6 +121,10 @@ empty progress; absence does not create a Lab DB. Completed-with-Solutions Labs
 can still be recommended for independent practice. App Service and deeper ACR
 Tasks have no matching playable Lab; documentation guidance states that gap.
 Unknown historical objectives/concepts or retired mappings remain unmapped.
+Review wakes a snoozed recommendation at its next deadline and refreshes its clock
+when activated or visible again. This is not passive cross-tab synchronization.
+The existing-only Lab reader aborts any creation/upgrade event, including deletion
+between enumeration and opening, and reports that race as unavailable context.
 
 Notes are plain text with pending/reviewed/snoozed status. Changing status cannot
 change knowledge evidence. Each entire serialized note, including metadata, must
