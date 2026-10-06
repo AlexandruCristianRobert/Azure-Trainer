@@ -577,7 +577,7 @@ when permitted. Renderer maps all eight kinds, unknown kind fails visibly.
   where required by actual drag gesture, not blanket keyboard interception.
   ```vue
   <button type="button" aria-label="Move selected action up" :disabled="disabled || index===0"
-    @click="emit('update:value',applyAnswerEdit(question,value,{type:'move',from:index,to:index-1}))">
+    @click="emit('update:value',applyAnswerEdit(question,value,{type:'move',componentId:question.components[index].id,toComponentId:question.components[index-1].id}))">
     Move up
   </button>
   ```
