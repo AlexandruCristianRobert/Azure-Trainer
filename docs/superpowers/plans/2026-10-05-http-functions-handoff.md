@@ -223,3 +223,23 @@ Cost if wrong: temporary disk space, no irreversible loss or cleanup bypass.
 All earlier rulings/costs and accepted final-review exclusions remain documented
 above. Existing advisory/bundle debt remains. Final code was independently
 reviewed; this final handoff-only documentation commit does not change product.
+
+## Local integration — 2026-10-06
+
+The user selected option1, merge locally into main. Verified main was d073ccd
+and the feature worktree was clean, then fast-forwarded main to f7bff73.
+No pull, push, remote publication or unrelated change was included.
+
+Fresh merged-result verification: `npm run test:http-functions`, exactly seven
+HTTP owning files, **105/105 passed**, exit0, Stopwatch13.335 seconds. Complete
+yielded session39559 was retained through its final output. Merge147ms; no AKS,
+Container Apps, full/cloud/Python/broad-browser tests or duplicate build ran.
+
+The only pre-existing main untracked file was the user's requested
+RESUME-HTTP-FUNCTIONS.md; it remains preserved and updated. Product code is
+unchanged from the reviewed branch; this integration record is documentation only.
+
+Ruling: retain the feature worktree/branch and ignored raw reports after merging
+because checkpoint links still reference unique local execution evidence.
+Cost if wrong: temporary disk space; no irreversible report loss or cleanup
+against other worktrees. Cleanup can be a separate explicit archival action.
