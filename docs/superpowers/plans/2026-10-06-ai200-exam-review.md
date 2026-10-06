@@ -96,6 +96,11 @@ declares allowReuse; build-list uses one component per required position and
 candidate IDs include unused distractors. one/set expectations must reference
 legal candidates. IDs are bounded safe strings; reject dangerous object keys.
 
+Current authored items have one primary objective; each component's concept
+belongs to that objective and domain. Historical unknown identifiers remain
+preserved and unmapped. Cross-objective component attribution would require an
+explicit contract change rather than silently remapping historical evidence.
+
 Task1 publishes full closed presentation/record schemas in its handoff before
 UI/storage consumers start. A legitimate difference must be resolved against
 the spec and recorded, not silently introduced in an implementer's report.
@@ -457,12 +462,14 @@ extend only data cases in tests/exam-bank.test.js.
   metadata filters, compute/build-memory/pooling and Redis expiration/invalidation/
   vector boundaries. Distractors must be false under stated requirements:
   ```js
-  // A matching item can give separate concepts their own component.
-  components:[
-    {id:'history',conceptId:'data.cosmos-history',points:1,input:'one',requiredCount:null,
-      candidateIds:['cosmos','redis'],expected:'cosmos'},
-    {id:'response',conceptId:'data.redis-cache',points:1,input:'one',requiredCount:null,
-      candidateIds:['cosmos','redis'],expected:'redis'}]
+    // Each decision has a component under the item's primary objective.
+    // Here both decisions belong to data.redis-cache; the backing store remains
+    // authoritative for durable history, while Redis is a disposable response copy.
+    components:[
+      {id:'hit',conceptId:'data.redis-cache',points:1,input:'one',requiredCount:null,
+      candidateIds:['store','cache'],expected:'cache'},
+    {id:'miss',conceptId:'data.redis-cache',points:1,input:'one',requiredCount:null,
+      candidateIds:['store','cache'],expected:'store'}]
   ```
   State the concrete application's durable-history/cache requirements and verify
   source context; do not claim those technologies are universally exclusive.
