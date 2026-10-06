@@ -18,6 +18,7 @@ onMounted(() => { void progress.hydrateNative().catch(() => {}) })
 <template>
   <main class="home">
     <div class="home__crumb">Home</div>
+    <p><RouterLink to="/exam">AI-200 exam practice</RouterLink> · <RouterLink to="/review">Review saved practice</RouterLink></p>
     <h2 class="home__section">Azure services</h2>
     <ServicesRow />
     <h2 class="home__section">Labs by Skill Area</h2>

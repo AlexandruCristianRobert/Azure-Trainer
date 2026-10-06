@@ -30,6 +30,8 @@ function onShellClick() {
       </label>
     </div>
     <nav class="portal-header__actions" aria-label="Portal actions">
+      <RouterLink v-if="route.name === 'lab' && route.query.returnTo === '/review'" to="/review" style="color: inherit">Return to review</RouterLink>
+      <RouterLink to="/exam" style="color: inherit">Exam practice</RouterLink>
       <button class="portal-header__icon-btn" type="button" aria-label="Cloud Shell" :aria-pressed="route.name === 'lab' && portal.shell.visible" @click="onShellClick"><FluentIcon name="window-console" :size="18" /></button>
       <button class="portal-header__icon-btn" type="button" aria-label="Notifications" :aria-expanded="portal.notificationsOpen" @click="portal.toggleNotifications()">
         <FluentIcon name="alert" :size="18" />

@@ -1,4 +1,51 @@
 /* Exam widgets share the portal tokens; all rules are scoped to this feature. */
+.at-root.at-root--exam { min-width: 0; }
+.at-root--exam .portal-header__search-wrap, .at-root--exam .portal-header__search, .at-root--exam .portal-header__search input { min-width: 0; }
+.at-root--exam .portal-header__search { width: 100%; max-width: 560px; }
+.exam-page { overflow: auto; padding: 1.5rem clamp(1rem, 3vw, 3rem) 3rem; color: var(--text); font-family: var(--font-body); line-height: 1.6; min-width: 0; text-align: left; }
+.exam-page h1 { font-size: 1.8rem; margin: .8rem 0; }
+.exam-page h2 { font-size: 1.2rem; margin: 1rem 0 .6rem; }
+.exam-page h3 { font-size: 1.05rem; }
+.exam-page p { max-width: 80ch; overflow-wrap: anywhere; }
+.exam-page button, .exam-page select, .exam-page textarea, .exam-page input:not([type=checkbox]):not([type=radio]) { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border-input); border-radius: var(--radius-m); min-height: 2.5rem; max-width: 100%; padding: .45rem .7rem; }
+.exam-page button { cursor: pointer; }
+.exam-page :disabled { opacity: .6; cursor: default; }
+.exam-page :is(button, input, select, textarea, a, summary):focus-visible, .at-root--exam a:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.exam-page textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.exam-breadcrumb, .exam-session-toolbar, .exam-metadata { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+.exam-save { border-left: 3px solid var(--border-accent); padding: .3rem 1rem; margin: 1rem 0; background: var(--surface); }
+.exam-save p { margin: .4rem 0; }
+.exam-backup { margin-bottom: 1.5rem; max-width: 80ch; }
+.exam-backup summary { cursor: pointer; color: var(--accent-strong); }
+.exam-session-layout { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); gap: 2rem; align-items: start; }
+.exam-work { min-width: 0; max-width: 62rem; }
+.exam-question-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; }
+.exam-question-grid button { text-align: left; }
+.exam-question-grid button span { display: block; font-size: .75rem; overflow-wrap: anywhere; }
+.exam-question-grid [aria-current=step] { border-color: var(--accent); background: var(--accent-soft); }
+.exam-case { padding: 1rem; margin-bottom: 1rem; background: var(--surface); border-left: 3px solid var(--accent); }
+.exam-case h2 { margin-top: 0; }
+.exam-metadata { margin: 1rem 0; }
+.exam-metadata label { display: flex; gap: .5rem; align-items: center; }
+.exam-setup { max-width: 60rem; }
+.exam-setup fieldset { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; margin: 1rem 0; padding: 1rem; border: 1px solid var(--border); }
+.exam-setup label:has(input[type=checkbox]), .exam-setup label:has(input[type=radio]) { display: inline-flex; gap: .5rem; align-items: center; }
+.exam-setup .exam-field, .exam-page > .exam-field { max-width: 28rem; }
+.exam-topic { padding: 1.2rem 0; border-top: 1px solid var(--border); max-width: 80ch; }
+.exam-topic h3 { margin: 0; }
+.exam-topic .exam-lab-links { background: var(--surface); padding: 1rem 1rem 1rem 2rem; }
+.exam-note { margin: 1.5rem 0; padding: 1rem; background: var(--surface); max-width: 60ch; border: 1px solid var(--border); }
+.exam-history { list-style: none; padding: 0; }
+.exam-history li { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; align-items: center; padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.exam-confirm { padding: 1rem; margin: 1rem 0; border: 2px solid var(--border-accent); max-width: 80ch; }
+.exam-result-score { font-size: 1.5rem; font-weight: 600; }
+@media (max-width: 760px) {
+  .exam-session-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .exam-question-grid { grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); }
+  .at-root--exam .portal-header { flex-wrap: wrap; height: auto; min-height: var(--header-h); gap: .4rem; padding: .5rem; }
+  .at-root--exam .portal-header__search-wrap, .at-root--exam .portal-header__account { display: none; }
+  .at-root--exam .portal-header__actions { flex-wrap: wrap; gap: .25rem; }
+}
 .exam-question, .exam-feedback {
   color: var(--text);
   font-family: var(--font-body);
