@@ -12,10 +12,54 @@ function editNote() { const saved = props.store.snapshot.notes.find(n => n.targe
 async function save() { try { await props.store.saveNote({ id: noteId.value ?? undefined, target: draft.value.target, text: text.value, status: status.value, snoozedUntil: draft.value.snoozedUntil }); message.value = 'Note saved; evidence and scores unchanged.'; editing.value = false } catch (error) { message.value = error.message } }
 async function copyPrompt() { try { const canonical = EXAM_CONCEPTS.find(c => c.id === props.topic.conceptId); await navigator.clipboard.writeText(conceptPrompt(canonical)); message.value = 'Concept prompt copied. It contains authored guidance only; no notes or history were included.' } catch { message.value = 'Clipboard unavailable. Allow clipboard access to copy this concept prompt.' } }
 </script>
-<template><article class="exam-topic"><h3>{{ topic.title }}</h3><p>{{ topic.status === 'insufficient-evidence' ? 'Insufficient evidence' : topic.status === 'needs-review' ? 'Needs review' : topic.status === 'developing' ? 'Developing sample' : 'Stronger sample' }}: {{ topic.sampleCount }} eligible independent families<span v-if="topic.accuracy !== null">, {{ Math.round(topic.accuracy * 100) }}% component accuracy</span>.</p><p>{{ topic.advice }}</p><p class="exam-hint">Omitted: {{ topic.counts.omitted }}; incomplete: {{ topic.counts.incomplete }}; assisted: {{ topic.counts.assisted }}; repeated: {{ topic.counts.repeat }}; uncertain: {{ topic.counts.uncertain }}. Confidence (unset / low / medium / high): {{ topic.counts.confidence.unset }} / {{ topic.counts.confidence.low }} / {{ topic.counts.confidence.medium }} / {{ topic.counts.confidence.high }}.</p>
-  <template v-if="recommendation"><p>{{ recommendation.freshFamilyCount }} fresh families available.</p><p v-if="recommendation.exhausted">No fresh items remain for this concept. Familiar practice can reinforce it but does not add independent evidence.</p><div class="exam-actions"><button :disabled="store.saving || !!store.error" @click="emit('practice', recommendation)">Practice this concept</button><button @click="copyPrompt">Copy concept prompt</button><button @click="editNote">Edit concept note</button></div><p>Targeted Study prefers these fresh items. If the requested session is larger, familiar items may fill it. Nothing is sent to an external assistant.</p>
-    <ul class="exam-reference-list"><li v-for="reference in recommendation.references" :key="reference.id"><a :href="reference.url" target="_blank" rel="noopener noreferrer">{{ reference.title }}</a></li></ul><p v-if="recommendation.missingReferenceIds.length">Some documentation references are unavailable in this bank.</p><p v-if="!recommendation.labs.length">No matching Lab. Use the documentation and concept practice.</p>
-    <ul class="exam-lab-links"><li v-for="lab in recommendation.labs" :key="lab.labId"><RouterLink :to="{ name: 'lab', params: { labId: lab.labId }, query: { returnTo: '/review' } }">{{ lab.labId }}</RouterLink><p>Suggested tasks: {{ lab.taskIds.join(', ') || 'Explore the Lab' }}.</p><p v-if="lab.progress">{{ lab.progress.status }}; tasks {{ lab.progress.tasksDone }} / {{ lab.progress.total }}. Hints: {{ lab.progress.latestResult?.hintsUsed ?? 'unknown' }}; Solutions: {{ lab.progress.latestResult?.solutionsUsed ?? 'unknown' }}.</p><p v-else>Lab progress unavailable.</p><p>Lab progress and assistance are context, not exam credit. Use Return to review in the Lab header.</p></li></ul>
-  </template><p v-else-if="!topic.mapped">Historical concept is unmapped; no current Lab or documentation recommendation is inferred.</p><p v-else>Recommendation is snoozed. <button @click="editNote">Edit concept note</button></p>
-  <section v-if="editing" class="exam-note"><label class="exam-field">Concept note<textarea v-model="text" rows="3" /></label><label class="exam-field">Status<select v-model="status"><option value="pending">Pending</option><option value="reviewed">Reviewed</option><option value="snoozed">Snoozed</option></select></label><label v-if="status === 'snoozed'" class="exam-field">Snooze until<input type="datetime-local" @change="snoozedUntil = Date.parse($event.target.value)"></label><p>{{ bytes }} / 8192 UTF-8 bytes for the whole note.</p><button :disabled="store.saving || !!store.error || bytes > 8192" @click="save">Save note</button><button @click="editing = false">Cancel</button></section><p v-if="message" role="status">{{ message }}</p>
-</article></template>
+<template>
+  <article class="exam-topic">
+    <h3>{{ topic.title }}</h3>
+    <p>{{ topic.status === 'insufficient-evidence' ? 'Insufficient evidence' : topic.status === 'needs-review' ? 'Needs review' : topic.status === 'developing' ? 'Developing sample' : 'Stronger sample' }}: {{ topic.sampleCount }} eligible independent families<span v-if="topic.accuracy !== null">, {{ Math.round(topic.accuracy * 100) }}% component accuracy</span>.</p>
+    <p>{{ topic.advice }}</p>
+    <p class="exam-hint">Omitted: {{ topic.counts.omitted }}; incomplete: {{ topic.counts.incomplete }}; assisted: {{ topic.counts.assisted }}; repeated: {{ topic.counts.repeat }}; uncertain: {{ topic.counts.uncertain }}. Confidence (unset / low / medium / high): {{ topic.counts.confidence.unset }} / {{ topic.counts.confidence.low }} / {{ topic.counts.confidence.medium }} / {{ topic.counts.confidence.high }}.</p>
+    <template v-if="recommendation">
+      <p>{{ recommendation.freshFamilyCount }} fresh families available.</p>
+      <p v-if="recommendation.exhausted">No fresh items remain for this concept. Familiar practice can reinforce it but does not add independent evidence.</p>
+      <div class="exam-actions">
+        <button :disabled="store.saving || !!store.error" @click="emit('practice', recommendation)">Practice this concept</button>
+        <button @click="copyPrompt">Copy concept prompt</button>
+        <button @click="editNote">Edit concept note</button>
+      </div>
+      <p>Targeted Study prefers these fresh items. If the requested session is larger, familiar items may fill it. Nothing is sent to an external assistant.</p>
+      <ul class="exam-reference-list">
+        <li v-for="reference in recommendation.references" :key="reference.id">
+          <a :href="reference.url" target="_blank" rel="noopener noreferrer">{{ reference.title }}</a>
+        </li>
+      </ul>
+      <p v-if="recommendation.missingReferenceIds.length">Some documentation references are unavailable in this bank.</p>
+      <p v-if="!recommendation.labs.length">No matching Lab. Use the documentation and concept practice.</p>
+      <ul class="exam-lab-links">
+        <li v-for="lab in recommendation.labs" :key="lab.labId">
+          <RouterLink :to="{ name: 'lab', params: { labId: lab.labId }, query: { returnTo: '/review' } }">{{ lab.labId }}</RouterLink>
+          <p>Suggested tasks: {{ lab.taskIds.join(', ') || 'Explore the Lab' }}.</p>
+          <p v-if="lab.progress">{{ lab.progress.status }}; tasks {{ lab.progress.tasksDone }} / {{ lab.progress.total }}. Hints: {{ lab.progress.latestResult?.hintsUsed ?? 'unknown' }}; Solutions: {{ lab.progress.latestResult?.solutionsUsed ?? 'unknown' }}.</p>
+          <p v-else>Lab progress unavailable.</p>
+          <p>Lab progress and assistance are context, not exam credit. Use Return to review in the Lab header.</p>
+        </li>
+      </ul>
+    </template>
+    <p v-else-if="!topic.mapped">Historical concept is unmapped; no current Lab or documentation recommendation is inferred.</p>
+    <p v-else>Recommendation is snoozed. <button @click="editNote">Edit concept note</button></p>
+    <section v-if="editing" class="exam-note">
+      <label class="exam-field">Concept note<textarea v-model="text" rows="3" /></label>
+      <label class="exam-field">Status
+        <select v-model="status">
+          <option value="pending">Pending</option><option value="reviewed">Reviewed</option><option value="snoozed">Snoozed</option>
+        </select>
+      </label>
+      <label v-if="status === 'snoozed'" class="exam-field">Snooze until
+        <input type="datetime-local" @change="snoozedUntil = Date.parse($event.target.value)">
+      </label>
+      <p>{{ bytes }} / 8192 UTF-8 bytes for the whole note.</p>
+      <button :disabled="store.saving || !!store.error || bytes > 8192" @click="save">Save note</button>
+      <button @click="editing = false">Cancel</button>
+    </section>
+    <p v-if="message" role="status">{{ message }}</p>
+  </article>
+</template>

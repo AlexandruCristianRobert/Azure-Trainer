@@ -8,6 +8,7 @@ import { readLabProgress } from '../lib/exam/labProgress.js'
 import { bankCoverage } from '../lib/exam/bankValidation.js'
 import ReviewRecommendation from '../components/exam/ReviewRecommendation.vue'
 import BackupControls from '../components/exam/BackupControls.vue'
+import '../styles/exam.css'
 const props = defineProps({ store: { type: Object, default: () => useExamStore() }, labProgress: Object })
 const router = useRouter(), progress = shallowRef(props.labProgress ?? null), message = ref(''), shorter = ref(null)
 const allowed = computed(() => props.store.access({ path: '/review' }).allowed)

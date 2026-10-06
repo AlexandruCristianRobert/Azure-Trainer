@@ -21,12 +21,15 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
   integer(recoveryByteLimit, RECOVERY_METADATA_BYTES + 1, RECOVERY_BYTES)
   const state = reactive({ ready: false, loading: false, saving: false, error: null, snapshot: null, selectedId: null, observedAt: integer(now()), bank: null, pendingAnswers: {}, pendingCount: 0 })
   let hydration = null, bankPromise = null, running = null
+  let disclosureEpoch = 0
+  const reviewGrants = new Set()
+  const revokeReviewGrants = () => { disclosureEpoch += 1; reviewGrants.clear() }
   const queue = [], drafts = new Map()
   const clock = () => (state.observedAt = Math.max(state.observedAt, integer(now())))
   const commit = snapshot => { state.snapshot = freeze(snapshot) }
   const current = () => (state.selectedId === null ? state.snapshot?.sessions.find(s => s.status !== 'finished') : state.snapshot?.sessions.find(s => s.id === state.selectedId)) ?? null
   const errorObject = error => ({ code: String(error.code ?? 'STORAGE_FAILED').slice(0, 128), message: String(error.message ?? error).slice(0, 4096) })
-  const fail = error => { state.error = errorObject(error); return error }
+  const fail = error => { revokeReviewGrants(); state.error = errorObject(error); return error }
   const isFrozenFailure = error => ['STORAGE_FAILED', 'REVISION_CONFLICT', 'DATA_LIMIT', 'ATTEMPT_LIMIT'].includes(error.code)
   function draftKey(sessionId, questionId) { return `${sessionId}/${questionId}` }
   function widgetValue(questionId, sessionId = current()?.id) {
@@ -68,6 +71,7 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
           const result = await execute(entry)
           commit(result.snapshot ?? result); queue.shift(); state.pendingCount = queue.length
           if (['import', 'delete', 'reset'].includes(entry.kind)) {
+            revokeReviewGrants()
             drafts.clear(); state.pendingAnswers = {}
             queue.forEach(updateDraft)
           }
@@ -118,17 +122,19 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
   async function hydrate({ refresh = false } = {}) {
     if (state.ready) {
       if (refresh) {
-        await flush()
+        revokeReviewGrants(); state.loading = true
         try {
+          await flush()
           const snapshot = await repository.load()
           if (snapshot.revision !== state.snapshot.revision) { drafts.clear(); state.pendingAnswers = {} }
           clock(); commit(snapshot)
         } catch (error) { throw fail(error) }
+        finally { state.loading = false }
       }
       return state.snapshot
     }
     if (hydration) return hydration
-    state.loading = true
+    revokeReviewGrants(); state.loading = true
     hydration = (async () => {
       try { commit(await repository.load()); state.ready = true; await tick(); return state.snapshot }
       catch (error) { fail(error); throw error }
@@ -197,12 +203,15 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
       if (view.feedback) view.feedback.question = ordered(view.feedback.question, view.optionOrders[view.feedback.question.id])
       const transitionPending = state.pendingCount > 0 && queue.some(e => ['import', 'delete', 'reset'].includes(e.kind) || (e.kind === 'dispatch' && e.sessionId === s.id && !['answer', 'flag', 'confidence', 'tick'].includes(e.action.type)))
       if (state.error || transitionPending) view.editable = false
-      if (s.mode === 'study' && !accessDecision(state.snapshot, { mode: 'study' }).allowed) { view.questions = []; view.feedback = null; view.references = []; view.editable = false }
+      if (s.mode === 'study' && !api.access({ mode: 'study' }).allowed) { view.questions = []; view.groups = []; view.feedback = null; view.references = []; view.editable = false }
       return view
     },
     hydrate, loadBank, start, dispatch, flush, tick, retry, reload, widgetValue, makeNote,
     selectSession(id) { state.selectedId = id },
-    access(to) { return accessDecision(state.snapshot ?? { sessions: [] }, { ...to, mode: to.mode ?? to.query?.mode }) },
+    access(to) {
+      if (!state.ready || state.loading || state.error) return { allowed: false, redirect: '/exam', reason: 'Saved access restrictions are unavailable. Finish loading or recover storage before continuing.' }
+      return accessDecision(state.snapshot, { ...to, mode: to.mode ?? to.query?.mode })
+    },
     saveNote(input) { const note = input.version === 1 ? clone(input) : makeNote(input); validateNote(note); return enqueue({ kind: 'note', note }) },
     setPracticeGoal(practiceGoal) { integer(practiceGoal, 1, 100); return enqueue({ kind: 'preferences', preferences: { practiceGoal } }) },
     async previewImport(text) { await flush(); return repository.previewImport(text) },
@@ -215,15 +224,18 @@ export function createExamStore({ repository = createExamRepository(), bankLoade
     async previewDeleteAttempt(id) { await flush(); return repository.previewDeleteAttempt(id) },
     deleteAttempt(attemptId) { return enqueue({ kind: 'delete', attemptId }) },
     reset() { return enqueue({ kind: 'reset' }) },
-    reviewReveal(attemptId, questionId) {
+    async reviewReveal(attemptId, questionId) {
       const attempt = state.snapshot.attempts.find(a => a.id === attemptId)
       if (!attempt) return Promise.reject(new ExamError('Attempt was not found', 'NOT_FOUND'))
-      return dispatch({ type: 'reviewReveal', questionId }, { sessionId: attempt.sessionId })
+      const epoch = disclosureEpoch
+      const result = await dispatch({ type: 'reviewReveal', questionId }, { sessionId: attempt.sessionId })
+      if (epoch === disclosureEpoch && api.access({ path: '/review' }).allowed) reviewGrants.add(`${attemptId}/${questionId}`)
+      return result
     },
     resultQuestion(attemptId, questionId, { feedback = false } = {}) {
       if (!api.access({ path: '/review' }).allowed) return null
       const attempt = state.snapshot?.attempts.find(a => a.id === attemptId), question = attempt?.questions.find(q => q.id === questionId)
-      if (!question || (feedback && !attempt.exposures.some(e => e.questionId === questionId && e.event === 'reveal'))) return null
+      if (!question || (feedback && (!reviewGrants.has(`${attemptId}/${questionId}`) || !attempt.exposures.some(e => e.questionId === questionId && e.event === 'reveal')))) return null
       return ordered(publicQuestion(question, { feedback }), attempt.optionOrders[questionId])
     },
   }

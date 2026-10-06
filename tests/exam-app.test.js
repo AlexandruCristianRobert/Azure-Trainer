@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, shallowReactive } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { createExamRepository } from '../src/lib/exam/persistence.js'
@@ -31,10 +31,11 @@ async function mount(component, props) {
   const empty = { render: () => null }
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/lab/:labId', name: 'lab', component: empty }, { path: '/exam/session/:sessionId', name: 'exam-session', component: empty }, { path: '/:pathMatch(.*)*', component: empty }] })
   await router.push('/'); await router.isReady()
-  const app = createApp({ render: () => h(component, props) }); const warnings = []
+  const liveProps = shallowReactive({ ...props })
+  const app = createApp({ render: () => h(component, liveProps) }); const warnings = []
   app.config.warnHandler = text => warnings.push(text)
   app.use(createPinia()).use(router).mount(host); mounted.push(app); await nextTick()
-  return { host, router, warnings }
+  return { host, router, warnings, async setProps(values) { Object.assign(liveProps, values); await nextTick() } }
 }
 const button = (host, text) => [...host.querySelectorAll('button')].find(b => b.textContent.trim() === text)
 async function click(host, text) { const control = button(host, text); expect(control, text).toBeTruthy(); control.click(); await nextTick() }
@@ -415,5 +416,102 @@ describe('acknowledged exam application', () => {
     expect(recovery.pending).toHaveLength(1); expect(recovery.pending[0].note.target.id).toBe('first-concept')
     expect(notesBeforeAcknowledgment).toBe(0)
     expect(f.store.snapshot.notes).toHaveLength(1); expect(f.store.saveStatus).toBe('saved')
+  })
+
+  // Review R1: a failed restriction refresh must revoke previous disclosure at store and DOM boundaries.
+  it('revokes Result disclosure and Review data on failed refresh until a new trusted reveal', async () => {
+    const f = fixture(); await start(f, 'study', { kinds: ['single-choice'], allowShorter: true })
+    await f.store.dispatch({ type: 'finish' }); const attempt = f.store.snapshot.attempts[0], questionId = attempt.order[0]
+    const result = await mount(ExamResultPage, { store: f.store, attemptId: attempt.id })
+    const history = await mount(ReviewHistoryPage, { store: f.store })
+    const review = await mount(ReviewPage, { store: f.store, labProgress: { labStatus: () => 'not-started', runSummary: () => null } })
+    await click(result.host, 'Review answer'); await settle(f.store)
+    expect(result.host.querySelector('.exam-feedback')).not.toBeNull()
+    edit(result.host.querySelector('textarea'), 'Keep this unsaved note')
+    expect(f.store.resultQuestion(attempt.id, questionId, { feedback: true })).not.toBeNull()
+    f.repository.close()
+    await expect(f.store.hydrate({ refresh: true })).rejects.toMatchObject({ code: 'STORAGE_FAILED' }); await nextTick()
+    expect(f.store.access({ path: '/review' }).allowed).toBe(false)
+    expect(f.store.resultQuestion(attempt.id, questionId, { feedback: true })).toBeNull()
+    expect(result.host.querySelector('.exam-feedback')).toBeNull()
+    expect(result.host.querySelector('.exam-result-score')).toBeNull()
+    expect(result.host.textContent.includes('A is required')).toBe(false)
+    expect(result.host.querySelector('a[href*="service-bus-messaging-overview"]')).toBeNull()
+    expect(history.host.querySelector('.exam-history li')).toBeNull()
+    expect(review.host.querySelector('.exam-topic')).toBeNull()
+    const reopened = createExamRepository({ indexedDB: f.indexedDB, dbName: f.dbName }); repositories.push(reopened); Object.assign(f.repository, reopened)
+    await f.store.retry(); await f.store.hydrate({ refresh: true }); await nextTick()
+    expect(result.host.querySelector('textarea').value).toBe('Keep this unsaved note')
+    expect(result.host.querySelector('.exam-feedback')).toBeNull()
+    expect(f.store.resultQuestion(attempt.id, questionId, { feedback: true })).toBeNull()
+    await click(result.host, 'Review answer'); await settle(f.store)
+    expect(result.host.querySelector('.exam-feedback')).not.toBeNull()
+    expect(result.warnings.concat(history.warnings, review.warnings)).toEqual([])
+  })
+
+  it('masks Study feedback and references while current restrictions cannot be loaded', async () => {
+    const f = fixture(); await start(f, 'study', { kinds: ['single-choice'], allowShorter: true })
+    const { host } = await mount(ExamSessionPage, { store: f.store, sessionId: f.store.session.id })
+    await click(host, 'Reveal answer'); await settle(f.store)
+    expect(host.querySelector('.exam-feedback')).not.toBeNull()
+    f.repository.close()
+    await expect(f.store.hydrate({ refresh: true })).rejects.toMatchObject({ code: 'STORAGE_FAILED' }); await nextTick()
+    expect(f.store.presentation.feedback).toBeNull(); expect(f.store.presentation.references).toEqual([])
+    expect(host.querySelector('.exam-feedback')).toBeNull()
+    expect(host.textContent.includes('A is required')).toBe(false)
+  })
+
+  it('revokes a Result grant immediately during a successful refresh without restoring it afterward', async () => {
+    const f = fixture(); await start(f, 'study', { kinds: ['single-choice'], allowShorter: true }); await f.store.dispatch({ type: 'finish' })
+    const attempt = f.store.snapshot.attempts[0], questionId = attempt.order[0]
+    const { host } = await mount(ExamResultPage, { store: f.store, attemptId: attempt.id })
+    await click(host, 'Review answer'); await settle(f.store)
+    const refreshing = f.store.hydrate({ refresh: true })
+    const loading = f.store.loading, privateWhileLoading = f.store.resultQuestion(attempt.id, questionId, { feedback: true })
+    await nextTick(); const visibleWhileLoading = !!host.querySelector('.exam-feedback')
+    await refreshing; await nextTick()
+    expect(loading).toBe(true); expect(privateWhileLoading).toBeNull(); expect(visibleWhileLoading).toBe(false)
+    expect(host.querySelector('.exam-feedback')).toBeNull()
+    await click(host, 'Review answer'); await settle(f.store)
+    expect(host.querySelector('.exam-feedback')).not.toBeNull()
+  })
+
+  it('uses Mock 50 and Study 10 initially and after actual mode changes', async () => {
+    const f = fixture(); await f.store.hydrate()
+    const mock = await mount(ExamSetup, { store: f.store })
+    expect(mock.host.querySelectorAll('select')[0].value).toBe('50')
+    expect(mock.host.querySelectorAll('select')[1].value).toBe('100')
+    mock.host.querySelector('input[value=study]').click(); await nextTick()
+    expect(mock.host.querySelector('select').value).toBe('10')
+    edit(mock.host.querySelector('select'), '20')
+    mock.host.querySelector('input[value=mock]').click(); await nextTick()
+    expect(mock.host.querySelector('select').value).toBe('50')
+    const study = await mount(ExamSetup, { store: f.store, initialMode: 'study' })
+    expect(study.host.querySelector('select').value).toBe('10')
+  })
+
+  it('resets Result identity state on reused props without saving the preceding attempt note', async () => {
+    const f = fixture(); await start(f, 'study', { kinds: ['single-choice'], allowShorter: true }); await f.store.dispatch({ type: 'finish' })
+    const a = f.store.snapshot.attempts[0]
+    await f.store.saveNote({ target: { kind: 'attempt', id: a.id }, text: 'Saved A' })
+    await start(f, 'study', { kinds: ['single-choice'], allowShorter: true }); await f.store.dispatch({ type: 'finish' })
+    const b = f.store.snapshot.attempts.find(item => item.id !== a.id)
+    await f.store.saveNote({ target: { kind: 'attempt', id: b.id }, text: 'Saved B' })
+    const result = await mount(ExamResultPage, { store: f.store, attemptId: a.id })
+    await click(result.host, 'Review answer'); await settle(f.store)
+    edit(result.host.querySelector('textarea'), 'Unsaved A')
+    await result.setProps({ attemptId: b.id })
+    expect(result.host.querySelector('textarea').value).toBe('Saved B')
+    expect(result.host.querySelector('.exam-feedback')).toBeNull()
+    edit(result.host.querySelector('textarea'), 'Edited B')
+    await click(result.host, 'Save note'); await settle(f.store)
+    expect(f.store.snapshot.notes.find(n => n.target.id === a.id).text).toBe('Saved A')
+    expect(f.store.snapshot.notes.find(n => n.target.id === b.id).text).toBe('Edited B')
+    await result.setProps({ attemptId: a.id })
+    button(result.host, 'Review answer').click()
+    await result.setProps({ attemptId: b.id }); await settle(f.store)
+    expect(result.host.querySelector('textarea').value).toBe('Edited B')
+    expect(result.host.querySelector('.exam-feedback')).toBeNull()
+    expect(result.warnings).toEqual([])
   })
 })
