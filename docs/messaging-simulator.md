@@ -8,24 +8,26 @@ The twelve-Lab Messaging journey builds an Order Processing Application with Pyt
 | --- | --- | --- |
 | 1 | Send order commands | `python producer.py`: inspect the actual queued order. |
 | 2 | Receive and complete | `python worker.py`: receipt-bound work, record, then completion. |
-| 3 | Dead-letter recovery | `python producer.py`: reject invalid input, repair/resend, settle the original and process the corrected copy. |
+| 3 | Dead-letter recovery | `python worker.py`: quarantine; then `python producer.py`: repair/resend, settle the original and process the corrected copy. |
 | 4 | Duplicate-safe work | `python worker.py`: repeated physical deliveries produce one business effect. |
-| 5 | Topics and filters | `python producer.py`: publish regional orders and consume independent subscription copies. |
-| 6 | Sessions | `python producer.py`: process two steps in one explicitly owned session. |
+| 5 | Topics and filters | `python producer.py`: publish regional orders; then `python worker.py`: consume independent subscription copies. |
+| 6 | Sessions | `python producer.py`: publish interleaved steps; then `python worker.py`: process two steps in one explicitly owned session. |
 | 7 | Publish a business fact | `python events.py`: observe an actual publication even with no subscribers. |
-| 8 | Event handlers and filters | `python handler.py`: publish matching/nonmatching facts and handle the selected notification. |
+| 8 | Event handlers and filters | `python events.py`: publish matching/nonmatching facts; then `python handler.py`: handle the selected notification. |
 | 9 | Retry and dead-letter | `python handler.py`: recover a transient failure and observe a terminal delivery. |
 | 10 | Service Bus Function | `func start`: process an actual queue receipt through the simulated host. |
 | 11 | Event Grid Function | `func start`: publish after completed work and notify through the actual Function callback. |
 | 12 | Combined Capstone | `func start`: duplicate-safe valid work, invalid-input DLQ and derived completion notifications. |
 
-Each Lab has one compact behavior exercise. Labs 2–11 prepare resources or prior-stage source so no earlier completion or workspace import is needed. Their new Tasks, source work and execution proof start unfinished. Lab 9 supplies the storage account/container used as the dead-letter destination; it teaches delivery configuration and handler code rather than general blob management. Lab 7 takes completion as the stated upstream fact and does not run an upstream worker. The Capstone supplies minimal scaffolding and active valid, duplicate and invalid inputs, not the complete application.
+Each Lab has a compact behavior exercise. Multi-step exercises verify each task before the next task is needed. Labs 2–11 prepare resources or prior-stage source so no earlier completion or workspace import is needed. Their new Tasks, source work and execution proof start unfinished. Lab 9 supplies the storage account/container used as the dead-letter destination; it teaches delivery configuration and handler code rather than general blob management. Lab 7 takes completion as the stated upstream fact and does not run an upstream worker. The Capstone supplies minimal scaffolding and active valid, duplicate and invalid inputs, not the complete application.
+
+Host-settings tasks validate the saved JSON configuration before unlocking handler implementation; executing the later handler also validates those settings. The messaging Capstone asks for both ProcessOrder and NotifyOrder in one coding task because its Function route requires both handlers before the host starts.
 
 ## Source and commands
 
 Save files before running: execution uses saved source, not editor drafts. The `messaging-python-v1` project includes `clients.py`, `producer.py`, `worker.py`, `events.py`, `handler.py`, `function_app.py`, `host.json`, `local.settings.json`, `requirements.txt`, `training_runtime.py` and `README.md`. `requirements.txt` and `training_runtime.py` are protected scaffolding; their exact content is validated. Requirements are documentation of API shapes, not packages installed by a real Python host.
 
-The shell accepts only the entry declared by the current Lab from the table above, with no extra command arguments. `func start` invokes `function_app.py` synchronously. Saving and running it again restarts the simulated host from current source/configuration; there is no hot reload or background host. Resource Tasks use the existing simulated `az` commands for groups, Service Bus namespaces/queues/topics/subscriptions/rules, Event Grid topics/subscriptions, storage accounts and Function Apps. These commands configure the Sandbox and do not deploy cloud resources.
+The shell accepts only the entries declared by the current Lab from the table above, with no extra command arguments. `func start` invokes `function_app.py` synchronously. Saving and running it again restarts the simulated host from current source/configuration; there is no hot reload or background host. Resource Tasks use the existing simulated `az` commands for groups, Service Bus namespaces/queues/topics/subscriptions/rules, Event Grid topics/subscriptions, storage accounts and Function Apps. These commands configure the Sandbox and do not deploy cloud resources.
 
 Supported Python forms include comments, ordinary/byte strings, safe integer literals, `True`/`False`/`None`, lists and dictionaries, variable/index assignment, field/index reads, supported positional/keyword calls and parentheses. Operators are `+` (safe integer addition or bounded string concatenation), unary `+`/`-`/`not`, `==`/`!=`/`<`/`<=`/`>`/`>=`, `and`/`or`, `in`/`not in` and `is`/`is not`; chained comparisons are unsupported. Synchronous local `def` functions, imports of supported modules/local files (including aliases), `return`, `pass`, `if`/`elif`/`else`, `for` over supported values, a single supported `with ... as ...`, and `raise ValueError(...)` are supported. Script entries require zero-argument `main()`. Names, formatting and comments may vary; grading does not compare editable source to Solution text.
 

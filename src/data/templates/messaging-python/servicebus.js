@@ -140,7 +140,6 @@ export const SERVICEBUS_IDEMPOTENCY_SOLUTION_FILES = Object.freeze({ ...SERVICEB
 
 const topicProducer = `from azure.servicebus import ServiceBusMessage
 from clients import bus
-from worker import process_subscriptions
 import json
 
 def main():
@@ -149,7 +148,6 @@ def main():
         us = {"id": "o2", "region": "US", "quantity": 1}
         sender.send_messages(ServiceBusMessage(json.dumps(eu), message_id="eu1", application_properties={"region": eu["region"]}))
         sender.send_messages(ServiceBusMessage(json.dumps(us), message_id="us1", application_properties={"region": us["region"]}))
-    process_subscriptions()
 `
 const topicWorker = workerHeader + `def consume_subscription(name):
     with bus.get_subscription_receiver(topic_name="order-work", subscription_name=name) as receiver:
@@ -169,10 +167,9 @@ def main():
 export const SERVICEBUS_TOPICS_STARTER_FILES = Object.freeze({
   ...SERVICEBUS_RECEIVE_SOLUTION_FILES,
   'producer.py': `from clients import bus
-from worker import process_subscriptions
 
 def main():
-    # Publish EU and US orders with region application properties, then consume.
+    # Publish EU and US orders with region application properties.
     raise ValueError("Finish the topic producer")
 `,
   'worker.py': workerHeader + `def process_subscriptions():
@@ -187,7 +184,6 @@ export const SERVICEBUS_TOPICS_SOLUTION_FILES = Object.freeze({ ...SERVICEBUS_TO
 
 const sessionProducer = `from azure.servicebus import ServiceBusMessage
 from clients import bus
-from worker import process_steps
 import json
 
 def main():
@@ -198,7 +194,6 @@ def main():
         sender.send_messages(ServiceBusMessage(json.dumps(first), message_id="o1-step1", session_id=first["id"]))
         sender.send_messages(ServiceBusMessage(json.dumps(other), message_id="o2-step1", session_id=other["id"]))
         sender.send_messages(ServiceBusMessage(json.dumps(second), message_id="o1-step2", session_id=second["id"]))
-    process_steps()
 `
 const sessionWorker = workerHeader + `def process_steps():
     with bus.get_queue_receiver(queue_name="order-steps", session_id="o1") as receiver:
@@ -215,7 +210,6 @@ def main():
 export const SERVICEBUS_SESSIONS_STARTER_FILES = Object.freeze({
   ...SERVICEBUS_IDEMPOTENCY_SOLUTION_FILES,
   'producer.py': `from clients import bus
-from worker import process_steps
 
 def main():
     # Send o1 step 1, o2 step 1, o1 step 2 with each order's session ID.

@@ -36,11 +36,23 @@ describe('published messaging journey', () => {
     expect(journey()).toHaveLength(12)
     for (const lab of journey()) {
       expect(lab.engineVersion).toBe(2)
-      expect(lab.contentVersion).toBe(1)
+      expect(lab.contentVersion).toBe(['messaging-deadletter', 'messaging-topics', 'messaging-sessions', 'messaging-event-filters', 'messaging-functions-servicebus', 'messaging-orders-capstone'].includes(lab.id) ? 2 : 1)
       expect(lab.capabilities.messaging).toBe(true)
       if (lab.journeyOrder >= 10) expect(lab.capabilities.messagingFunctions).toBe(true)
       expect(['guided', 'capstone']).toContain(lab.labMode)
-      expect(lab.messagingExercise.commands).toHaveLength(1)
+      if (lab.id === 'messaging-deadletter') {
+        expect(lab.messagingExercise.commands).toEqual([
+          { entry: 'worker.py', mode: 'script' }, { entry: 'producer.py', mode: 'script' },
+        ])
+      } else if (['messaging-topics', 'messaging-sessions'].includes(lab.id)) {
+        expect(lab.messagingExercise.commands).toEqual([
+          { entry: 'producer.py', mode: 'script' }, { entry: 'worker.py', mode: 'script' },
+        ])
+      } else if (lab.id === 'messaging-event-filters') {
+        expect(lab.messagingExercise.commands).toEqual([
+          { entry: 'events.py', mode: 'script' }, { entry: 'handler.py', mode: 'script' },
+        ])
+      } else expect(lab.messagingExercise.commands).toHaveLength(1)
       for (const task of lab.tasks) {
         for (const field of ['concept', 'what', 'why', 'without']) expect(task.rationale[field].length).toBeGreaterThan(0)
         expect(task.solution.steps.length).toBeGreaterThan(0)

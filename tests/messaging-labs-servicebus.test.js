@@ -23,6 +23,30 @@ function replayMessagingSolution(lab, files = {}) {
 }
 
 describe('Service Bus foundation curriculum', () => {
+  it('unlocks recovery after running only the quarantine worker and keeps that proof when producer is edited', () => {
+    const lab = SERVICEBUS_FOUNDATION_LABS[2]
+    let run = createBehavioralRun(lab, { attemptId: 'sequential-dlq' })
+    run = applyRunAction(run, { type: 'save-file', path: 'worker.py', text: lab.tasks[0].solution.steps[0].content }, lab).run
+    const executed = applyRunAction(run, { type: 'command', line: 'python worker.py' }, lab)
+    expect(executed.diagnostics ?? []).toEqual([])
+    run = executed.run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([true, false])
+    run = applyRunAction(run, { type: 'save-file', path: 'producer.py', text: lab.tasks[1].solution.steps[0].content }, lab).run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([true, false])
+    run = applyRunAction(run, { type: 'command', line: 'python producer.py' }, lab).run
+    expect(evaluateLab(lab, run).isComplete).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).isComplete).toBe(true)
+  })
+  it.each([
+    ['wrong rejection reason', source => source.replace('reason="InvalidOrder"', 'reason="Other"')],
+    ['missing valid-order work', source => source.replace('                    perform_order_work(order)\n', '')],
+  ])('does not unlock recovery with %s', (_, change) => {
+    const lab = SERVICEBUS_FOUNDATION_LABS[2]
+    let run = createBehavioralRun(lab, { attemptId: 'invalid-quarantine' })
+    run = applyRunAction(run, { type: 'save-file', path: 'worker.py', text: change(lab.tasks[0].solution.steps[0].content) }, lab).run
+    run = applyRunAction(run, { type: 'command', line: 'python worker.py' }, lab).run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([false, false])
+  })
   for (const lab of SERVICEBUS_FOUNDATION_LABS) {
     it(`${lab.id} starts pending and its worked commands demonstrate behavior`, () => {
       const start = createBehavioralRun(lab, { attemptId: `test-${lab.id}` })
@@ -116,6 +140,33 @@ describe('advanced Service Bus curriculum', () => {
     return advanced[index]
   }
   const rows = run => Object.values(run.runtime.messaging.entities).flatMap(entity => entity.messages)
+  it.each([messagingJourney.SERVICEBUS_ADVANCED_LABS[1], messagingJourney.SERVICEBUS_ADVANCED_LABS[2]])('$id unlocks its worker after publishing without requiring worker code', lab => {
+    let run = createBehavioralRun(lab, { attemptId: `sequential-${lab.id}` })
+    for (const step of lab.tasks[0].solution.steps) run = applyRunAction(run, { type: 'command', line: step.line }, lab).run
+    run = applyRunAction(run, { type: 'save-file', path: 'producer.py', text: lab.tasks[1].solution.steps[0].content }, lab).run
+    const sent = applyRunAction(run, { type: 'command', line: 'python producer.py' }, lab)
+    expect(sent.diagnostics ?? []).toEqual([])
+    run = sent.run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([true, true, false])
+    expect(rows(run).every(row => row.status === 'active' && row.lockHistory.length === 0)).toBe(true)
+    expect(run.runtime.messaging.effects).toEqual({})
+    run = applyRunAction(run, { type: 'save-file', path: 'worker.py', text: lab.tasks[2].solution.steps[0].content }, lab).run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([true, true, false])
+    run = applyRunAction(run, { type: 'command', line: 'python worker.py' }, lab).run
+    expect(evaluateLab(lab, run).isComplete).toBe(true)
+    expect(evaluateLab(lab, deserializeRun(serializeRun(run, lab), lab)).isComplete).toBe(true)
+  })
+  it.each([
+    [messagingJourney.SERVICEBUS_ADVANCED_LABS[1], source => source.replace('application_properties={"region": us["region"]}', 'application_properties={"region": "EU"}')],
+    [messagingJourney.SERVICEBUS_ADVANCED_LABS[2], source => source.replace('session_id=second["id"]', 'session_id=other["id"]')],
+  ])('$id rejects incorrect publisher routing before unlocking consumption', (lab, mutate) => {
+    let run = createBehavioralRun(lab, { attemptId: `incorrect-routing-${lab.id}` })
+    for (const step of lab.tasks[0].solution.steps) run = applyRunAction(run, { type: 'command', line: step.line }, lab).run
+    run = applyRunAction(run, { type: 'save-file', path: 'producer.py', text: mutate(lab.tasks[1].solution.steps[0].content) }, lab).run
+    const result = applyRunAction(run, { type: 'command', line: 'python producer.py' }, lab)
+    expect(result.diagnostics ?? []).toEqual([])
+    expect(evaluateLab(lab, result.run).tasks.map(task => task.done)).toEqual([true, false, false])
+  })
   it('advanced independent baselines start with all new Tasks and execution proof pending', () => {
     expect(advanced.map(lab => [lab.id, lab.journeyOrder])).toEqual([
       ['messaging-idempotency', 4], ['messaging-topics', 5], ['messaging-sessions', 6],

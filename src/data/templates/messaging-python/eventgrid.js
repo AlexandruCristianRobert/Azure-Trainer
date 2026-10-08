@@ -75,7 +75,8 @@ export const EVENTGRID_PUBLISH_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_STA
 export const EVENTGRID_FILTER_STARTER_FILES = EVENTGRID_STARTER_FILES
 export const EVENTGRID_FILTER_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_STARTER_FILES,
   'events.py': publishing(eu + processedEvent('e-us', '/orders/us/o2', 'Contoso.OrderProcessed', 'o2', 'US', 1)
-    + processedEvent('e-other', '/orders/eu/o3', 'Contoso.OrderAccepted', 'o3', 'EU', 1), 'e_eu, e_us, e_other'), 'handler.py': handler })
+    + processedEvent('e-other', '/orders/eu/o3', 'Contoso.OrderAccepted', 'o3', 'EU', 1), 'e_eu, e_us, e_other'),
+  'handler.py': handler.replace('from events import publish_events\n', '').replace('    publish_events()\n', '') })
 export const EVENTGRID_RECOVERY_STARTER_FILES = Object.freeze({ ...EVENTGRID_STARTER_FILES,
   'events.py': publishing(eu + processedEvent('e-terminal', '/orders/eu/o2', 'Contoso.OrderProcessed', 'o2', 'EU', 1), 'e_eu, e_terminal') })
 export const EVENTGRID_RECOVERY_SOLUTION_FILES = Object.freeze({ ...EVENTGRID_RECOVERY_STARTER_FILES, 'handler.py': handler })

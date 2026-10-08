@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { renderInline } from '../../lib/inlineCode.js'
+import { taskExamNote } from '../../lib/taskExamNote.js'
 import FluentIcon from '../icons/FluentIcon.vue'
 import HintBox from './HintBox.vue'
 import ExamNote from './ExamNote.vue'
@@ -55,7 +56,7 @@ async function copySolution() {
         <button v-if="state === 'done'" type="button" class="task__note-toggle" :aria-expanded="examNoteOpen" @click="emit('toggle-exam-note')">Exam Note <FluentIcon :name="examNoteOpen ? 'chevron-down' : 'chevron-right'" :size="9" /></button>
       </div>
     </div>
-    <ExamNote v-if="state === 'done' && examNoteOpen" class="task__indent" :text="task.examNote" />
+    <ExamNote v-if="state === 'done' && examNoteOpen" class="task__indent" :text="taskExamNote(task)" />
     <TaskRationale v-if="task.rationale" :key="task.id" class="task__indent" :lab-title="run.lab?.title ?? ''" :task-text="task.text" :rationale="task.rationale" />
     <template v-if="state === 'current'">
       <p v-if="task.explanation && !task.rationale" class="task__explanation task__indent">{{ task.explanation }}</p>

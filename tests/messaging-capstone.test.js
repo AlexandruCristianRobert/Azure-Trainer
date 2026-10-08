@@ -56,6 +56,7 @@ describe('messaging combined capstone', () => {
     expect(run.runtime.messaging.effects.workByOrder).toEqual({ o1: 1, o3: 1 })
     expect(run.runtime.messaging.eventGrid.events).toEqual([])
     expect(run.runtime.messaging.effects.notifications ?? {}).toEqual({})
-    expect(evaluateLab(definition, run).tasks.slice(-2).map(task => task.done)).toEqual([false, false])
+    expect(evaluateLab(definition, run).tasks.at(-1).done).toBe(false)
+    expect(evaluateLab(definition, run).isComplete).toBe(false)
   })
 })

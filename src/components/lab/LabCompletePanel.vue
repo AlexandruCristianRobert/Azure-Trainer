@@ -4,6 +4,7 @@ import { useLabRunStore } from '../../stores/labRun.js'
 import { useProgressStore } from '../../stores/progress.js'
 import { formatDuration, formatClock } from '../../lib/format.js'
 import { renderInline } from '../../lib/inlineCode.js'
+import { taskExamNote } from '../../lib/taskExamNote.js'
 import { nextLabFor } from '../../data/labs/index.js'
 import FluentIcon from '../icons/FluentIcon.vue'
 defineProps({ error: { type: String, default: '' } })
@@ -28,7 +29,7 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
     <div class="lab-complete__notes">
       <div class="lab-complete__notes-label">EXAM NOTES</div>
       <ol class="lab-complete__list">
-        <li v-for="(t, i) in run.lab.tasks" :key="t.id" class="lab-complete__note"><span class="lab-complete__num">{{ i + 1 }}</span><span v-html="renderInline(t.examNote)" /></li>
+        <li v-for="(t, i) in run.lab.tasks" :key="t.id" class="lab-complete__note"><span class="lab-complete__num">{{ i + 1 }}</span><span v-html="renderInline(taskExamNote(t))" /></li>
       </ol>
     </div>
     <div class="lab-complete__actions">

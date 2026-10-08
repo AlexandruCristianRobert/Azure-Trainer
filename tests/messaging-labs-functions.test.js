@@ -21,6 +21,19 @@ function replay(lab, source) {
 describe('Functions curriculum', () => {
   const labs = journey.FUNCTIONS_LABS ?? []
   const at = index => { expect(labs).toHaveLength(2); return labs[index] }
+  it.each([
+    ['host.json', source => source.replace('"2.0"', '"1.0"')],
+    ['local.settings.json', source => source.replace('sb-orders.servicebus.windows.net', 'wrong.servicebus.windows.net')],
+    ['local.settings.json', source => source.replace('"python"', '"dotnet"')],
+    ['local.settings.json', source => source.replace('UseDevelopmentStorage=true', 'invalid-storage')],
+  ])('invalid saved %s does not unlock the Function handler', (path, mutate) => {
+    const lab = at(0)
+    let run = createBehavioralRun(lab, { attemptId: 'invalid-host-settings' })
+    for (const step of lab.tasks[0].solution.steps) run = applyRunAction(run, { type: 'command', line: step.line }, lab).run
+    for (const step of lab.tasks[1].solution.steps) run = applyRunAction(run, { type: 'save-file', path: step.path, text: step.path === path ? mutate(step.content) : step.content }, lab).run
+    expect(evaluateLab(lab, run).tasks.map(task => task.done)).toEqual([true, false, false])
+    expect(run.runtime.messaging.executionReceipts).toEqual([])
+  })
   it('independent baselines leave every new task and proof unfinished', () => {
     expect(labs.map(lab => [lab.id, lab.journeyOrder])).toEqual([
       ['messaging-functions-servicebus', 10], ['messaging-functions-eventgrid', 11],

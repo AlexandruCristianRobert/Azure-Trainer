@@ -1,5 +1,5 @@
 import { EVENTGRID_FILTER_STARTER_FILES, EVENTGRID_FILTER_SOLUTION_FILES } from '../../templates/messaging-python/eventgrid.js'
-import { messagingMetadata, messagingTask, file, command, eventReady, eventSubscription, eventResources, eventReadme, exerciseTask, publishedEvents, notifiedDelivery, EVENT_SUBSCRIPTION_ID, EVENT_ENDPOINT } from './helpers.js'
+import { messagingMetadata, messagingTask, file, command, eventReady, eventSubscription, eventResources, eventReadme, exerciseTask, publishedEvents, notifiedDelivery, exactEvent, EVENT_SUBSCRIPTION_ID, EVENT_ENDPOINT } from './helpers.js'
 import { seedMessagingStage } from './seeds.js'
 import { createEventTopicTask, EU_FACT } from './publish-events.lab.js'
 
@@ -23,32 +23,39 @@ const configure = messagingTask({ id: 'filter-order-notifications',
 const resources = [...eventResources, EVENT_SUBSCRIPTION_ID]
 const paths = ['events.py', 'handler.py', 'clients.py', 'training_runtime.py']
 const publish = messagingTask({ id: 'publish-filter-fixture',
-  text: 'Implement events.py with publish_events() and main(). Publish three application events (data version 1.0): e-eu, Contoso.OrderProcessed, /orders/eu/o1, {order_id: o1, region: EU, quantity: 2}; e-us, Contoso.OrderProcessed, /orders/us/o2, {order_id: o2, region: US, quantity: 1}; e-other, Contoso.OrderAccepted, /orders/eu/o3, {order_id: o3, region: EU, quantity: 1}. Save it; the final python handler.py command publishes and handles this compact fixture together.',
+  text: 'Implement events.py with publish_events() and main(). Publish three application events (data version 1.0): e-eu, Contoso.OrderProcessed, /orders/eu/o1, {order_id: o1, region: EU, quantity: 2}; e-us, Contoso.OrderProcessed, /orders/us/o2, {order_id: o2, region: US, quantity: 1}; e-other, Contoso.OrderAccepted, /orders/eu/o3, {order_id: o3, region: EU, quantity: 1}. Save events.py and run python events.py to verify publication and routing before implementing the callback.',
   rationale: { concept: 'Publish facts for routing', what: 'Sends actual SDK-shaped event envelopes that exercise both filter dimensions.', why: 'Observed route isolation should follow real event metadata rather than a handler pretending events were filtered.', without: 'There is no actual publication proving which events the subscription accepted.', csharp: 'C# constructs the same three EventGridEvent envelopes and sends them as a batch.' },
-  paths, resourceIds: resources, check: context => eventReady(context) && !!eventSubscription(context.sandbox),
-  solution: { steps: [file('events.py', EVENTGRID_FILTER_SOLUTION_FILES['events.py'])] },
+  paths: paths.filter(path => path !== 'handler.py'), resourceIds: resources, check: context => eventReady(context) && !!eventSubscription(context.sandbox),
+  solution: { steps: [file('events.py', EVENTGRID_FILTER_SOLUTION_FILES['events.py']), command('python events.py')] },
 })
 const handle = messagingTask({ id: 'handle-filtered-event',
-  text: 'Write handle_event(event) in handler.py. Read order_id from the actual event.data, obtain handler_status(order_id), record_notification(event.id, order_id) only on status 200, then return that integer status. In main(), call events.publish_events(), then deliver_events(handle_event) and print its attempt count. Run python handler.py once: only e-eu may cause a notification. These protected helpers are trainer bridges, not public Azure webhook APIs.',
+  text: 'Write handle_event(event) in handler.py. Read order_id from the actual event.data, obtain handler_status(order_id), record_notification(event.id, order_id) only on status 200, then return that integer status. In main(), call deliver_events(handle_event) and print its attempt count. Save and run python handler.py once to consume the already published fixture: only e-eu may cause a notification. These protected helpers are trainer bridges, not public Azure webhook APIs.',
   rationale: { concept: 'Webhook callback outcome and business effect', what: 'Uses the delivered envelope to perform a notification and returns its actual HTTP outcome.', why: 'A successful delivery acknowledgement must correspond to business work on that same event.', without: 'A no-op status 200 acknowledges delivery without the requested notification; a fabricated marker outside the callback cannot prove handling.', csharp: 'An ASP.NET/C# webhook similarly reads the event payload and returns an HTTP status after processing.' },
-  hints: ['Import publish_events from events; use deliver_events only from main().'],
-  paths, resourceIds: resources, check: context => eventReady(context) && !!eventSubscription(context.sandbox),
+  hints: ['Use deliver_events only from main(); the previous task already published the events.'],
+  paths, resourceIds: resources, check: context => eventReady(context) && !!eventSubscription(context.sandbox)
+    && context.runtime.messaging.eventGrid?.events.length === FILTER_FACTS.length
+    && FILTER_FACTS.every(fact => context.runtime.messaging.eventGrid.events.some(row => exactEvent(row.event, fact))),
   solution: { steps: [file('handler.py', EVENTGRID_FILTER_SOLUTION_FILES['handler.py']), command('python handler.py')] },
 })
-function filteredBehavior(measurement) {
+function publishedFilterFixture(measurement) {
   const [row] = measurement.receipts.eventgrid
   return publishedEvents(measurement, FILTER_FACTS) && measurement.receipts.eventgrid.length === 1
-    && measurement.trace.some(trace => trace.kind === 'publish' && trace.eventRecordId === row.eventRecordId && trace.event.id === row.event.id)
+    && row.subscriptionId === EVENT_SUBSCRIPTION_ID && row.event.id === EU_FACT.id && row.status === 'pending' && row.attempts === 0
     && measurement.trace.some(trace => trace.kind === 'route' && trace.deliveryId === row.id && trace.eventRecordId === row.eventRecordId)
+    && Object.keys(measurement.effects.after).length === 0
+}
+function filteredBehavior(measurement) {
+  const [row] = measurement.receipts.eventgrid
+  return measurement.receipts.eventgrid.length === 1
     && row.attempts === 1 && notifiedDelivery(measurement, row, EU_FACT)
     && measurement.trace.filter(trace => trace.kind === 'notification').length === 1
     && Object.keys(measurement.effects.after.notifications ?? {}).join(',') === 'e-eu'
 }
 export const eventFiltersLab = {
-  ...messagingMetadata, service: 'event-grid', id: 'messaging-event-filters', title: 'Simulated: Filter and handle custom order events', journeyOrder: 8, minutes: 35,
-  brief: 'Configure an Event Grid subscription and write both publisher and actual callback. Independent prepared baseline supplies only earlier rg-messaging/sb-orders/orders configuration; new topic, subscription and code Tasks are unfinished. One python handler.py exercise publishes three facts and observes only the intended EU completion notification. No real webhook deployment or previous Lab required.',
-  initialProjectFiles: { ...EVENTGRID_FILTER_STARTER_FILES, 'README.md': eventReadme('Independent prepared baseline: rg-messaging in West Europe, Standard sb-orders, empty orders queue. New evgt-orders and order-notifications do not exist; events.py and handler.py are unfinished. No events, effects or evidence are seeded. The fixed endpoint is registered by trusted Lab data to your actual handler.py. main publishes the three stated envelopes and drains due callbacks in one bounded exercise.') },
+  ...messagingMetadata, contentVersion: 2, service: 'event-grid', id: 'messaging-event-filters', title: 'Simulated: Filter and handle custom order events', journeyOrder: 8, minutes: 35,
+  brief: 'Configure an Event Grid subscription and write both publisher and actual callback. Independent prepared baseline supplies only earlier rg-messaging/sb-orders/orders configuration; new topic, subscription and code Tasks are unfinished. Run python events.py to publish and verify three facts, then python handler.py to observe only the intended EU completion notification. No real webhook deployment or previous Lab required.',
+  initialProjectFiles: { ...EVENTGRID_FILTER_STARTER_FILES, 'README.md': eventReadme('Independent prepared baseline: rg-messaging in West Europe, Standard sb-orders, empty orders queue. New evgt-orders and order-notifications do not exist; events.py and handler.py are unfinished. No events, effects or evidence are seeded. The fixed endpoint is registered by trusted Lab data to your actual handler.py. First save events.py and run python events.py to publish the three stated envelopes and verify the filtered route. Then save handler.py and run python handler.py to drain the already routed callbacks; do not republish the fixture from the handler.') },
   initializeSimulation: run => seedMessagingStage(run, 'event-filters'), tasks: [createEventTopicTask(), configure, publish, handle],
   messagingInput: { eventGridHandlers: { [EVENT_ENDPOINT]: 'handler.py' } },
-  messagingExercise: { commands: [{ entry: 'handler.py', mode: 'script' }], tasks: [exerciseTask(publish, 'handler.py', filteredBehavior), exerciseTask(handle, 'handler.py', filteredBehavior)] },
+  messagingExercise: { commands: [{ entry: 'events.py', mode: 'script' }, { entry: 'handler.py', mode: 'script' }], tasks: [exerciseTask(publish, 'events.py', publishedFilterFixture), exerciseTask(handle, 'handler.py', filteredBehavior)] },
 }

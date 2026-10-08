@@ -8,6 +8,7 @@ import hintSource from '../src/components/lab/HintBox.vue?raw'
 import examSource from '../src/components/lab/ExamNote.vue?raw'
 import iconSource from '../src/components/icons/FluentIcon.vue?raw'
 import { renderInline } from '../src/lib/inlineCode.js'
+import { taskExamNote } from '../src/lib/taskExamNote.js'
 import { fluentIcon } from '../src/lib/icons.js'
 
 const rationale = { concept: 'PeekLock', what: 'Receive with a lock', why: 'Finish work first', without: 'Work can be lost', csharp: 'Compare CompleteMessageAsync in C#.' }
@@ -46,7 +47,7 @@ function compileComponent(source, dependencies = {}) {
 const TaskRationale = compileComponent(rationaleSource, { buildExplanationPrompt, copyExplanationPrompt })
 const fixture = { run: null }
 const TaskRow = compileComponent(taskSource, {
-  TaskRationale, renderInline,
+  TaskRationale, renderInline, taskExamNote,
   FluentIcon: compileComponent(iconSource, { fluentIcon }),
   HintBox: compileComponent(hintSource, { renderInline }),
   ExamNote: compileComponent(examSource, { renderInline }),
